@@ -29,22 +29,22 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 
 ## Requirements
 
-- Rust 1.85+ (edition 2024)
 - A running Samba AD Domain Controller accessible over LDAP/LDAPS
 - The bind account needs read/write access to the relevant AD partitions
+- Linux x86_64 or ARM64 (pre-built binaries provided)
 
-## Building
+## Installation
+
+Download the latest binary from the [Releases](https://github.com/yarivha/EasyDC/releases) page for your architecture:
+
+| Platform | Binary |
+|----------|--------|
+| Linux x86_64 | `easydc-linux-x86_64` |
+| Linux ARM64 | `easydc-linux-arm64` |
 
 ```bash
-git clone https://github.com/yarivha/EasyDC
-cd EasyDC
-cargo build --release
-```
-
-## Running
-
-```bash
-./target/release/EasyDC
+chmod +x easydc-linux-x86_64
+./easydc-linux-x86_64
 ```
 
 The server starts on `http://localhost:3000`.
