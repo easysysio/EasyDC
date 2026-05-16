@@ -83,12 +83,16 @@
                     <td class="text-muted small">{{ record.ttl }}s</td>
                     <td class="text-end">
                         {% if record.record_type != "SOA" %}
-                        <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal"
-                            data-bs-target="#deleteModal{{ loop.index }}"
-                            title="Delete record">
-                            <i class="bi bi-trash"></i>
-                        </button>
+                        <form method="post"
+                            action="/servers/{{ server.id }}/dns/{{ zone_name }}/delete"
+                            class="d-inline"
+                            onsubmit="return confirm('Delete {{ record.record_type }} record for {{ node.name }}?')">
+                            <input type="hidden" name="node_name" value="{{ node.name }}">
+                            <input type="hidden" name="raw_hex" value="{{ record.raw_hex }}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete record">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
                         {% else %}
                         <span class="text-muted small">—</span>
                         {% endif %}
@@ -149,42 +153,6 @@
         </div>
     </div>
 </div>
-
-<!-- ── Delete Modals ─────────────────────────────────────────────────────── -->
-{% for node in nodes %}
-{% for record in node.records %}
-{% if record.record_type != "SOA" %}
-<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
-    <div class="modal-dialog modal-sm">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title text-danger">
-                    <i class="bi bi-trash me-1"></i> Delete Record
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p>Delete <strong class="font-monospace">{{ node.name }}</strong>
-                    <span class="badge bg-secondary">{{ record.record_type }}</span>?</p>
-                <p class="text-muted small font-monospace mb-0">{{ record.value }}</p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm"
-                    data-bs-dismiss="modal">Cancel</button>
-                <form method="post"
-                    action="/servers/{{ server.id }}/dns/{{ zone_name }}/delete"
-                    class="d-inline">
-                    <input type="hidden" name="node_name" value="{{ node.name }}">
-                    <input type="hidden" name="raw_hex" value="{{ record.raw_hex }}">
-                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
-                </form>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
-{% endfor %}
-{% endfor %}
 
 <script>
 const hints = {

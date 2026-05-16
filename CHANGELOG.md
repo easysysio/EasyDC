@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-05-16
+
+### Fixed
+- DNS zone page no longer shows a blank page (Tera does not support `loop.parent`, template rewritten to avoid nested loop indices)
+- DNS record delete now works correctly — replaced broken modal-per-record approach with inline confirm dialog
+
 ## [0.1.1] - 2026-05-16
 
 ### Fixed
