@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}GPO - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">Group Policy Objects</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0"><i class="bi bi-shield-lock me-2 text-warning"></i>Group Policy Objects</h4>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createGpoModal">
+        <i class="bi bi-plus-circle me-1"></i> New GPO
+    </button>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">
+    <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
+</div>
+{% endif %}
+
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-1"></i>
+    GPO metadata (name, status, OU links) is managed here via LDAP.
+    Editing policy settings requires access to SYSVOL on the domain controller.
+</div>
+
+{% if gpos | length == 0 and not error %}
+<div class="text-center py-5 text-muted">
+    <i class="bi bi-shield-lock fs-1"></i>
+    <p class="mt-3 fs-5">No Group Policy Objects found</p>
+</div>
+{% else %}
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th style="width:22%">GUID</th>
+                    <th style="width:18%">Status</th>
+                    <th style="width:8%">Version</th>
+                    <th class="text-end" style="width:18%">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for gpo in gpos %}
+                <tr>
+                    <td class="fw-medium">{{ gpo.display_name }}</td>
+                    <td class="font-monospace small text-muted">{{ gpo.guid }}</td>
+                    <td>
+                        {% if gpo.flags == 0 %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">Enabled</span>
+                        {% elif gpo.flags == 3 %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">All Disabled</span>
+                        {% else %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">{{ gpo.status_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-muted small">{{ gpo.version }}</td>
+                    <td class="text-end">
+                        <a href="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/links"
+                            class="btn btn-outline-secondary btn-sm" title="Manage OU links">
+                            <i class="bi bi-link-45deg"></i>
+                        </a>
+                        <button type="button" class="btn btn-outline-primary btn-sm"
+                            data-bs-toggle="modal"
+                            data-bs-target="#editModal{{ loop.index }}"
+                            title="Edit">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button type="button" class="btn btn-outline-danger btn-sm"
+                            data-bs-toggle="modal"
+                            data-bs-target="#deleteModal{{ loop.index }}"
+                            title="Delete">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ── Create GPO Modal ───────────────────────────────────────────────────── -->
+<div class="modal fade" id="createGpoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-circle me-1"></i> New GPO</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="/servers/{{ server.id }}/gpo/new">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Display Name <span class="text-danger">*</span></label>
+                        <input type="text" name="display_name" class="form-control" required
+                            placeholder="e.g. Default Desktop Policy">
+                    </div>
+                    <div class="text-muted small">
+                        <i class="bi bi-info-circle me-1"></i>
+                        A GUID will be generated automatically. SYSVOL files are not created — link the GPO to an OU once ready.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create GPO</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ── Edit / Delete Modals ──────────────────────────────────────────────── -->
+{% for gpo in gpos %}
+<div class="modal fade" id="editModal{{ loop.index }}" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Edit GPO</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/edit">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Display Name <span class="text-danger">*</span></label>
+                        <input type="text" name="display_name" class="form-control"
+                            value="{{ gpo.display_name }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Status</label>
+                        <select name="flags" class="form-select">
+                            <option value="0" {% if gpo.flags == 0 %}selected{% endif %}>Enabled</option>
+                            <option value="1" {% if gpo.flags == 1 %}selected{% endif %}>User Configuration Disabled</option>
+                            <option value="2" {% if gpo.flags == 2 %}selected{% endif %}>Computer Configuration Disabled</option>
+                            <option value="3" {% if gpo.flags == 3 %}selected{% endif %}>All Settings Disabled</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-trash me-1"></i> Delete GPO</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Delete <strong>{{ gpo.display_name }}</strong>?</p>
+                <p class="text-muted small mb-0">This removes the LDAP object only. SYSVOL files, if present, must be deleted manually.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <form method="post" action="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/delete" class="d-inline">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+{% endblock %}

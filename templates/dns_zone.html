@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}{{ zone_name }} - DNS - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}/dns">DNS</a></li>
+        <li class="breadcrumb-item active">{{ zone_name }}</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-globe2 me-2 text-warning"></i>{{ zone_name }}</h4>
+        <small class="text-muted">DNS Zone Records</small>
+    </div>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRecordModal">
+        <i class="bi bi-plus-circle me-1"></i> Add Record
+    </button>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">
+    <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
+</div>
+{% endif %}
+
+{% if nodes | length == 0 and not error %}
+<div class="text-center py-5 text-muted">
+    <i class="bi bi-file-earmark-x fs-1"></i>
+    <p class="mt-3 fs-5">No records found in this zone</p>
+</div>
+{% else %}
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th style="width:20%">Name</th>
+                    <th style="width:10%">Type</th>
+                    <th>Value</th>
+                    <th style="width:10%">TTL</th>
+                    <th class="text-end" style="width:10%">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for node in nodes %}
+                {% for record in node.records %}
+                <tr>
+                    <td class="fw-medium font-monospace">
+                        {% if node.name == "@" %}
+                        <span class="text-primary">@</span>
+                        {% else %}
+                        {{ node.name }}
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if record.record_type == "A" %}
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">A</span>
+                        {% elif record.record_type == "AAAA" %}
+                        <span class="badge bg-info-subtle text-info border border-info-subtle">AAAA</span>
+                        {% elif record.record_type == "CNAME" %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">CNAME</span>
+                        {% elif record.record_type == "MX" %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">MX</span>
+                        {% elif record.record_type == "TXT" %}
+                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">TXT</span>
+                        {% elif record.record_type == "SOA" %}
+                        <span class="badge bg-dark-subtle text-dark border border-dark-subtle">SOA</span>
+                        {% elif record.record_type == "NS" %}
+                        <span class="badge bg-dark-subtle text-dark border border-dark-subtle">NS</span>
+                        {% elif record.record_type == "PTR" %}
+                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">PTR</span>
+                        {% elif record.record_type == "SRV" %}
+                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">SRV</span>
+                        {% else %}
+                        <span class="badge bg-light text-dark border">{{ record.record_type }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="font-monospace small text-break">{{ record.value }}</td>
+                    <td class="text-muted small">{{ record.ttl }}s</td>
+                    <td class="text-end">
+                        {% if record.record_type != "SOA" %}
+                        <button type="button" class="btn btn-outline-danger btn-sm"
+                            data-bs-toggle="modal"
+                            data-bs-target="#deleteModal{{ loop.index }}"
+                            title="Delete record">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        {% else %}
+                        <span class="text-muted small">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ── Add Record Modal ──────────────────────────────────────────────────── -->
+<div class="modal fade" id="addRecordModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-circle me-1"></i> Add DNS Record</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="/servers/{{ server.id }}/dns/{{ zone_name }}/add">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Name <span class="text-danger">*</span></label>
+                        <input type="text" name="node_name" class="form-control font-monospace"
+                            required placeholder="@ for zone apex, or 'www', 'mail', …">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Type <span class="text-danger">*</span></label>
+                        <select name="record_type" class="form-select" id="recordTypeSelect" required>
+                            <option value="A">A — IPv4 address</option>
+                            <option value="AAAA">AAAA — IPv6 address</option>
+                            <option value="CNAME">CNAME — Alias</option>
+                            <option value="MX">MX — Mail exchange</option>
+                            <option value="TXT">TXT — Text record</option>
+                            <option value="PTR">PTR — Reverse DNS</option>
+                            <option value="NS">NS — Name server</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Value <span class="text-danger">*</span></label>
+                        <input type="text" name="value" class="form-control font-monospace"
+                            required id="valueInput" placeholder="192.168.1.1">
+                        <div class="form-text" id="valueHint">IPv4 address, e.g. 192.168.1.10</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">TTL (seconds)</label>
+                        <input type="number" name="ttl" class="form-control"
+                            value="3600" min="60" max="86400">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add Record</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ── Delete Modals ─────────────────────────────────────────────────────── -->
+{% for node in nodes %}
+{% for record in node.records %}
+{% if record.record_type != "SOA" %}
+<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger">
+                    <i class="bi bi-trash me-1"></i> Delete Record
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Delete <strong class="font-monospace">{{ node.name }}</strong>
+                    <span class="badge bg-secondary">{{ record.record_type }}</span>?</p>
+                <p class="text-muted small font-monospace mb-0">{{ record.value }}</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm"
+                    data-bs-dismiss="modal">Cancel</button>
+                <form method="post"
+                    action="/servers/{{ server.id }}/dns/{{ zone_name }}/delete"
+                    class="d-inline">
+                    <input type="hidden" name="node_name" value="{{ node.name }}">
+                    <input type="hidden" name="raw_hex" value="{{ record.raw_hex }}">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endfor %}
+{% endfor %}
+
+<script>
+const hints = {
+    A:     'IPv4 address, e.g. 192.168.1.10',
+    AAAA:  'IPv6 address, e.g. 2001:db8::1',
+    CNAME: 'Target hostname, e.g. server.example.com',
+    MX:    'Priority and hostname, e.g. 10 mail.example.com',
+    TXT:   'Text value, e.g. v=spf1 include:example.com ~all',
+    PTR:   'Target hostname for reverse DNS',
+    NS:    'Name server hostname, e.g. ns1.example.com',
+};
+document.getElementById('recordTypeSelect').addEventListener('change', function () {
+    const hint = hints[this.value] || '';
+    document.getElementById('valueHint').textContent = hint;
+    document.getElementById('valueInput').placeholder = hint.split(',')[0];
+});
+</script>
+
+{% endblock %}
