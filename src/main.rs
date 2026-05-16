@@ -7,9 +7,14 @@ mod models;
 use std::sync::Arc;
 
 use axum::{middleware, routing::{get, post}, Router};
+use rust_embed::RustEmbed;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
 use tera::Tera;
+
+#[derive(RustEmbed)]
+#[folder = "templates/"]
+struct Templates;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -31,7 +36,15 @@ async fn main() {
 
     db::init_tables(&pool).await.expect("Failed to initialize database");
 
-    let tera = Tera::new("templates/**/*").expect("Failed to load templates");
+    let mut tera = Tera::default();
+    for path in Templates::iter() {
+        let content = Templates::get(&path).unwrap();
+        let source = std::str::from_utf8(content.data.as_ref()).expect("Template is not valid UTF-8");
+        tera.add_raw_template(&path, source).expect("Failed to load template");
+    }
+    tera.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
+        Ok(tera::Value::String(env!("CARGO_PKG_VERSION").to_string()))
+    });
 
     let state = AppState {
         db: pool,
