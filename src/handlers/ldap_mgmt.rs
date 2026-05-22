@@ -278,6 +278,151 @@ pub async fn toggle_computer(
     Redirect::to(&format!("/servers/{}/computers", id)).into_response()
 }
 
+// ── OU list ───────────────────────────────────────────────────────────────────
+
+pub async fn ous(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    let mut ctx = Context::new();
+    ctx.insert("server", &server);
+
+    match ldap::open(&server).await {
+        Err(e) => {
+            ctx.insert("error", &e);
+            ctx.insert("ou_nodes", &Vec::<ldap::LdapOuNode>::new());
+            ctx.insert("ous_flat", &Vec::<ldap::LdapOu>::new());
+        }
+        Ok((mut conn, base_dn)) => {
+            ctx.insert("base_dn", &base_dn);
+            match ldap::list_ous_tree(&mut conn, &base_dn).await {
+                Err(e) => {
+                    ctx.insert("error", &e);
+                    ctx.insert("ou_nodes", &Vec::<ldap::LdapOuNode>::new());
+                    ctx.insert("ous_flat", &Vec::<ldap::LdapOu>::new());
+                }
+                Ok(nodes) => {
+                    // Also build a flat list for the parent dropdown
+                    let mut flat: Vec<ldap::LdapOu> = nodes
+                        .iter()
+                        .map(|n| ldap::LdapOu { dn: n.dn.clone(), name: n.name.clone() })
+                        .collect();
+                    flat.insert(0, ldap::LdapOu {
+                        dn: base_dn.clone(),
+                        name: format!("Domain Root ({})", base_dn),
+                    });
+                    ctx.insert("ous_flat", &flat);
+                    ctx.insert("ou_nodes", &nodes);
+                }
+            }
+        }
+    }
+
+    Html(state.tera.render("ous.html", &ctx).unwrap_or_default()).into_response()
+}
+
+// ── create OU ─────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CreateOuForm {
+    pub name: String,
+    pub description: String,
+    pub parent_dn: String,
+}
+
+pub async fn ou_create(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(form): Form<CreateOuForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    if let Ok((mut conn, _)) = ldap::open(&server).await {
+        let _ = ldap::create_ou(&mut conn, &form.parent_dn, &form.name, &form.description).await;
+    }
+
+    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+}
+
+// ── rename OU ─────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RenameOuForm {
+    pub ou_dn: String,
+    pub new_name: String,
+}
+
+pub async fn ou_rename(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(form): Form<RenameOuForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    if let Ok((mut conn, _)) = ldap::open(&server).await {
+        let _ = ldap::rename_ou(&mut conn, &form.ou_dn, &form.new_name).await;
+    }
+
+    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+}
+
+// ── delete OU ─────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct DeleteOuForm {
+    pub ou_dn: String,
+}
+
+pub async fn ou_delete(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(form): Form<DeleteOuForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    if let Ok((mut conn, _)) = ldap::open(&server).await {
+        let _ = ldap::delete_ou(&mut conn, &form.ou_dn).await;
+    }
+
+    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+}
+
+// ── move object to OU ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct MoveObjectForm {
+    pub sam_account: String,
+    pub target_ou_dn: String,
+}
+
+pub async fn ou_move_object(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(form): Form<MoveObjectForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    if let Ok((mut conn, base_dn)) = ldap::open(&server).await {
+        let _ = ldap::move_object_to_ou(&mut conn, &base_dn, &form.sam_account, &form.target_ou_dn).await;
+    }
+
+    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+}
+
 // ── DNS zone list ─────────────────────────────────────────────────────────────
 
 pub async fn dns(State(state): State<AppState>, Path(id): Path<i64>) -> Response {

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-05-16
+
+### Added
+- OU management — tree view of all Organizational Units with depth-based indentation
+- Create OU with optional description, choosing any existing OU or domain root as parent
+- Rename OU in place via LDAP modifydn
+- Delete OU (enforced empty by LDAP — fails gracefully if objects remain)
+- Move any AD object (user, group, computer) to a different OU by sAMAccountName
+- OU Management card added to the server detail page
+
 ## [0.1.2] - 2026-05-16
 
 ### Fixed

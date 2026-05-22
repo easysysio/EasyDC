@@ -1134,6 +1134,163 @@ fn gpo_status_label(flags: i32) -> &'static str {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Organizational Units
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Clone)]
+pub struct LdapOuNode {
+    pub dn: String,
+    pub name: String,
+    pub description: String,
+    pub depth: usize,
+}
+
+fn ou_depth(dn: &str, base_dn: &str) -> usize {
+    let dn_parts = dn.split(',').count();
+    let base_parts = base_dn.split(',').count();
+    dn_parts.saturating_sub(base_parts + 1)
+}
+
+fn dn_tree_sort_key(dn: &str) -> String {
+    dn.split(',')
+        .rev()
+        .map(|s| s.trim().to_lowercase())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+// ── list OUs (tree order) ─────────────────────────────────────────────────────
+
+pub async fn list_ous_tree(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+) -> LdapResult<Vec<LdapOuNode>> {
+    let (entries, _) = ldap
+        .search(
+            base_dn,
+            Scope::Subtree,
+            "(objectClass=organizationalUnit)",
+            vec!["ou", "description"],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+
+    let mut nodes: Vec<LdapOuNode> = entries
+        .into_iter()
+        .map(|e| {
+            let e = SearchEntry::construct(e);
+            LdapOuNode {
+                depth: ou_depth(&e.dn, base_dn),
+                name: attr(&e, "ou"),
+                description: attr(&e, "description"),
+                dn: e.dn.clone(),
+            }
+        })
+        .filter(|o| !o.name.is_empty())
+        .collect();
+
+    nodes.sort_by(|a, b| dn_tree_sort_key(&a.dn).cmp(&dn_tree_sort_key(&b.dn)));
+    Ok(nodes)
+}
+
+// ── create OU ─────────────────────────────────────────────────────────────────
+
+pub async fn create_ou(
+    ldap: &mut ldap3::Ldap,
+    parent_dn: &str,
+    name: &str,
+    description: &str,
+) -> LdapResult<()> {
+    let ou_dn = format!("OU={},{}", name, parent_dn);
+    let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
+        (
+            sv("objectClass"),
+            HashSet::from([sv("top"), sv("organizationalUnit")]),
+        ),
+        (sv("ou"), HashSet::from([sv(name)])),
+    ];
+    if !description.is_empty() {
+        attrs.push((sv("description"), HashSet::from([sv(description)])));
+    }
+
+    ldap.add(&ou_dn, attrs)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to create OU: {}", e))?;
+    Ok(())
+}
+
+// ── rename OU ─────────────────────────────────────────────────────────────────
+
+pub async fn rename_ou(
+    ldap: &mut ldap3::Ldap,
+    ou_dn: &str,
+    new_name: &str,
+) -> LdapResult<()> {
+    let new_rdn = format!("OU={}", new_name);
+    ldap.modifydn(ou_dn, &new_rdn, true, None)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to rename OU: {}", e))?;
+    Ok(())
+}
+
+// ── delete OU ─────────────────────────────────────────────────────────────────
+
+pub async fn delete_ou(ldap: &mut ldap3::Ldap, ou_dn: &str) -> LdapResult<()> {
+    ldap.delete(ou_dn)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to delete OU (must be empty): {}", e))?;
+    Ok(())
+}
+
+// ── move object to OU ─────────────────────────────────────────────────────────
+
+pub async fn move_object_to_ou(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    sam_account: &str,
+    target_ou_dn: &str,
+) -> LdapResult<()> {
+    // Find the object by sAMAccountName
+    let filter = format!("(sAMAccountName={})", sam_account);
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["cn"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+
+    let entry = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("Object '{}' not found", sam_account))?;
+
+    // Extract the RDN (first component of DN, e.g. "CN=JohnDoe")
+    let rdn = entry
+        .dn
+        .split(',')
+        .next()
+        .ok_or_else(|| "Invalid DN".to_string())?
+        .to_string();
+
+    ldap.modifydn(&entry.dn, &rdn, true, Some(target_ou_dn))
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to move object: {}", e))?;
+
+    Ok(())
+}
+
 // ── GPO list ──────────────────────────────────────────────────────────────────
 
 pub async fn list_gpos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapGpo>> {
