@@ -35,7 +35,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 
 ## Installation
 
-Download the latest binary from the [Releases](https://github.com/yarivha/EasyDC/releases) page for your architecture:
+Download the latest binary from the [Releases](https://github.com/easysysio/EasyDC/releases) page for your architecture:
 
 | Platform | Binary |
 |----------|--------|
