@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Health Check - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">Health Check</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-clipboard-pulse me-2 text-primary"></i>Domain Health Check</h4>
+        <small class="text-muted">
+            {% if report %}{{ report.domain }} — completed in {{ report.elapsed_ms }} ms{% else %}{{ server.ldap_url }}{% endif %}
+        </small>
+    </div>
+    <a href="/servers/{{ server.id }}/health" class="btn btn-outline-primary btn-sm">
+        <i class="bi bi-arrow-clockwise me-1"></i> Re-run
+    </a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger d-flex align-items-start">
+    <i class="bi bi-exclamation-octagon-fill me-2 mt-1"></i>
+    <div>
+        <div class="fw-semibold">Could not reach the directory</div>
+        <div class="small">{{ error }}</div>
+    </div>
+</div>
+{% endif %}
+
+{% if report %}
+<div class="row row-cols-2 row-cols-md-4 g-3 mb-4">
+    <div class="col">
+        <div class="card shadow-sm border-danger-subtle h-100">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-danger">{{ report.fail_count }}</div>
+                <div class="small text-muted">Failed</div>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card shadow-sm border-warning-subtle h-100">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-warning">{{ report.warn_count }}</div>
+                <div class="small text-muted">Warnings</div>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card shadow-sm border-success-subtle h-100">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-success">{{ report.pass_count }}</div>
+                <div class="small text-muted">Passed</div>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card shadow-sm h-100">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-secondary">{{ report.skip_count }}</div>
+                <div class="small text-muted">Skipped</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    <div class="btn-group btn-group-sm" role="group">
+        <button type="button" class="btn btn-outline-secondary active" data-filter="all">All</button>
+        <button type="button" class="btn btn-outline-danger" data-filter="fail">Failed</button>
+        <button type="button" class="btn btn-outline-warning" data-filter="warn">Warnings</button>
+        <button type="button" class="btn btn-outline-success" data-filter="pass">Passed</button>
+        <button type="button" class="btn btn-outline-secondary" data-filter="skip">Skipped</button>
+    </div>
+    <span class="text-muted small ms-2">Base DN <span class="font-monospace">{{ report.base_dn }}</span></span>
+</div>
+
+<div class="card shadow-sm">
+    <div class="list-group list-group-flush" id="checkList">
+        {% for c in report.checks %}
+        <div class="list-group-item py-3" data-status="{{ c.status }}">
+            <div class="d-flex align-items-start">
+                <div class="me-3 mt-1">
+                    {% if c.status == "pass" %}
+                    <i class="bi bi-check-circle-fill fs-5 text-success"></i>
+                    {% elif c.status == "warn" %}
+                    <i class="bi bi-exclamation-triangle-fill fs-5 text-warning"></i>
+                    {% elif c.status == "fail" %}
+                    <i class="bi bi-x-circle-fill fs-5 text-danger"></i>
+                    {% else %}
+                    <i class="bi bi-dash-circle fs-5 text-secondary"></i>
+                    {% endif %}
+                </div>
+                <div class="flex-grow-1">
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <span class="fw-semibold">{{ c.title }}</span>
+                        <span class="badge bg-light text-secondary border">{{ c.category }}</span>
+                    </div>
+                    <div class="text-body-secondary">{{ c.summary }}</div>
+
+                    {% if c.detail | length > 0 %}
+                    <ul class="small text-muted mt-2 mb-0 ps-3">
+                        {% for d in c.detail %}
+                        <li class="font-monospace" style="font-size:0.8rem">{{ d }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+
+                    {% if c.remediation %}
+                    <div class="mt-2 p-2 rounded bg-light border-start border-3 border-primary-subtle small">
+                        <i class="bi bi-tools me-1 text-primary"></i>{{ c.remediation }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<p class="text-muted small mt-3">
+    <i class="bi bi-info-circle me-1"></i>
+    These checks run entirely over LDAP and change nothing. Checks that need shell access on the
+    DC — <span class="font-monospace">samba-tool dbcheck</span>, SYSVOL replication, service
+    status — are not covered here.
+</p>
+
+<script>
+// Filter the check list by status.
+document.querySelectorAll('[data-filter]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        const want = this.dataset.filter;
+        document.querySelectorAll('[data-filter]').forEach(function (b) {
+            b.classList.remove('active');
+        });
+        this.classList.add('active');
+        document.querySelectorAll('#checkList [data-status]').forEach(function (row) {
+            row.style.display = (want === 'all' || row.dataset.status === want) ? '' : 'none';
+        });
+    });
+});
+</script>
+{% endif %}
+
+{% endblock %}

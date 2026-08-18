@@ -33,7 +33,7 @@ fn encode_password(password: &str) -> Vec<u8> {
         .collect()
 }
 
-fn base_dn_to_domain(base_dn: &str) -> String {
+pub(crate) fn base_dn_to_domain(base_dn: &str) -> String {
     base_dn
         .split(',')
         .filter_map(|part| {
@@ -44,7 +44,7 @@ fn base_dn_to_domain(base_dn: &str) -> String {
         .join(".")
 }
 
-fn attr(e: &SearchEntry, key: &str) -> String {
+pub(crate) fn attr(e: &SearchEntry, key: &str) -> String {
     e.attrs
         .get(key)
         .and_then(|v| v.first())
@@ -862,7 +862,7 @@ fn parse_txt_bytes(data: &[u8]) -> String {
 }
 
 // Returns (type_str, value, ttl) or None for tombstone / unrecognised
-fn parse_dns_record_binary(data: &[u8]) -> Option<(String, String, u32)> {
+pub(crate) fn parse_dns_record_binary(data: &[u8]) -> Option<(String, String, u32)> {
     if data.len() < 24 {
         return None;
     }

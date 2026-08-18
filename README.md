@@ -13,6 +13,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 - **Computer management** — view, enable/disable, and remove computer accounts
 - **DNS management** — browse zones, add and delete A, AAAA, CNAME, MX, TXT, NS, PTR records (AD-integrated DNS via LDAP)
 - **GPO management** — create and configure Group Policy Objects, link/unlink to OUs
+- **Domain health check** — diagnose clock skew, FSMO holders, replication, the DNS service records clients need, LDAPS certificate expiry, and security posture; read-only, over LDAP
 - **First-run setup** — guided setup wizard on fresh install; no config files needed
 
 ## Tech Stack
@@ -130,6 +131,7 @@ After logging in, click **Add Server** on the dashboard and fill in:
 - **Password changes** require LDAPS (port 636). Plain LDAP connections will reject `unicodePwd` modifications.
 - **DNS** manages records stored in the AD DNS partition (`CN=MicrosoftDNS,DC=DomainDnsZones`). Internal zones (`_msdcs`, `RootDNSServers`) are hidden automatically.
 - **GPO** manages LDAP metadata (name, status, OU links). Editing actual policy settings (registry values, scripts, etc.) requires direct access to SYSVOL on the DC.
+- **Health check** runs entirely over LDAP and changes nothing. Checks that need shell access on the DC — `samba-tool dbcheck`, SYSVOL replication and ACLs, `net ads testjoin`, service status — are out of its reach. Replication reporting currently covers partner *presence* only; use `samba-tool drs showrepl` for last-success times.
 - The SQLite database (`easydc.db`) is created automatically on first run in the working directory.
 
 ## License

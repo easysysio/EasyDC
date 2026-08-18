@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-08-18
+
+### Added
+- **Domain health check** — a read-only diagnostics page (`/servers/:id/health`) that runs 13 checks against a DC and reports pass/warn/fail with an explanation and a remediation hint for each. Everything runs over the existing LDAP connection: no host access, no root, no process spawning, and nothing is written
+  - *Time* — clock skew against the DC's `currentTime`, warning at 60s and failing at the 300s Kerberos limit
+  - *Domain* — DC and site inventory, all five FSMO holders verified to still exist, domain/forest functional levels
+  - *Replication* — inbound partner presence on the domain, configuration and schema partitions (skipped on single-DC domains)
+  - *DNS* — the SRV set clients use to locate a DC (`_ldap`, `_kerberos`, `_kpasswd`, `_gc`, and their `_msdcs` forms), each DC's host record, and the per-DC `<GUID>._msdcs` CNAME, resolved across all three DNS partitions so either zone layout works
+  - *Security* — LDAPS reachability and certificate expiry, `ms-DS-MachineAccountQuota`, anonymous LDAP access via `dSHeuristics`, unconstrained delegation outside the DCs, and disabled accounts still sitting in privileged groups
+  - *Hygiene* — computer accounts inactive for over 90 days, and accounts flagged password-not-required or password-never-expires
+
 ## [0.2.0] - 2026-06-15
 
 ### Added

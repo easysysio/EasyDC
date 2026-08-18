@@ -1,6 +1,7 @@
 mod auth;
 mod db;
 mod handlers;
+mod health;
 mod ldap;
 mod models;
 
@@ -72,6 +73,7 @@ async fn main() {
         .route("/servers/:id", get(handlers::servers::server_detail))
         .route("/servers/:id/edit", post(handlers::servers::update_server))
         .route("/servers/:id/delete", post(handlers::servers::delete_server))
+        .route("/servers/:id/health", get(handlers::health::health_check))
         .route("/servers/:id/users", get(handlers::ldap_mgmt::users))
         .route("/servers/:id/users/new", post(handlers::ldap_mgmt::create_user))
         .route("/servers/:id/users/:username/edit", post(handlers::ldap_mgmt::update_user))
