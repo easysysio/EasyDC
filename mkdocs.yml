@@ -1,0 +1,86 @@
+# EasyDC documentation site — https://easydc.easysys.io
+#
+# Same theme and extensions as the EasySYS site, so this reads as part of the
+# family rather than as a different product. EasySYS links here; the pages
+# live beside the code they describe, so a feature and its documentation land
+# in one commit.
+#
+# Build:   pip install -r docs-requirements.txt && mkdocs serve
+# Deploy:  ./deploy-docs.sh   (on the host that serves the site)
+
+site_name: EasyDC
+site_url: https://easydc.easysys.io/
+site_description: Manage a Samba Active Directory Domain Controller from your browser — no CLI required.
+repo_url: https://github.com/easysysio/EasyDC
+repo_name: easysysio/EasyDC
+copyright: MIT
+
+nav:
+  - Overview: index.md
+
+theme:
+  name: material
+  font:
+    text: Inter
+    code: Roboto Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.path
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+
+markdown_extensions:
+  - attr_list
+  - md_in_html
+  - admonition
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.magiclink
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+  - glightbox
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/easysysio
+    - icon: fontawesome/solid/globe
+      link: https://easysys.io

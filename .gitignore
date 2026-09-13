@@ -27,3 +27,6 @@ target
 
 # custome files
 easydc.db
+
+# Built documentation site — mkdocs build output
+/site/

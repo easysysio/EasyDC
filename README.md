@@ -3,6 +3,8 @@
 A web-based management GUI for Samba Active Directory Domain Controllers.
 Manage users, groups, computers, DNS records, and Group Policy Objects remotely through your browser — no CLI required.
 
+📖 **Documentation: [easydc.easysys.io](https://easydc.easysys.io)**
+
 ---
 
 ## Features
