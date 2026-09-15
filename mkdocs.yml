@@ -1,25 +1,34 @@
 # EasyDC documentation site — https://easydc.easysys.io
 #
-# Same theme and extensions as the EasySYS site, so this reads as part of the
-# family rather than as a different product. EasySYS links here; the pages
-# live beside the code they describe, so a feature and its documentation land
-# in one commit.
+# Same design as easysys.io. The landing page (docs/index.md) is drawn with the
+# EasySYS `es-*` components copied into stylesheets/easysys.css; the
+# documentation pages keep Material's navigation and search, themed with the
+# same tokens in stylesheets/easydc.css. The pages live beside the code they
+# describe, so a feature and its documentation land in one commit.
 #
 # Build:   pip install -r docs-requirements.txt && mkdocs serve
 # Deploy:  ./deploy-docs.sh   (on the host that serves the site)
 
 site_name: EasyDC
 site_url: https://easydc.easysys.io/
-site_description: Manage a Samba Active Directory Domain Controller from your browser — no CLI required.
+site_description: Manage Samba Active Directory domain controllers from the browser, in a single Rust binary.
 repo_url: https://github.com/easysysio/EasyDC
 repo_name: easysysio/EasyDC
-copyright: MIT
+copyright: MIT licensed · part of the EasySYS suite
 
 nav:
-  - Overview: index.md
+  - Home: index.md
+  - Documentation:
+      - Installation: install.md
+      - Getting started: getting-started.md
+      - Managing the domain: managing.md
+      - Health check: health-check.md
+      - Reference: reference.md
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.png
   font:
     text: Inter
     code: Roboto Mono
@@ -41,6 +50,7 @@ theme:
   features:
     - navigation.instant
     - navigation.tracking
+    - navigation.tabs
     - navigation.sections
     - navigation.top
     - navigation.path
@@ -81,6 +91,14 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/easysysio
+      link: https://github.com/easysysio/EasyDC
     - icon: fontawesome/solid/globe
       link: https://easysys.io
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/easysys
+
+extra_css:
+  # Bump ?v= whenever a stylesheet changes so browsers fetch the new file
+  # instead of serving a cached copy.
+  - stylesheets/easysys.css?v=1
+  - stylesheets/easydc.css?v=1

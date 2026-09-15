@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="EasySYS">
+  <!-- Hexagon badge with rounded corners (stroke trick), deep indigo -->
+  <polygon points="86,256 171,109 341,109 426,256 341,403 171,403"
+           fill="#232A5C" stroke="#232A5C" stroke-width="34" stroke-linejoin="round"/>
+  <!-- White "E" monogram -->
+  <g fill="#ffffff">
+    <rect x="196" y="176" width="30" height="160" rx="15"/>
+    <rect x="196" y="176" width="120" height="30" rx="15"/>
+    <rect x="196" y="241" width="88"  height="30" rx="15"/>
+    <rect x="196" y="306" width="120" height="30" rx="15"/>
+  </g>
+</svg>
