@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.2.2] - 2026-09-22
 
 ### Added
 - **Settings** (`/settings`, linked from every page) for EasyDC's own sign-in accounts
