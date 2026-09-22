@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Settings - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item active">Settings</li>
+    </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+    <i class="bi bi-gear fs-2 text-primary me-3"></i>
+    <div>
+        <h4 class="mb-0">Settings</h4>
+        <small class="text-muted">EasyDC sign-in accounts — not domain users</small>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger d-flex align-items-start">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div>{{ error }}</div>
+</div>
+{% endif %}
+
+{% if done %}
+<div class="alert alert-success d-flex align-items-start">
+    <i class="bi bi-check-circle-fill me-2 mt-1"></i>
+    <div>{{ done }}</div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+    <div class="col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-white">
+                <i class="bi bi-key me-2 text-primary"></i><strong>Change your password</strong>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small">
+                    Signed in as <span class="fw-semibold">{{ actor }}</span>. Changing your password
+                    signs out your other sessions.
+                </p>
+                <form method="post" action="/settings/password">
+                    <div class="mb-3">
+                        <label class="form-label">Current password</label>
+                        <input type="password" name="current_password" class="form-control" required
+                            autocomplete="current-password">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">New password</label>
+                        <input type="password" name="new_password" class="form-control" required
+                            minlength="{{ min_password_len }}" autocomplete="new-password">
+                        <div class="form-text">At least {{ min_password_len }} characters.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Confirm new password</label>
+                        <input type="password" name="confirm_password" class="form-control" required
+                            minlength="{{ min_password_len }}" autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check2 me-1"></i> Change password
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-people me-2 text-primary"></i><strong>Administrators</strong></span>
+                <span class="badge bg-light text-secondary border">{{ admins | length }}</span>
+            </div>
+            <ul class="list-group list-group-flush">
+                {% for a in admins %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>
+                        <i class="bi bi-person-circle me-2 text-secondary"></i>{{ a }}
+                        {% if a == actor %}
+                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle ms-1">you</span>
+                        {% endif %}
+                    </span>
+                    {% if a != actor and admins | length > 1 %}
+                    <form method="post" action="/settings/admins/{{ a }}/delete"
+                        onsubmit="return confirm('Remove administrator {{ a }}? They will be signed out immediately.');">
+                        <button type="submit" class="btn btn-outline-danger btn-sm">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            <div class="card-body border-top">
+                <p class="text-muted small mb-3">
+                    Add an account so each person signs in as themselves and the audit log shows who
+                    made a change. Every administrator has full access.
+                </p>
+                <form method="post" action="/settings/admins/new">
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" name="username" class="form-control" required maxlength="64"
+                            autocomplete="off">
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-sm-6">
+                            <label class="form-label">Password</label>
+                            <input type="password" name="password" class="form-control" required
+                                minlength="{{ min_password_len }}" autocomplete="new-password">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label">Confirm</label>
+                            <input type="password" name="confirm_password" class="form-control" required
+                                minlength="{{ min_password_len }}" autocomplete="new-password">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-outline-primary">
+                        <i class="bi bi-person-plus me-1"></i> Add administrator
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -132,3 +132,98 @@ pub async fn has_users(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
         .await?;
     Ok(row.get::<i64, _>("count") > 0)
 }
+
+// ── EasyDC administrator accounts ─────────────────────────────────────────────
+
+/// Every administrator username, alphabetically.
+pub async fn list_admins(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT username FROM users ORDER BY username COLLATE NOCASE")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.iter().map(|r| r.get::<String, _>("username")).collect())
+}
+
+pub async fn admin_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    use sqlx::Row;
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM users")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("count"))
+}
+
+pub async fn admin_exists(pool: &SqlitePool, username: &str) -> bool {
+    sqlx::query("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE")
+        .bind(username)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+pub async fn password_hash_for(pool: &SqlitePool, username: &str) -> Option<String> {
+    use sqlx::Row;
+    sqlx::query("SELECT password_hash FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|row| row.get::<String, _>("password_hash"))
+}
+
+pub async fn set_password_hash(
+    pool: &SqlitePool,
+    username: &str,
+    hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET password_hash = ? WHERE username = ?")
+        .bind(hash)
+        .bind(username)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+pub async fn create_admin(
+    pool: &SqlitePool,
+    username: &str,
+    hash: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+        .bind(username)
+        .bind(hash)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+pub async fn delete_admin(pool: &SqlitePool, username: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM users WHERE username = ?")
+        .bind(username)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+/// Drop an account's sessions, optionally sparing one token. Used to sign a
+/// deleted administrator out everywhere, and to leave only the current browser
+/// signed in after a password change.
+pub async fn delete_sessions_for(pool: &SqlitePool, username: &str, except: Option<&str>) {
+    let _ = match except {
+        Some(token) => {
+            sqlx::query("DELETE FROM sessions WHERE username = ? AND token != ?")
+                .bind(username)
+                .bind(token)
+                .execute(pool)
+                .await
+        }
+        None => {
+            sqlx::query("DELETE FROM sessions WHERE username = ?")
+                .bind(username)
+                .execute(pool)
+                .await
+        }
+    };
+}

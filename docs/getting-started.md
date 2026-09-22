@@ -43,6 +43,9 @@ Opening a server shows one card per area:
 | **Health Check** | Read-only diagnostics for the domain |
 | **OU Management** | The OU tree and moving objects between OUs |
 
+**Settings** in the top bar manages the EasyDC sign-in accounts: change your own
+password, and add an account for each person who administers the domain.
+
 The **Audit Log** button in the top bar is global: it lists changes across every server.
 
 Next: [what you can do in each area](managing.md).

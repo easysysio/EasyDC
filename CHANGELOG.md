@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Settings** (`/settings`, linked from every page) for EasyDC's own sign-in accounts
+  - **Change your password** — requires the current one, and signs out the account's other sessions so a changed password actually ends access elsewhere
+  - **Administrator accounts** — add and remove the logins that administer EasyDC, so each person signs in as themselves and the audit log names who made a change. Removing one drops their sessions immediately
+  - Refuses the two changes that would lock everyone out: deleting the account you are signed in as, and deleting the last administrator
+  - Both successes and rejected attempts are written to the audit log (`settings.password_change`, `settings.admin_create`, `settings.admin_delete`)
+
 ## [0.2.1] - 2026-08-18
 
 ### Added
