@@ -14,7 +14,11 @@ All notable changes to this project will be documented in this file.
   - Both actions are audited (`dns.zone_create`, `dns.zone_delete`)
   - The byte layouts are synthesised rather than copied from a neighbouring zone, so a zone with aging switched on cannot pass that setting to every zone created afterwards. Unit tests assert the SOA and property bytes against records a real Samba DC produced
 
+### Changed
+- **`--port` flag and `EASYDC_PORT`** to choose the listening port, so more than one instance can run at a time; the flag takes precedence over the environment variable, and `--help` lists the options
+
 ### Fixed
+- Startup errors no longer panic. A port already in use, or one the process may not bind, now prints what happened and what to do and exits with status 1; a bad argument exits with 2. Previously a taken port surfaced as a Rust panic with a backtrace hint
 - The DNS zone list rendered as a blank page when a template variable was set on one code path but not the other; both now go through the same renderer, and the template degrades to hiding delete buttons rather than failing
 
 ### Known limitation

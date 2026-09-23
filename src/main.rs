@@ -25,6 +25,19 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{}", USAGE);
+        return;
+    }
+    let port = match parse_port(&args, std::env::var("EASYDC_PORT").ok()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("EasyDC: {}\n\n{}", e, USAGE);
+            std::process::exit(2);
+        }
+    };
+
     tracing_subscriber::fmt::init();
 
     let opts = SqliteConnectOptions::from_str("sqlite://easydc.db")
@@ -123,7 +136,111 @@ async fn main() {
         .merge(protected)
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("EasyDC running on http://0.0.0.0:3000");
-    axum::serve(listener, app).await.unwrap();
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            // A port clash is the common case and used to surface as a panic
+            // with a backtrace hint, which says nothing about what to do.
+            match e.kind() {
+                std::io::ErrorKind::AddrInUse => {
+                    eprintln!("EasyDC cannot start: port {} is already in use.", port);
+                    eprintln!("Another copy of EasyDC may already be running.");
+                    eprintln!("Run on a different port with --port <PORT>, or set EASYDC_PORT.");
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("EasyDC cannot start: not allowed to listen on port {}.", port);
+                    eprintln!("Ports below 1024 need extra privileges; pick a higher port with --port <PORT>.");
+                }
+                _ => eprintln!("EasyDC cannot start: could not listen on {}: {}", addr, e),
+            }
+            std::process::exit(1);
+        }
+    };
+
+    println!("EasyDC running on http://{}", addr);
+    if let Err(e) = axum::serve(listener, app).await {
+        eprintln!("EasyDC stopped: {}", e);
+        std::process::exit(1);
+    }
+}
+
+const USAGE: &str = "\
+EasyDC — a web GUI for Samba Active Directory domain controllers
+
+Usage: easydc [OPTIONS]
+
+Options:
+  -p, --port <PORT>    Port to listen on [default: 3000, or $EASYDC_PORT]
+  -h, --help           Print this help
+
+The SQLite database (easydc.db) is created in the working directory.";
+
+/// Port precedence: the flag, then EASYDC_PORT, then 3000. Kept separate from
+/// main so the parsing is testable without binding a socket.
+fn parse_port<I: AsRef<str>>(args: &[I], env_port: Option<String>) -> Result<u16, String> {
+    let mut args = args.iter().map(|a| a.as_ref());
+    while let Some(arg) = args.next() {
+        let value = match arg {
+            "-p" | "--port" => args
+                .next()
+                .ok_or_else(|| "--port needs a port number".to_string())?
+                .to_string(),
+            a if a.starts_with("--port=") => a.trim_start_matches("--port=").to_string(),
+            a => return Err(format!("unknown argument '{}'", a)),
+        };
+        return parse_port_value(&value, "--port");
+    }
+
+    match env_port {
+        Some(v) if !v.trim().is_empty() => parse_port_value(v.trim(), "EASYDC_PORT"),
+        _ => Ok(3000),
+    }
+}
+
+fn parse_port_value(value: &str, source: &str) -> Result<u16, String> {
+    match value.parse::<u16>() {
+        Ok(0) => Err(format!("{}: 0 is not a usable port", source)),
+        Ok(p) => Ok(p),
+        Err(_) => Err(format!("{}: '{}' is not a port number", source, value)),
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::parse_port;
+
+    fn port(args: &[&str], env: Option<&str>) -> Result<u16, String> {
+        parse_port(args, env.map(String::from))
+    }
+
+    #[test]
+    fn defaults_to_3000() {
+        assert_eq!(port(&[], None), Ok(3000));
+        assert_eq!(port(&[], Some("")), Ok(3000));
+    }
+
+    #[test]
+    fn reads_the_environment() {
+        assert_eq!(port(&[], Some("8080")), Ok(8080));
+        assert_eq!(port(&[], Some(" 8080 ")), Ok(8080));
+    }
+
+    #[test]
+    fn the_flag_wins_over_the_environment() {
+        assert_eq!(port(&["--port", "9000"], Some("8080")), Ok(9000));
+        assert_eq!(port(&["--port=9000"], Some("8080")), Ok(9000));
+        assert_eq!(port(&["-p", "9000"], Some("8080")), Ok(9000));
+    }
+
+    #[test]
+    fn rejects_what_cannot_be_a_port() {
+        assert!(port(&["--port", "0"], None).is_err());
+        assert!(port(&["--port", "70000"], None).is_err());
+        assert!(port(&["--port", "http"], None).is_err());
+        assert!(port(&["--port"], None).is_err());
+        assert!(port(&["--wat"], None).is_err());
+        // A bad environment value is reported, not silently ignored.
+        assert!(port(&[], Some("nope")).is_err());
+    }
 }

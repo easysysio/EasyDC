@@ -27,7 +27,7 @@ or writes the directory directly. Nothing runs on the domain controllers themsel
 
 | | |
 |---|---|
-| **Web UI** | HTTP on `0.0.0.0:3000` |
+| **Web UI** | HTTP on `0.0.0.0:3000`, or `--port` / `EASYDC_PORT` |
 | **Database** | `easydc.db` in the working directory (`/var/lib/easydc` under the systemd unit) |
 | **Outbound** | LDAP / LDAPS to each domain controller you add |
 

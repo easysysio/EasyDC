@@ -33,6 +33,15 @@ To try it out, run it in place:
 EasyDC listens on **port 3000** on all interfaces and creates `easydc.db` in the
 **current working directory**.
 
+To use a different port, pass `--port` or set `EASYDC_PORT`; the flag wins:
+
+```bash
+./easydc --port 8080
+EASYDC_PORT=8080 ./easydc
+```
+
+`./easydc --help` lists the options.
+
 ## Run as a systemd service
 
 For a permanent install, give EasyDC a dedicated user and a working directory of its own:
@@ -53,7 +62,7 @@ After=network.target
 Type=simple
 User=easydc
 WorkingDirectory=/var/lib/easydc
-ExecStart=/usr/local/bin/easydc
+ExecStart=/usr/local/bin/easydc --port 3000
 Restart=on-failure
 RestartSec=5
 
