@@ -6,8 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **DNS zone creation and deletion** on the DNS page
-  - **Add a zone** writes a primary, AD-integrated zone with secure dynamic update: the `dnsZone` object with its seven `dNSProperty` values, plus an apex node carrying SOA and NS. The SOA names this DC as primary server and `hostmaster.<domain>` as responsible party
-  - A zone created this way is served by every DC in the domain **immediately, with no restart** — verified against a live Samba DC
+  - **Add a zone** writes a primary, AD-integrated zone with secure dynamic update: the `dnsZone` object with its seven `dNSProperty` values, plus an apex node carrying SOA and NS. The SOA names this DC as primary server and `hostmaster.<domain>` as responsible party, and an NS record is written for **every** domain controller — they all replicate and serve the zone, so a single-NS zone would be inconsistent with every zone Samba creates
+  - A zone created this way is served by the connected DC **immediately, with no restart**, and by the other DCs within seconds as replication reaches them — both measured against a live two-DC Samba domain
   - **Reverse zone** mode takes a network (`192.168.10` or `192.168.10.0/24`) and derives `10.168.192.in-addr.arpa`, previewed in the form as you type
   - Deleting a zone removes every node in it, leaf-first, behind a confirmation that requires typing the zone name. The tree-delete control is deliberately not used, so nothing outside the zone can be removed
   - The domain's own zone cannot be deleted — the button is withheld and the request refused, since it holds the SRV records members use to find a DC

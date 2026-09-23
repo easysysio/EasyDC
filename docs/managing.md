@@ -39,16 +39,18 @@ returned by the server are shown on the page rather than swallowed.
 ### Creating a zone
 
 **Add a zone** creates a primary, AD-integrated zone with secure dynamic update — the same
-kind of zone `samba-tool dns zonecreate` produces. It is written to the directory, so every
-DC in the domain picks it up and serves it **immediately, without restarting samba**.
+kind of zone `samba-tool dns zonecreate` produces. The DC you are connected to serves it
+**immediately, without restarting samba**; the other DCs follow within seconds, as normal
+directory replication reaches them.
 
 Tick **Reverse zone** to enter a network instead of a name: `192.168.10` or
 `192.168.10.0/24` both create `10.168.192.in-addr.arpa`. The page shows the resulting zone
 name as you type.
 
 The zone's SOA names this DC as the primary server and `hostmaster.<your domain>` as the
-responsible party, and an NS record is created for the DC you are connected to. Other DCs
-add their own NS records when they next register.
+responsible party. An **NS record is created for every domain controller** in the domain,
+not just the one you are connected to — zones live in a partition replicated to all of
+them, so they all answer for the zone.
 
 ### Deleting a zone
 

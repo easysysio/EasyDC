@@ -1860,8 +1860,40 @@ pub async fn dns_partition_dn(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResu
     Err("Could not find the DNS partition on this server".to_string())
 }
 
+/// Every domain controller's FQDN. A DC's computer account carries
+/// SERVER_TRUST_ACCOUNT (0x2000) in userAccountControl, which identifies them
+/// in one search without walking the configuration partition.
+///
+/// A new zone gets an NS record for each: zones live in a partition replicated
+/// to all of them, so they all answer for it, and every zone Samba creates
+/// lists them all. Registering only the DC that happened to create the zone
+/// would leave it inconsistent with the rest of the domain.
+pub async fn list_dc_hostnames(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
+    let (entries, _) = ldap
+        .search(
+            base_dn,
+            Scope::Subtree,
+            "(&(objectClass=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))",
+            vec!["dNSHostName"],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+
+    let mut hosts: Vec<String> = entries
+        .into_iter()
+        .map(SearchEntry::construct)
+        .map(|e| attr(&e, "dNSHostName"))
+        .filter(|h| !h.is_empty())
+        .collect();
+    hosts.sort_by_key(|h| h.to_lowercase());
+    hosts.dedup_by_key(|h| h.to_lowercase());
+    Ok(hosts)
+}
+
 /// This DC's own fully-qualified name, from the rootDSE. It becomes the SOA
-/// primary server and the zone's first NS record.
+/// primary server.
 pub async fn dc_hostname(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
     let (entries, _) = ldap
         .search("", Scope::Base, "(objectClass=*)", vec!["dnsHostName"])
@@ -1911,10 +1943,19 @@ pub async fn create_dns_zone(
     // The apex. If this fails the zone object is already there, so it is
     // removed again rather than left as a zone with no SOA.
     let node_dn = format!("DC=@,{}", zone_dn);
-    let recs: HashSet<Vec<u8>> = HashSet::from([
-        build_soa_record(&primary, &hostmaster, 1, 3600),
-        wrap_dns_record(2, 1, 3600, encode_dns_rpc_name(&primary)),
-    ]);
+
+    // Every DC serves this zone, so every DC belongs in the NS set. If the
+    // lookup finds nothing, fall back to the one we are talking to rather than
+    // creating a zone with no NS at all.
+    let mut nameservers = list_dc_hostnames(ldap, base_dn).await.unwrap_or_default();
+    if nameservers.is_empty() {
+        nameservers.push(primary.clone());
+    }
+
+    let mut recs: HashSet<Vec<u8>> = HashSet::from([build_soa_record(&primary, &hostmaster, 1, 3600)]);
+    for ns in &nameservers {
+        recs.insert(wrap_dns_record(2, 1, 3600, encode_dns_rpc_name(ns)));
+    }
     let node_attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
         (sv("objectClass"), HashSet::from([sv("top"), sv("dnsNode")])),
         (sv("dc"), HashSet::from([sv("@")])),

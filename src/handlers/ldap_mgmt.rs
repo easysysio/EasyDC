@@ -559,7 +559,8 @@ pub async fn dns_zone_create(
             &server,
             None,
             Some(format!(
-                "Zone {} created and served immediately — no restart needed.",
+                "Zone {} created. This DC serves it immediately and the others follow \
+                 within seconds, as replication catches up — no restart needed.",
                 zone
             )),
         )
