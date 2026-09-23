@@ -104,6 +104,8 @@ async fn main() {
         .route("/servers/:id/dns/:zone", get(handlers::ldap_mgmt::dns_zone))
         .route("/servers/:id/dns/:zone/add", post(handlers::ldap_mgmt::dns_add_record))
         .route("/servers/:id/dns/:zone/delete", post(handlers::ldap_mgmt::dns_delete_record))
+        .route("/servers/:id/dns-zones/new", post(handlers::ldap_mgmt::dns_zone_create))
+        .route("/servers/:id/dns-zones/:zone/delete", post(handlers::ldap_mgmt::dns_zone_delete))
         .route("/servers/:id/gpo", get(handlers::ldap_mgmt::gpo))
         .route("/servers/:id/gpo/new", post(handlers::ldap_mgmt::gpo_create))
         .route("/servers/:id/gpo/:guid/edit", post(handlers::ldap_mgmt::gpo_update))

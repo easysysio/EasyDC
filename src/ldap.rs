@@ -947,24 +947,28 @@ fn build_dns_record_binary(record_type: &str, value: &str, ttl: u32) -> LdapResu
         _ => return Err(format!("Unsupported type: {}", record_type)),
     };
 
-    // dnsp_DnssrvRpcRecord header (MS-DNSP, as Samba stores it in dnsRecord):
-    //   u16 wDataLength | u16 wType | u8 version | u8 rank | u16 flags |
-    //   u32 dwSerial | u32 dwTtlSeconds (BIG ENDIAN) | u32 dwReserved |
-    //   u32 dwTimeStamp | data…
-    // version must be 5 and rank must be 0xF0 (DNS_RANK_ZONE) or Samba will
-    // not treat the value as a live zone record (shows up as Records=0).
+    Ok(wrap_dns_record(rtype, 0, ttl, data))
+}
+
+/// dnsp_DnssrvRpcRecord header (MS-DNSP, as Samba stores it in dnsRecord):
+///   u16 wDataLength | u16 wType | u8 version | u8 rank | u16 flags |
+///   u32 dwSerial | u32 dwTtlSeconds (BIG ENDIAN) | u32 dwReserved |
+///   u32 dwTimeStamp | data…
+/// version must be 5 and rank must be 0xF0 (DNS_RANK_ZONE) or Samba will not
+/// treat the value as a live zone record (shows up as Records=0).
+fn wrap_dns_record(rtype: u16, serial: u32, ttl: u32, data: Vec<u8>) -> Vec<u8> {
     let mut rec = Vec::new();
     rec.extend_from_slice(&(data.len() as u16).to_le_bytes()); // wDataLength
     rec.extend_from_slice(&rtype.to_le_bytes());               // wType
     rec.push(5); // version
     rec.push(0xF0); // rank = DNS_RANK_ZONE
     rec.extend_from_slice(&0u16.to_le_bytes()); // flags
-    rec.extend_from_slice(&0u32.to_le_bytes()); // dwSerial
+    rec.extend_from_slice(&serial.to_le_bytes()); // dwSerial
     rec.extend_from_slice(&ttl.to_be_bytes()); // dwTtlSeconds (big-endian)
     rec.extend_from_slice(&0u32.to_le_bytes()); // dwReserved
     rec.extend_from_slice(&0u32.to_le_bytes()); // dwTimeStamp (0 = static)
     rec.extend(data);
-    Ok(rec)
+    rec
 }
 
 // ── DNS structs ───────────────────────────────────────────────────────────────
@@ -1702,6 +1706,285 @@ pub async fn delete_dns_record(
     Ok(())
 }
 
+// ── zone create / delete ──────────────────────────────────────────────────────
+//
+// A zone is a dnsZone object holding dNSProperty settings, plus an "@" dnsNode
+// carrying the SOA and NS records. Samba's own tooling writes these through the
+// DNS server's RPC pipe; EasyDC speaks only LDAP, and writing the objects
+// directly works — a zone created this way is served immediately, by every DC
+// in the domain, with no restart. Deleting one is NOT picked up by the running
+// DNS server, which keeps answering authoritatively for the removed zone until
+// samba restarts; the UI says so before it deletes anything.
+//
+// Every byte layout below was verified against zones Samba created (see tests).
+
+/// SOA data: five big-endian counters, then the primary server and the
+/// responsible party as DNS_COUNT_NAMEs.
+fn build_soa_record(primary: &str, hostmaster: &str, serial: u32, ttl: u32) -> Vec<u8> {
+    let mut d = Vec::new();
+    for v in [serial, 900u32, 600, 86_400, 3_600] {
+        d.extend_from_slice(&v.to_be_bytes());
+    }
+    d.extend(encode_dns_rpc_name(primary));
+    d.extend(encode_dns_rpc_name(hostmaster));
+    wrap_dns_record(6, serial, ttl, d)
+}
+
+/// DNS_PROPERTY: dwDataLength, dwNameLength, dwFlag, dwVersion, dwId, the data,
+/// then four zero bytes for the empty name.
+fn build_dns_property(id: u32, data: &[u8]) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes()); // dwNameLength
+    p.extend_from_slice(&0u32.to_le_bytes()); // dwFlag
+    p.extend_from_slice(&1u32.to_le_bytes()); // dwVersion
+    p.extend_from_slice(&id.to_le_bytes());
+    p.extend_from_slice(data);
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p
+}
+
+/// The property set Samba gives a new primary zone: primary type, secure
+/// dynamic update, default refresh intervals, aging off. Synthesised rather
+/// than copied from a neighbouring zone, so one zone with aging switched on
+/// cannot silently pass that on to every zone created afterwards.
+fn primary_zone_properties() -> Vec<Vec<u8>> {
+    let u32d = |v: u32| v.to_le_bytes().to_vec();
+    vec![
+        build_dns_property(0x01, &u32d(1)),   // ZONE_TYPE = primary
+        build_dns_property(0x02, &[2u8]),     // ALLOW_UPDATE = secure
+        build_dns_property(0x08, &[0u8; 8]),  // SECURE_TIME
+        build_dns_property(0x10, &u32d(168)), // NOREFRESH_INTERVAL, hours
+        build_dns_property(0x20, &u32d(168)), // REFRESH_INTERVAL, hours
+        build_dns_property(0x40, &u32d(0)),   // AGING_STATE = off
+        build_dns_property(0x12, &u32d(0)),   // AGING_ENABLED_TIME
+    ]
+}
+
+/// Turn a network into its in-addr.arpa zone name: "192.168.10" or
+/// "192.168.10.0/24" both give "10.168.192.in-addr.arpa". Returns None for
+/// anything that is not an IPv4 network, so a name typed in full passes
+/// through untouched.
+pub fn reverse_zone_name(input: &str) -> Option<String> {
+    let trimmed = input.trim().trim_end_matches('.');
+    let (addr, prefix) = match trimmed.split_once('/') {
+        Some((a, p)) => (a, Some(p.parse::<u8>().ok()?)),
+        None => (trimmed, None),
+    };
+
+    let octets: Vec<&str> = addr.split('.').filter(|o| !o.is_empty()).collect();
+    if octets.is_empty() || octets.len() > 4 {
+        return None;
+    }
+    for o in &octets {
+        if o.parse::<u8>().is_err() {
+            return None;
+        }
+    }
+
+    // With a prefix, keep the octets it covers; without one, keep what was
+    // typed (a trailing .0 being the network is the common shorthand).
+    let keep = match prefix {
+        Some(8) => 1,
+        Some(16) => 2,
+        Some(24) => 3,
+        Some(_) => return None,
+        None => {
+            if octets.len() == 4 && octets[3] == "0" {
+                3
+            } else {
+                octets.len()
+            }
+        }
+    };
+    if keep > octets.len() {
+        return None;
+    }
+
+    let mut parts: Vec<&str> = octets[..keep].to_vec();
+    parts.reverse();
+    Some(format!("{}.in-addr.arpa", parts.join(".")))
+}
+
+/// Reject anything that is not a plausible DNS zone name before it reaches the
+/// directory, where a bad name becomes a malformed object.
+pub fn validate_zone_name(zone: &str) -> LdapResult<()> {
+    if zone.is_empty() {
+        return Err("Zone name is required".to_string());
+    }
+    if zone.len() > 255 {
+        return Err("Zone name is too long".to_string());
+    }
+    if zone.starts_with('.') || zone.ends_with('.') {
+        return Err("Zone name must not start or end with a dot".to_string());
+    }
+    if zone.contains("..") {
+        return Err("Zone name must not contain an empty label".to_string());
+    }
+    if !zone.contains('.') {
+        return Err("Zone name must be fully qualified, for example example.com".to_string());
+    }
+    for label in zone.split('.') {
+        if label.len() > 63 {
+            return Err(format!("Label '{}' is longer than 63 characters", label));
+        }
+        if !label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!("Label '{}' has characters that are not allowed", label));
+        }
+    }
+    Ok(())
+}
+
+/// The DNS partition holding this domain's zones. Zones can live in any of
+/// three places, so a new zone goes wherever the existing ones are.
+pub async fn dns_partition_dn(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<String> {
+    let candidates = [
+        format!("CN=MicrosoftDNS,DC=DomainDnsZones,{}", base_dn),
+        format!("CN=MicrosoftDNS,CN=System,{}", base_dn),
+        format!("DC=DomainDnsZones,{}", base_dn),
+    ];
+    for base in &candidates {
+        if let Ok(Ok((entries, _))) = ldap
+            .search(base, Scope::Base, "(objectClass=*)", vec!["dn"])
+            .await
+            .map(|r| r.success())
+        {
+            if !entries.is_empty() {
+                return Ok(base.clone());
+            }
+        }
+    }
+    Err("Could not find the DNS partition on this server".to_string())
+}
+
+/// This DC's own fully-qualified name, from the rootDSE. It becomes the SOA
+/// primary server and the zone's first NS record.
+pub async fn dc_hostname(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
+    let (entries, _) = ldap
+        .search("", Scope::Base, "(objectClass=*)", vec!["dnsHostName"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .map(|e| attr(&e, "dnsHostName"))
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| "Could not read the DC's dnsHostName".to_string())
+}
+
+/// Create a primary, AD-integrated zone: the dnsZone object with its
+/// properties, and an apex node holding SOA and NS.
+pub async fn create_dns_zone(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    zone: &str,
+) -> LdapResult<()> {
+    validate_zone_name(zone)?;
+
+    if find_zone_dn(ldap, base_dn, zone).await.is_ok() {
+        return Err(format!("Zone '{}' already exists", zone));
+    }
+
+    let partition = dns_partition_dn(ldap, base_dn).await?;
+    let primary = dc_hostname(ldap).await?;
+    let hostmaster = format!("hostmaster.{}", base_dn_to_domain(base_dn));
+
+    let zone_dn = format!("DC={},{}", zone, partition);
+    let props: HashSet<Vec<u8>> = primary_zone_properties().into_iter().collect();
+    let zone_attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
+        (sv("objectClass"), HashSet::from([sv("top"), sv("dnsZone")])),
+        (sv("dc"), HashSet::from([sv(zone)])),
+        (sv("dNSProperty"), props),
+    ];
+    ldap.add(&zone_dn, zone_attrs)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to create zone: {}", e))?;
+
+    // The apex. If this fails the zone object is already there, so it is
+    // removed again rather than left as a zone with no SOA.
+    let node_dn = format!("DC=@,{}", zone_dn);
+    let recs: HashSet<Vec<u8>> = HashSet::from([
+        build_soa_record(&primary, &hostmaster, 1, 3600),
+        wrap_dns_record(2, 1, 3600, encode_dns_rpc_name(&primary)),
+    ]);
+    let node_attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
+        (sv("objectClass"), HashSet::from([sv("top"), sv("dnsNode")])),
+        (sv("dc"), HashSet::from([sv("@")])),
+        (sv("dnsRecord"), recs),
+    ];
+    if let Err(e) = ldap
+        .add(&node_dn, node_attrs)
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.success().map_err(|e| e.to_string()))
+    {
+        let _ = ldap.delete(&zone_dn).await;
+        return Err(format!("Failed to create the zone's apex records: {}", e));
+    }
+
+    Ok(())
+}
+
+/// Delete a zone and everything in it. LDAP will not remove an object that
+/// still has children, so the nodes go first; the tree-delete control is
+/// deliberately not used, so nothing can be removed beyond this zone.
+pub async fn delete_dns_zone(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    zone: &str,
+) -> LdapResult<usize> {
+    // Deleting the realm's own zone takes the SRV records every domain member
+    // uses to find a DC with it, so it is refused outright rather than left to
+    // a confirmation dialog.
+    let domain = base_dn_to_domain(base_dn);
+    let lower = zone.to_lowercase();
+    if lower == domain.to_lowercase() {
+        return Err(format!(
+            "'{}' is the domain's own zone and cannot be deleted from EasyDC",
+            zone
+        ));
+    }
+    if lower.starts_with("_msdcs.") || lower == "rootdnsservers" {
+        return Err(format!("'{}' is an internal zone and cannot be deleted", zone));
+    }
+
+    let zone_dn = find_zone_dn(ldap, base_dn, zone).await?;
+
+    let (entries, _) = ldap
+        .search(&zone_dn, Scope::OneLevel, "(objectClass=*)", vec!["dc"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+
+    let mut removed = 0usize;
+    for e in entries {
+        let dn = SearchEntry::construct(e).dn;
+        ldap.delete(&dn)
+            .await
+            .map_err(|e| e.to_string())?
+            .success()
+            .map_err(|err| format!("Failed to delete {}: {}", dn, err))?;
+        removed += 1;
+    }
+
+    ldap.delete(&zone_dn)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to delete zone: {}", e))?;
+
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod dns_name_tests {
     use super::*;
@@ -1748,5 +2031,92 @@ mod dns_name_tests {
         assert_eq!(rtype, "PTR");
         assert_eq!(value, "easylog.hakim.family");
         assert_eq!(ttl, 3600);
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    /// The SOA Samba itself stores for 9.168.192.in-addr.arpa on a live DC:
+    /// serial 2, TTL 3600, refresh 900, retry 600, expire 86400, minimum 3600,
+    /// primary dc1.hakim.family, responsible party hostmaster.hakim.family.
+    /// Building the same record from scratch must reproduce it byte for byte.
+    const REAL_SOA: &str = "4300060005f000000200000000000e1000000000000000000000000200000384000002580001518000000e101203036463310568616b696d0666616d696c790019030a686f73746d61737465720568616b696d0666616d696c7900";
+
+    #[test]
+    fn soa_matches_what_samba_stores() {
+        let built = build_soa_record("dc1.hakim.family", "hostmaster.hakim.family", 2, 3600);
+        assert_eq!(to_hex(&built), REAL_SOA);
+    }
+
+    #[test]
+    fn soa_counters_are_big_endian_and_type_is_6() {
+        let rec = build_soa_record("dc1.example.com", "hostmaster.example.com", 7, 3600);
+        assert_eq!(u16::from_le_bytes([rec[2], rec[3]]), 6); // wType = SOA
+        assert_eq!(rec[4], 5); // version
+        assert_eq!(rec[5], 0xF0); // DNS_RANK_ZONE
+        assert_eq!(u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]), 3600); // TTL
+        assert_eq!(u32::from_be_bytes([rec[24], rec[25], rec[26], rec[27]]), 7); // serial
+        assert_eq!(u32::from_be_bytes([rec[28], rec[29], rec[30], rec[31]]), 900); // refresh
+    }
+
+    /// Likewise the ZONE_TYPE property, as stored by Samba.
+    #[test]
+    fn zone_type_property_matches_samba() {
+        let p = build_dns_property(0x01, &1u32.to_le_bytes());
+        assert_eq!(to_hex(&p), "04000000000000000000000001000000010000000100000000000000");
+    }
+
+    #[test]
+    fn a_new_zone_is_primary_with_secure_update() {
+        let props = primary_zone_properties();
+        assert_eq!(props.len(), 7);
+        let id_of = |p: &Vec<u8>| u32::from_le_bytes([p[16], p[17], p[18], p[19]]);
+        let by_id = |id: u32| props.iter().find(|p| id_of(p) == id).cloned().unwrap();
+
+        let zone_type = by_id(0x01);
+        assert_eq!(zone_type[20], 1, "DNS_ZONE_TYPE_PRIMARY");
+        let allow_update = by_id(0x02);
+        assert_eq!(allow_update[20], 2, "secure dynamic update");
+        let aging = by_id(0x40);
+        assert_eq!(aging[20], 0, "aging off");
+    }
+
+    #[test]
+    fn reverse_zone_names_from_networks() {
+        let r = |s: &str| reverse_zone_name(s).unwrap();
+        assert_eq!(r("192.168.10"), "10.168.192.in-addr.arpa");
+        assert_eq!(r("192.168.10.0/24"), "10.168.192.in-addr.arpa");
+        assert_eq!(r("192.168.10.0"), "10.168.192.in-addr.arpa");
+        assert_eq!(r("192.168.0.0/16"), "168.192.in-addr.arpa");
+        assert_eq!(r("10.0.0.0/8"), "10.in-addr.arpa");
+        assert_eq!(r("192.168"), "168.192.in-addr.arpa");
+    }
+
+    #[test]
+    fn reverse_zone_rejects_things_that_are_not_networks() {
+        assert!(reverse_zone_name("example.com").is_none());
+        assert!(reverse_zone_name("192.168.300").is_none());
+        assert!(reverse_zone_name("192.168.1.2.3").is_none());
+        assert!(reverse_zone_name("").is_none());
+        // A prefix length that does not fall on an octet boundary has no
+        // in-addr.arpa name.
+        assert!(reverse_zone_name("192.168.10.0/25").is_none());
+    }
+
+    #[test]
+    fn zone_names_are_validated() {
+        assert!(validate_zone_name("example.com").is_ok());
+        assert!(validate_zone_name("10.168.192.in-addr.arpa").is_ok());
+        assert!(validate_zone_name("_msdcs.example.com").is_ok());
+
+        assert!(validate_zone_name("").is_err());
+        assert!(validate_zone_name("singlelabel").is_err());
+        assert!(validate_zone_name(".example.com").is_err());
+        assert!(validate_zone_name("example.com.").is_err());
+        assert!(validate_zone_name("exa mple.com").is_err());
+        assert!(validate_zone_name("example..com").is_err());
+        assert!(validate_zone_name(&format!("{}.com", "a".repeat(64))).is_err());
     }
 }

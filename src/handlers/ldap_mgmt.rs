@@ -474,32 +474,141 @@ pub async fn ou_move_object(
 
 // ── DNS zone list ─────────────────────────────────────────────────────────────
 
-pub async fn dns(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
-
+async fn render_dns(
+    state: &AppState,
+    server: &Server,
+    error: Option<String>,
+    notice: Option<String>,
+) -> Response {
     let mut ctx = Context::new();
-    ctx.insert("server", &server);
+    ctx.insert("server", server);
+    if let Some(n) = notice {
+        ctx.insert("notice", &n);
+    }
 
-    match ldap::open(&server).await {
+    match ldap::open(server).await {
         Err(e) => {
-            ctx.insert("error", &e);
+            ctx.insert("error", &error.unwrap_or(e));
             ctx.insert("zones", &Vec::<ldap::LdapDnsZone>::new());
         }
         Ok((mut conn, base_dn)) => match ldap::list_dns_zones(&mut conn, &base_dn).await {
             Err(e) => {
-                ctx.insert("error", &e);
+                ctx.insert("error", &error.unwrap_or(e));
                 ctx.insert("zones", &Vec::<ldap::LdapDnsZone>::new());
             }
             Ok(zones) => {
+                if let Some(e) = error {
+                    ctx.insert("error", &e);
+                }
+                ctx.insert("domain", &ldap::base_dn_to_domain(&base_dn));
                 ctx.insert("zones", &zones);
             }
         },
     }
 
     Html(state.tera.render("dns.html", &ctx).unwrap_or_default()).into_response()
+}
+
+// ── create a zone ─────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CreateZoneForm {
+    pub zone: String,
+    /// Present when the "reverse zone" box is ticked, in which case the input
+    /// is a network such as 192.168.10 rather than a zone name.
+    pub reverse: Option<String>,
+}
+
+pub async fn dns_zone_create(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path(id): Path<i64>,
+    Form(form): Form<CreateZoneForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    let input = form.zone.trim().to_string();
+    let zone = if form.reverse.is_some() {
+        match ldap::reverse_zone_name(&input) {
+            Some(z) => z,
+            None => {
+                let e = format!(
+                    "'{}' is not an IPv4 network. Use 192.168.10, or 192.168.10.0/24.",
+                    input
+                );
+                db::log_action(&state.db, &actor, "dns.zone_create", &input, Some(id), &Err(e.clone())).await;
+                return render_dns(&state, &server, Some(e), None).await;
+            }
+        }
+    } else {
+        input.to_lowercase()
+    };
+
+    let result = match ldap::open(&server).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => ldap::create_dns_zone(&mut conn, &base_dn, &zone).await,
+    };
+    db::log_action(&state.db, &actor, "dns.zone_create", &zone, Some(id), &result).await;
+
+    match result {
+        Ok(()) => render_dns(
+            &state,
+            &server,
+            None,
+            Some(format!(
+                "Zone {} created and served immediately — no restart needed.",
+                zone
+            )),
+        )
+        .await,
+        Err(e) => render_dns(&state, &server, Some(e), None).await,
+    }
+}
+
+// ── delete a zone ─────────────────────────────────────────────────────────────
+
+pub async fn dns_zone_delete(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path((id, zone)): Path<(i64, String)>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    let result = match ldap::open(&server).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => ldap::delete_dns_zone(&mut conn, &base_dn, &zone).await,
+    };
+
+    let logged = result.as_ref().map(|_| ()).map_err(|e| e.clone());
+    db::log_action(&state.db, &actor, "dns.zone_delete", &zone, Some(id), &logged).await;
+
+    match result {
+        Ok(nodes) => render_dns(
+            &state,
+            &server,
+            None,
+            Some(format!(
+                "Zone {} and its {} node(s) removed from the directory.                  The DNS server keeps answering for {} until samba is restarted on each DC.",
+                zone, nodes, zone
+            )),
+        )
+        .await,
+        Err(e) => render_dns(&state, &server, Some(e), None).await,
+    }
+}
+
+pub async fn dns(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+    render_dns(&state, &server, None, None).await
 }
 
 // ── DNS zone shared renderer ──────────────────────────────────────────────────
@@ -1069,4 +1178,102 @@ pub async fn unlock_user(
     db::log_action(&state.db, &actor, "user.unlock", &username, Some(id), &result).await;
 
     redirect_users(id)
+}
+
+#[cfg(test)]
+mod dns_zone_tests {
+    use crate::models::Server;
+    use tera::{Context, Tera};
+
+    fn tera() -> Tera {
+        let mut t = Tera::new("templates/**/*.html").expect("templates parse");
+        t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
+            Ok(tera::Value::String("test".to_string()))
+        });
+        t
+    }
+
+    fn server() -> Server {
+        Server {
+            id: 1,
+            name: "DC1".to_string(),
+            ldap_url: "ldaps://dc1.example.com".to_string(),
+            bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
+            bind_password: "secret".to_string(),
+            skip_tls: true,
+        }
+    }
+
+    fn ctx(zones: &[&str], domain: &str) -> Context {
+        let zone_objs: Vec<tera::Value> = zones
+            .iter()
+            .map(|z| {
+                let mut m = tera::Map::new();
+                m.insert("name".to_string(), tera::Value::String(z.to_string()));
+                m.insert("dn".to_string(), tera::Value::String(format!("DC={}", z)));
+                tera::Value::Object(m)
+            })
+            .collect();
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("zones", &zone_objs);
+        c.insert("domain", domain);
+        c
+    }
+
+    #[test]
+    fn offers_zone_creation() {
+        let html = tera().render("dns.html", &ctx(&["example.com"], "example.com")).expect("renders");
+        assert!(html.contains("/servers/1/dns-zones/new"));
+        assert!(html.contains("Reverse zone"));
+        assert!(!html.contains("secret"), "bind password must not reach the page");
+    }
+
+    /// Deleting the realm's own zone would take the SRV records every member
+    /// uses to find a DC. The handler refuses it; the button must not be there
+    /// either.
+    #[test]
+    fn the_domain_zone_has_no_delete_button() {
+        let html = tera()
+            .render("dns.html", &ctx(&["example.com", "10.168.192.in-addr.arpa"], "example.com"))
+            .expect("renders");
+        assert!(html.contains("/servers/1/dns-zones/10.168.192.in-addr.arpa/delete"));
+        assert!(!html.contains("/servers/1/dns-zones/example.com/delete"));
+    }
+
+    /// Regression: `domain` was set on one render path and not the other, so
+    /// the comparison failed and unwrap_or_default() served a blank page.
+    #[test]
+    fn renders_even_without_the_domain_in_context() {
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("zones", &vec![tera::Value::Object({
+            let mut m = tera::Map::new();
+            m.insert("name".to_string(), tera::Value::String("example.com".to_string()));
+            m
+        })]);
+        let html = tera().render("dns.html", &c).expect("renders without domain");
+        assert!(html.contains("example.com"), "zones must still be listed");
+        assert!(!html.contains("/delete"), "without a domain, no delete buttons");
+    }
+
+    #[test]
+    fn shows_the_notice_after_a_change() {
+        let mut c = ctx(&["example.com"], "example.com");
+        c.insert("notice", "Zone test.example created and served immediately — no restart needed.");
+        let html = tera().render("dns.html", &c).expect("renders");
+        assert!(html.contains("alert-info"));
+        assert!(html.contains("served immediately"));
+    }
+
+    /// The confirmation must name the restart caveat, since that is the part
+    /// that surprises people.
+    #[test]
+    fn delete_confirmation_warns_about_the_restart() {
+        let html = tera()
+            .render("dns.html", &ctx(&["example.com", "other.test"], "example.com"))
+            .expect("renders");
+        assert!(html.contains("Type the zone name to confirm"));
+        assert!(html.contains("until samba is"));
+    }
 }

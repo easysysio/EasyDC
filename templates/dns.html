@@ -20,6 +20,43 @@
 </div>
 {% endif %}
 
+{% if notice %}
+<div class="alert alert-info d-flex align-items-start">
+    <i class="bi bi-info-circle-fill me-2 mt-1"></i>
+    <div>{{ notice }}</div>
+</div>
+{% endif %}
+
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <i class="bi bi-plus-circle me-2 text-warning"></i><strong>Add a zone</strong>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/servers/{{ server.id }}/dns-zones/new" class="row g-2 align-items-start">
+            <div class="col-md-6">
+                <input type="text" name="zone" class="form-control" required
+                    placeholder="example.com" id="zoneInput" autocomplete="off">
+                <div class="form-text" id="zoneHelp">A fully qualified zone name.</div>
+            </div>
+            <div class="col-md-3">
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" name="reverse" value="1" id="reverseCheck">
+                    <label class="form-check-label" for="reverseCheck">Reverse zone</label>
+                </div>
+            </div>
+            <div class="col-md-3 text-md-end">
+                <button type="submit" class="btn btn-warning">
+                    <i class="bi bi-plus-lg me-1"></i> Create zone
+                </button>
+            </div>
+        </form>
+        <p class="text-muted small mb-0 mt-3">
+            Creates a primary, AD-integrated zone with secure dynamic update, served by every DC
+            in the domain straight away.
+        </p>
+    </div>
+</div>
+
 {% if zones | length == 0 and not error %}
 <div class="text-center py-5 text-muted">
     <i class="bi bi-globe fs-1"></i>
@@ -48,6 +85,14 @@
                             class="btn btn-outline-primary btn-sm">
                             <i class="bi bi-list-ul me-1"></i> View Records
                         </a>
+                        {% if domain and zone.name != domain %}
+                        <form method="post" action="/servers/{{ server.id }}/dns-zones/{{ zone.name }}/delete"
+                            class="d-inline js-delete-zone" data-zone="{{ zone.name }}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -56,5 +101,56 @@
     </div>
 </div>
 {% endif %}
+
+<script>
+// Reverse zones are entered as a network; show what the zone will be called.
+const zoneInput = document.getElementById('zoneInput');
+const reverseCheck = document.getElementById('reverseCheck');
+const zoneHelp = document.getElementById('zoneHelp');
+
+function reverseName(value) {
+    const addr = value.trim().split('/')[0];
+    const octets = addr.split('.').filter(o => o.length > 0);
+    if (octets.length === 0 || octets.length > 4) return null;
+    if (!octets.every(o => /^\d+$/.test(o) && Number(o) < 256)) return null;
+    const keep = (octets.length === 4 && octets[3] === '0') ? 3 : octets.length;
+    return octets.slice(0, keep).reverse().join('.') + '.in-addr.arpa';
+}
+
+function updateHelp() {
+    if (!reverseCheck.checked) {
+        zoneInput.placeholder = 'example.com';
+        zoneHelp.textContent = 'A fully qualified zone name.';
+        return;
+    }
+    zoneInput.placeholder = '192.168.10';
+    const name = reverseName(zoneInput.value);
+    zoneHelp.textContent = name
+        ? 'Creates ' + name
+        : 'A network, for example 192.168.10 or 192.168.10.0/24.';
+}
+
+if (zoneInput) {
+    reverseCheck.addEventListener('change', updateHelp);
+    zoneInput.addEventListener('input', updateHelp);
+    updateHelp();
+}
+
+// Deleting a zone destroys every record in it, and the DNS server keeps
+// answering for it until samba restarts — so make it deliberate.
+document.querySelectorAll('.js-delete-zone').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+        const zone = form.dataset.zone;
+        const answer = prompt(
+            'Delete the zone ' + zone + ' and every record in it?\n\n' +
+            'The DNS server will keep answering for ' + zone + ' until samba is ' +
+            'restarted on each DC.\n\nType the zone name to confirm:'
+        );
+        if (answer !== zone) {
+            e.preventDefault();
+        }
+    });
+});
+</script>
 
 {% endblock %}

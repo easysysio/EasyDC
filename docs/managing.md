@@ -36,6 +36,36 @@ Browse the domain's **AD-integrated DNS zones** — the ones stored in the direc
 Internal zones such as `_msdcs` and `RootDNSServers` are hidden from the list. Errors
 returned by the server are shown on the page rather than swallowed.
 
+### Creating a zone
+
+**Add a zone** creates a primary, AD-integrated zone with secure dynamic update — the same
+kind of zone `samba-tool dns zonecreate` produces. It is written to the directory, so every
+DC in the domain picks it up and serves it **immediately, without restarting samba**.
+
+Tick **Reverse zone** to enter a network instead of a name: `192.168.10` or
+`192.168.10.0/24` both create `10.168.192.in-addr.arpa`. The page shows the resulting zone
+name as you type.
+
+The zone's SOA names this DC as the primary server and `hostmaster.<your domain>` as the
+responsible party, and an NS record is created for the DC you are connected to. Other DCs
+add their own NS records when they next register.
+
+### Deleting a zone
+
+Deleting a zone removes it and **every record in it**. You are asked to type the zone name
+to confirm.
+
+!!! warning "A deleted zone keeps answering until samba restarts"
+    Deletion removes the zone from the directory, but Samba's DNS server keeps the zone in
+    memory and goes on answering for it **authoritatively** — returning NXDOMAIN for every
+    name in it — until `samba` is restarted on each DC. Until then the name is
+    black-holed rather than forwarded upstream. Creation does not have this problem; only
+    deletion does.
+
+The domain's own zone cannot be deleted from EasyDC. It holds the SRV records every member
+uses to find a domain controller, so the button is not offered and the request is refused
+if made directly.
+
 ## Group Policy
 
 Create **Group Policy Objects**, set their status (enabled, or user / computer settings
@@ -75,6 +105,6 @@ The **Audit Log** in the top bar shows the **500 most recent actions** across al
 servers, newest first, with a filter box for narrowing by actor, action or target.
 
 Each entry records the time, the EasyDC user who acted, the action (for example
-`user.reset_password`, `dns.add_record` or `settings.admin_create`), its target, the server, and **success** or
+`user.reset_password`, `dns.zone_create` or `settings.admin_create`), its target, the server, and **success** or
 **failure**. Failures keep the error the server returned, so a rejected change can be
 diagnosed after the fact.
