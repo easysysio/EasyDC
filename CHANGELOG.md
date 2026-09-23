@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-09-24
+
+### Added
+- **DNS zone creation and deletion** on the DNS page
+  - **Add a zone** writes a primary, AD-integrated zone with secure dynamic update: the `dnsZone` object with its seven `dNSProperty` values, plus an apex node carrying SOA and NS. The SOA names this DC as primary server and `hostmaster.<domain>` as responsible party
+  - A zone created this way is served by every DC in the domain **immediately, with no restart** — verified against a live Samba DC
+  - **Reverse zone** mode takes a network (`192.168.10` or `192.168.10.0/24`) and derives `10.168.192.in-addr.arpa`, previewed in the form as you type
+  - Deleting a zone removes every node in it, leaf-first, behind a confirmation that requires typing the zone name. The tree-delete control is deliberately not used, so nothing outside the zone can be removed
+  - The domain's own zone cannot be deleted — the button is withheld and the request refused, since it holds the SRV records members use to find a DC
+  - Both actions are audited (`dns.zone_create`, `dns.zone_delete`)
+  - The byte layouts are synthesised rather than copied from a neighbouring zone, so a zone with aging switched on cannot pass that setting to every zone created afterwards. Unit tests assert the SOA and property bytes against records a real Samba DC produced
+
+### Fixed
+- The DNS zone list rendered as a blank page when a template variable was set on one code path but not the other; both now go through the same renderer, and the template degrades to hiding delete buttons rather than failing
+
+### Known limitation
+- Deleting a zone does not take effect in Samba's running DNS server, which keeps answering authoritatively (NXDOMAIN) for the removed zone until `samba` is restarted on each DC. The confirmation and the docs say so. Zone *creation* is picked up live
+
 ## [0.2.2] - 2026-09-22
 
 ### Added
