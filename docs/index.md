@@ -343,7 +343,7 @@ EasyDC running on http://0.0.0.0:3000
 <a href="https://easylog.easysys.io">EasyLog</a>
 <a href="https://easywaf.easysys.io">EasyWAF</a>
 <a href="https://easyvault.easysys.io">EasyVault</a>
-<a href="https://www.easynas.org">EasyNAS</a>
+<a href="https://easynas.org">EasyNAS</a>
 </div>
 <div class="es-footer-col">
 <span class="es-footer-title">Community</span>
