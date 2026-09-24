@@ -175,7 +175,7 @@ flag wins:
 EASYDC_PORT=8080 ./easydc
 ```
 
-`./easydc --help` lists the options. For a permanent install without a package, the
+`./easydc --help` lists the options, and `./easydc --version` prints the version. For a permanent install without a package, the
 [unit the package ships](https://github.com/easysysio/EasyDC/blob/main/packaging/easydc.service)
 is a good starting point.
 

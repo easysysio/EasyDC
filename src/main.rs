@@ -26,12 +26,16 @@ pub struct AppState {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("{}", USAGE);
-        return;
-    }
-    let port = match parse_port(&args, std::env::var("EASYDC_PORT").ok()) {
-        Ok(p) => p,
+    let port = match parse_command(&args, std::env::var("EASYDC_PORT").ok()) {
+        Ok(Command::Help) => {
+            println!("{}", USAGE);
+            return;
+        }
+        Ok(Command::Version) => {
+            println!("{}", version_line());
+            return;
+        }
+        Ok(Command::Serve(p)) => p,
         Err(e) => {
             eprintln!("EasyDC: {}\n\n{}", e, USAGE);
             std::process::exit(2);
@@ -173,9 +177,36 @@ Usage: easydc [OPTIONS]
 
 Options:
   -p, --port <PORT>    Port to listen on [default: 3000, or $EASYDC_PORT]
+  -V, --version        Print the version
   -h, --help           Print this help
 
 The SQLite database (easydc.db) is created in the working directory.";
+
+/// What the command line asks for. Decided before anything is started — no
+/// database, no socket — so `--version` and `--help` work on a host where
+/// EasyDC could not otherwise run.
+#[derive(Debug, PartialEq)]
+enum Command {
+    Help,
+    Version,
+    Serve(u16),
+}
+
+/// Help and version win wherever they appear, as with most tools, so
+/// `easydc --port 8080 --version` prints the version instead of starting.
+fn parse_command<I: AsRef<str>>(args: &[I], env_port: Option<String>) -> Result<Command, String> {
+    if args.iter().any(|a| matches!(a.as_ref(), "-h" | "--help")) {
+        return Ok(Command::Help);
+    }
+    if args.iter().any(|a| matches!(a.as_ref(), "-V" | "--version")) {
+        return Ok(Command::Version);
+    }
+    parse_port(args, env_port).map(Command::Serve)
+}
+
+fn version_line() -> String {
+    format!("EasyDC {}", env!("CARGO_PKG_VERSION"))
+}
 
 /// Port precedence: the flag, then EASYDC_PORT, then 3000. Kept separate from
 /// main so the parsing is testable without binding a socket.
@@ -204,6 +235,44 @@ fn parse_port_value(value: &str, source: &str) -> Result<u16, String> {
         Ok(0) => Err(format!("{}: 0 is not a usable port", source)),
         Ok(p) => Ok(p),
         Err(_) => Err(format!("{}: '{}' is not a port number", source, value)),
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::{parse_command, version_line, Command};
+
+    fn cmd(args: &[&str]) -> Result<Command, String> {
+        parse_command(args, None)
+    }
+
+    #[test]
+    fn version_flags() {
+        assert_eq!(cmd(&["--version"]), Ok(Command::Version));
+        assert_eq!(cmd(&["-V"]), Ok(Command::Version));
+    }
+
+    /// Asking for the version must not start the server, even alongside
+    /// options that would otherwise be used to start it.
+    #[test]
+    fn version_wins_over_serving() {
+        assert_eq!(cmd(&["--port", "8080", "--version"]), Ok(Command::Version));
+    }
+
+    #[test]
+    fn help_wins_over_version() {
+        assert_eq!(cmd(&["--version", "--help"]), Ok(Command::Help));
+    }
+
+    #[test]
+    fn no_flags_serves_on_the_default_port() {
+        assert_eq!(cmd(&[]), Ok(Command::Serve(3000)));
+        assert_eq!(cmd(&["--port", "8080"]), Ok(Command::Serve(8080)));
+    }
+
+    #[test]
+    fn version_line_is_name_and_cargo_version() {
+        assert_eq!(version_line(), format!("EasyDC {}", env!("CARGO_PKG_VERSION")));
     }
 }
 
