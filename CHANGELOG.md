@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-09-24
 
 ### Added
 - **Password policy page** (`/servers/:id/policy`) for the domain-wide settings `samba-tool domain passwordsettings` manages: minimum length, complexity, history, maximum and minimum age, lockout threshold, duration and attempt window, and `ms-DS-MachineAccountQuota`
