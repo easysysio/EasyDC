@@ -12,6 +12,14 @@ All notable changes to this project will be documented in this file.
   - The whole resulting policy is written to the audit log as `policy.update`, so a later "who loosened this?" has an answer
 - **Password policy health check** — reports the current settings and fails on no minimum length, warns when weaker than Samba's own defaults (7 characters, complexity required, 42-day expiry)
 
+### Packaging
+- **`.deb` and `.rpm` packages** for x86_64 and arm64, built on native runners by the release workflow on every `v*` tag and attached to the GitHub Release. [EasyDC-repo](https://github.com/easysysio/EasyDC-repo)'s `github2repo.sh` publishes them, signed, to `repo.easysys.io/easydc`
+- The packages install `/usr/bin/easydc` and an `easydc.service` that runs as a dedicated `easydc` user with its database in `/var/lib/easydc` (mode `0700`, since it holds every DC's bind password). The port can be set in `/etc/default/easydc` or `/etc/sysconfig/easydc`
+- Upgrades restart the service only if it was running; removal stops and disables it but leaves the user and the database in place
+- The user and directory match the earlier manual install instructions, so an existing database carries over; the install guide lists the two files to remove first, since a unit in `/etc/systemd/system` would otherwise shadow the packaged one
+- The release workflow now refuses a tag that does not match the version in `Cargo.toml`, rather than publishing packages that carry the wrong version
+- The bare `easydc-linux-x86_64` and `easydc-linux-arm64` binaries are still attached to each release
+
 ## [0.2.3] - 2026-09-23
 
 ### Added

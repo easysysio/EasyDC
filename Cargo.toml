@@ -2,6 +2,10 @@
 name = "EasyDC"
 version = "0.2.3"
 edition = "2024"
+description = "A web GUI for managing Samba Active Directory domain controllers"
+license = "MIT"
+homepage = "https://easydc.easysys.io"
+repository = "https://github.com/easysysio/EasyDC"
 
 [dependencies]
 axum = "0.7"
@@ -19,3 +23,72 @@ tera = "1"
 uuid = { version = "1", features = ["v4"] }
 openssl = { version = "0.10", features = ["vendored"] }
 rust-embed = { version = "8", features = ["include-exclude"] }
+
+# ── packaging ─────────────────────────────────────────────────────────────────
+# .deb via `cargo deb` and .rpm via `cargo generate-rpm`, built by
+# .github/workflows/release.yml on every v* tag and published to
+# repo.easysys.io by EasyDC-repo's github2repo.sh.
+#
+# The crate is named EasyDC, but package names must be lowercase, so both
+# formats set name explicitly, and the binary is installed as /usr/bin/easydc.
+#
+# The service runs as a dedicated `easydc` user with /var/lib/easydc as its
+# working directory — the same layout the manual install instructions used, so
+# an existing easydc.db is picked up as-is when switching to the package.
+
+[package.metadata.deb]
+name = "easydc"
+maintainer = "yarivha <yariv.hakim@gmail.com>"
+copyright = "2026, yarivha <yariv.hakim@gmail.com>"
+extended-description = """\
+EasyDC manages Samba Active Directory domain controllers from the browser: \
+users, groups, computers, DNS zones and records, Group Policy links, OUs and \
+the domain password policy, with a read-only health check and an audit log of \
+every change. It connects over LDAP/LDAPS, so nothing is installed on the DCs."""
+section = "admin"
+priority = "optional"
+depends = "$auto"
+maintainer-scripts = "packaging/deb"
+assets = [
+    ["target/release/EasyDC", "usr/bin/easydc", "755"],
+    ["packaging/easydc.service", "usr/lib/systemd/system/easydc.service", "644"],
+    ["README.md", "usr/share/doc/easydc/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "easydc"
+summary = "EasyDC - manage Samba AD domain controllers from the browser"
+# OpenSSL is vendored and everything else is glibc, which every target has.
+auto-req = "no"
+assets = [
+    { source = "target/release/EasyDC", dest = "/usr/bin/easydc", mode = "755" },
+    { source = "packaging/easydc.service", dest = "/usr/lib/systemd/system/easydc.service", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/easydc/README.md", mode = "644", doc = true },
+]
+# $1 is 1 on first install and 2 or more on upgrade.
+post_install_script = """
+if ! getent passwd easydc >/dev/null; then
+    useradd --system --user-group --home-dir /var/lib/easydc --no-create-home \
+        --shell /sbin/nologin easydc
+fi
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    # try-restart: pick up the new binary if it was running, but never start a
+    # service an administrator had deliberately stopped.
+    if [ "$1" -ge 2 ]; then
+        systemctl try-restart easydc.service >/dev/null 2>&1 || true
+    fi
+fi
+"""
+# $1 is 0 when the package is being erased, 1 during an upgrade.
+pre_uninstall_script = """
+if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
+    systemctl --no-reload disable easydc.service >/dev/null 2>&1 || true
+    systemctl stop easydc.service >/dev/null 2>&1 || true
+fi
+"""
+post_uninstall_script = """
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+"""

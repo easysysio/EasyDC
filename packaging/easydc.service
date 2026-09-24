@@ -1,0 +1,34 @@
+# systemd unit for EasyDC, installed by the deb and rpm packages.
+# Enable and start with:  sudo systemctl enable --now easydc
+[Unit]
+Description=EasyDC - Samba AD management GUI
+Documentation=https://easydc.easysys.io
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=easydc
+Group=easydc
+
+# easydc.db is created in the working directory. StateDirectory creates
+# /var/lib/easydc owned by the service user; 0700 because the database holds the
+# bind password of every domain controller added to EasyDC.
+StateDirectory=easydc
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/easydc
+
+# Set EASYDC_PORT (default 3000) in either file instead of editing this unit.
+EnvironmentFile=-/etc/default/easydc
+EnvironmentFile=-/etc/sysconfig/easydc
+
+ExecStart=/usr/bin/easydc
+Restart=on-failure
+RestartSec=5
+
+# Namespace-free hardening only, so the service still starts inside LXC
+# containers, where the heavier sandboxing options are unreliable.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

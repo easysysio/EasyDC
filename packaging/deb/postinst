@@ -1,0 +1,38 @@
+#!/bin/sh
+# =========================================================
+# postinst — EasyDC (Debian/Ubuntu)
+#
+# Creates the service user on first install, and restarts a
+# running service on upgrade so the new binary takes effect —
+# otherwise dpkg replaces /usr/bin/easydc on disk and the old
+# process keeps running until someone notices.
+#
+# The user and /var/lib/easydc match the layout the manual
+# install instructions used, so an existing easydc.db is
+# picked up as-is when switching to the package.
+# =========================================================
+set -e
+
+case "$1" in
+    configure)
+        if ! getent passwd easydc >/dev/null; then
+            useradd --system --user-group --home-dir /var/lib/easydc --no-create-home \
+                --shell /usr/sbin/nologin easydc
+        fi
+
+        if [ -d /run/systemd/system ]; then
+            # The unit ships with the package and may have changed.
+            systemctl daemon-reload >/dev/null 2>&1 || true
+
+            # $2 is the previously installed version, so it is only set on an
+            # upgrade. try-restart restarts the service only if it is running:
+            # a first install waits for `systemctl enable --now easydc`, and an
+            # administrator's deliberate stop is respected.
+            if [ -n "$2" ]; then
+                systemctl try-restart easydc.service >/dev/null 2>&1 || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,27 @@
+#!/bin/sh
+# =========================================================
+# prerm — EasyDC (Debian/Ubuntu)
+#
+# Stops and disables the service on removal, so uninstalling
+# does not leave a unit that tries to start a binary that is
+# gone at the next boot.
+#
+# The upgrade case does nothing: postinst restarts the service
+# after the new version is unpacked, and stopping it here would
+# add a needless outage to every upgrade.
+#
+# The easydc user and /var/lib/easydc (the database) are left in
+# place on removal — they are the administrator's data.
+# =========================================================
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        systemctl --no-reload disable easydc.service >/dev/null 2>&1 || true
+        systemctl stop easydc.service >/dev/null 2>&1 || true
+        ;;
+    upgrade|failed-upgrade)
+        ;;
+esac
+
+exit 0
