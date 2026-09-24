@@ -972,6 +972,113 @@ async fn check_privileged_groups(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResu
     }
 }
 
+/// AD stores durations as negative 100-nanosecond intervals, and i64::MIN
+/// means "never". Returns None for never, otherwise the span in seconds.
+fn interval_seconds(raw: i64) -> Option<i64> {
+    if raw == i64::MIN || raw == 0 {
+        return None;
+    }
+    Some(raw.saturating_neg() / 10_000_000)
+}
+
+fn days(raw: i64) -> Option<i64> {
+    interval_seconds(raw).map(|s| s / 86_400)
+}
+
+fn minutes(raw: i64) -> Option<i64> {
+    interval_seconds(raw).map(|s| s / 60)
+}
+
+/// DOMAIN_PASSWORD_COMPLEX, the first bit of pwdProperties.
+const PWD_COMPLEX: i64 = 0x1;
+
+/// The domain password and lockout policy — what `samba-tool domain
+/// passwordsettings show` reports, read straight off the domain head.
+async fn check_password_policy(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
+    let c = CheckResult::new("password_policy", "Security", "Password and lockout policy");
+
+    let entry = match read_one(
+        conn,
+        &ctx.base_dn,
+        vec![
+            "minPwdLength",
+            "pwdProperties",
+            "pwdHistoryLength",
+            "maxPwdAge",
+            "minPwdAge",
+            "lockoutThreshold",
+            "lockoutDuration",
+            "lockOutObservationWindow",
+        ],
+    )
+    .await
+    {
+        Ok(e) => e,
+        Err(e) => return c.skipped(format!("Could not read the domain object: {}", e)),
+    };
+
+    let min_len = int_ci(&entry, "minPwdLength");
+    let props = int_ci(&entry, "pwdProperties");
+    let history = int_ci(&entry, "pwdHistoryLength");
+    let max_age = attr_ci(&entry, "maxPwdAge").parse::<i64>().unwrap_or(i64::MIN);
+    let lockout_threshold = int_ci(&entry, "lockoutThreshold");
+    let lockout_duration = attr_ci(&entry, "lockoutDuration").parse::<i64>().unwrap_or(0);
+
+    let complexity = (props & PWD_COMPLEX) != 0;
+    let mut c = c
+        .line(format!("Minimum length: {}", min_len))
+        .line(format!(
+            "Complexity: {}",
+            if complexity { "required" } else { "not required" }
+        ))
+        .line(format!("History: {}", if history == 0 { "not kept".to_string() } else { format!("{} passwords", history) }))
+        .line(match days(max_age) {
+            Some(d) => format!("Maximum age: {} days", d),
+            None => "Maximum age: passwords never expire".to_string(),
+        })
+        .line(match lockout_threshold {
+            0 => "Lockout: disabled — password guessing is unlimited".to_string(),
+            n => format!(
+                "Lockout: after {} bad attempts, for {}",
+                n,
+                match minutes(lockout_duration) {
+                    Some(m) => format!("{} minutes", m),
+                    None => "until an administrator unlocks".to_string(),
+                }
+            ),
+        });
+
+    // Weighted by what actually lets an attacker in: no minimum length at all
+    // is a failure, the rest weaken the domain without opening it outright.
+    let mut weak: Vec<&str> = Vec::new();
+    if !complexity {
+        weak.push("complexity off");
+    }
+    if lockout_threshold == 0 {
+        weak.push("no lockout");
+    }
+    if days(max_age).is_none() {
+        weak.push("no expiry");
+    }
+    if history == 0 {
+        weak.push("no history");
+    }
+
+    if min_len == 0 {
+        c = c.fix("Set a minimum length with `samba-tool domain passwordsettings set --min-pwd-length=8`, or from the Password Policy page.");
+        c.set(FAIL, "No minimum password length — an empty password is allowed")
+    } else if min_len < 7 || !weak.is_empty() {
+        let mut parts = weak;
+        if min_len < 7 {
+            parts.insert(0, "short minimum length");
+        }
+        c = c.fix("Samba's own defaults are 7 characters with complexity required and a 42-day maximum age. The Password Policy page edits these.");
+        c.set(WARN, format!("Weaker than Samba's defaults: {}", parts.join(", ")))
+    } else {
+        c.set(PASS, format!("Minimum {} characters, complexity required, lockout enabled", min_len))
+    }
+}
+
 // ── hygiene ───────────────────────────────────────────────────────────────────
 
 const STALE_DAYS: i64 = 90;
@@ -1150,6 +1257,7 @@ pub async fn run(server: &Server) -> LdapResult<HealthReport> {
         check_dns_records(&ctx).await,
         check_functional_levels(&mut conn).await,
         check_ldaps(server).await,
+        check_password_policy(&mut conn, &ctx).await,
         check_machine_account_quota(&mut conn, &ctx).await,
         check_anonymous_bind(&mut conn, &ctx).await,
         check_delegation(&mut conn, &ctx).await,
@@ -1236,5 +1344,28 @@ mod tests {
         assert_eq!(host_of("ldap://[2001:db8::1]:389").as_deref(), Some("2001:db8::1"));
         assert_eq!(host_of("dc.example.com").as_deref(), Some("dc.example.com"));
         assert_eq!(host_of("ldap://"), None);
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn never_is_none_and_spans_convert() {
+        assert_eq!(days(i64::MIN), None, "i64::MIN means never");
+        assert_eq!(days(0), None, "unset is not a span either");
+        // Samba's provisioning default: 42 days.
+        assert_eq!(days(-36_288_000_000_000), Some(42));
+        // 30 minutes of lockout.
+        assert_eq!(minutes(-18_000_000_000), Some(30));
+    }
+
+    #[test]
+    fn complexity_is_the_first_bit_of_pwd_properties() {
+        assert_eq!(0i64 & PWD_COMPLEX, 0, "0 = complexity off");
+        assert_ne!(1i64 & PWD_COMPLEX, 0, "1 = complexity required");
+        // Other bits set without bit 0 still means complexity off.
+        assert_eq!(0x10i64 & PWD_COMPLEX, 0);
     }
 }

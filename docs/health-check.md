@@ -19,6 +19,7 @@ the report runs it again.
 | **Replication** | Replication partners | A partition (domain, configuration, schema) has no inbound partner. Skipped with a single DC |
 | **DNS** | Service location records | A required record is missing: the `_ldap`, `_kerberos`, `_kpasswd` and `_gc` SRV records, their `_msdcs` forms, each DC's host record, or its `<GUID>._msdcs` CNAME |
 | **Security** | LDAPS | Port 636 unreachable, or the certificate expires within **30 days** (warn) or has expired (fail) |
+| **Security** | Password and lockout policy | No minimum length (fail), or weaker than Samba's defaults — complexity off, no lockout, no expiry, no history (warn) |
 | **Security** | Machine account quota | `ms-DS-MachineAccountQuota` above 0, so any user can join machines |
 | **Security** | Anonymous LDAP access | `dSHeuristics` allows anonymous operations |
 | **Security** | Unconstrained delegation | An account other than a DC is trusted for unconstrained delegation |

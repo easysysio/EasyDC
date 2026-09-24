@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Password policy page** (`/servers/:id/policy`) for the domain-wide settings `samba-tool domain passwordsettings` manages: minimum length, complexity, history, maximum and minimum age, lockout threshold, duration and attempt window, and `ms-DS-MachineAccountQuota`
+  - Durations are stored as negative 100-nanosecond intervals and converted to days and minutes in both directions, with "never" round-tripping correctly
+  - Combinations the directory would refuse — a minimum age at or beyond the maximum, an attempt window longer than the lockout duration — are rejected before anything is written
+  - The complexity flag is set without disturbing the other bits of `pwdProperties`
+  - The whole resulting policy is written to the audit log as `policy.update`, so a later "who loosened this?" has an answer
+- **Password policy health check** — reports the current settings and fails on no minimum length, warns when weaker than Samba's own defaults (7 characters, complexity required, 42-day expiry)
+
 ## [0.2.3] - 2026-09-23
 
 ### Added

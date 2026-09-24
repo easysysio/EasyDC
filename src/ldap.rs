@@ -1706,6 +1706,191 @@ pub async fn delete_dns_record(
     Ok(())
 }
 
+// ── domain password policy ────────────────────────────────────────────────────
+//
+// What `samba-tool domain passwordsettings` reads and writes: plain attributes
+// on the domain head. Durations are stored as negative 100-nanosecond
+// intervals, and i64::MIN means "never" (for a lockout duration, "until an
+// administrator unlocks").
+
+pub const PWD_COMPLEX: i64 = 0x1;
+
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct PasswordPolicy {
+    pub min_length: i64,
+    pub complexity: bool,
+    pub history: i64,
+    /// 0 means passwords never expire.
+    pub max_age_days: i64,
+    pub min_age_days: i64,
+    /// 0 disables lockout entirely.
+    pub lockout_threshold: i64,
+    /// 0 means locked until an administrator unlocks the account.
+    pub lockout_minutes: i64,
+    pub observation_minutes: i64,
+    pub machine_account_quota: i64,
+}
+
+/// A stored interval to whole units; "never" and unset both read as 0.
+fn interval_to_units(raw: i64, seconds_per_unit: i64) -> i64 {
+    if raw == i64::MIN || raw == 0 {
+        return 0;
+    }
+    raw.saturating_neg() / 10_000_000 / seconds_per_unit
+}
+
+/// Whole units back to a stored interval; 0 becomes "never".
+fn units_to_interval(units: i64, seconds_per_unit: i64) -> i64 {
+    if units <= 0 {
+        return i64::MIN;
+    }
+    -(units * seconds_per_unit * 10_000_000)
+}
+
+pub async fn get_password_policy(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+) -> LdapResult<PasswordPolicy> {
+    let (entries, _) = ldap
+        .search(
+            base_dn,
+            Scope::Base,
+            "(objectClass=*)",
+            vec![
+                "minPwdLength",
+                "pwdProperties",
+                "pwdHistoryLength",
+                "maxPwdAge",
+                "minPwdAge",
+                "lockoutThreshold",
+                "lockoutDuration",
+                "lockOutObservationWindow",
+                "ms-DS-MachineAccountQuota",
+            ],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+
+    let e = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| "Could not read the domain object".to_string())?;
+    let num = |k: &str| attr(&e, k).parse::<i64>().unwrap_or(0);
+
+    Ok(PasswordPolicy {
+        min_length: num("minPwdLength"),
+        complexity: (num("pwdProperties") & PWD_COMPLEX) != 0,
+        history: num("pwdHistoryLength"),
+        max_age_days: interval_to_units(num("maxPwdAge"), 86_400),
+        min_age_days: interval_to_units(num("minPwdAge"), 86_400),
+        lockout_threshold: num("lockoutThreshold"),
+        lockout_minutes: interval_to_units(num("lockoutDuration"), 60),
+        observation_minutes: interval_to_units(num("lockOutObservationWindow"), 60),
+        machine_account_quota: num("ms-DS-MachineAccountQuota"),
+    })
+}
+
+/// Reject what the directory would reject anyway, plus the combinations that
+/// are accepted but nonsensical, before anything is written.
+pub fn validate_password_policy(p: &PasswordPolicy) -> LdapResult<()> {
+    if !(0..=255).contains(&p.min_length) {
+        return Err("Minimum length must be between 0 and 255".to_string());
+    }
+    if !(0..=1024).contains(&p.history) {
+        return Err("Password history must be between 0 and 1024".to_string());
+    }
+    if p.max_age_days < 0 || p.min_age_days < 0 {
+        return Err("Password ages cannot be negative".to_string());
+    }
+    if p.max_age_days > 0 && p.min_age_days >= p.max_age_days {
+        return Err("Minimum age must be shorter than maximum age".to_string());
+    }
+    if !(0..=999).contains(&p.lockout_threshold) {
+        return Err("Lockout threshold must be between 0 and 999".to_string());
+    }
+    if p.lockout_minutes < 0 || p.observation_minutes < 0 {
+        return Err("Lockout times cannot be negative".to_string());
+    }
+    // The directory enforces this one; catching it here gives a better message.
+    if p.lockout_minutes > 0 && p.observation_minutes > p.lockout_minutes {
+        return Err(
+            "The observation window must not be longer than the lockout duration".to_string(),
+        );
+    }
+    if p.machine_account_quota < 0 {
+        return Err("Machine account quota cannot be negative".to_string());
+    }
+    Ok(())
+}
+
+pub async fn set_password_policy(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    p: &PasswordPolicy,
+) -> LdapResult<()> {
+    validate_password_policy(p)?;
+
+    // pwdProperties carries other flags too, so flip only the complexity bit.
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Base, "(objectClass=*)", vec!["pwdProperties"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let raw_props = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .map(|e| attr(&e, "pwdProperties").parse::<i64>().unwrap_or(0))
+        .unwrap_or(0);
+    let props = if p.complexity {
+        raw_props | PWD_COMPLEX
+    } else {
+        raw_props & !PWD_COMPLEX
+    };
+    let set = |v: String| HashSet::from([sv(&v)]);
+    let mods = vec![
+        Mod::Replace(sv("minPwdLength"), set(p.min_length.to_string())),
+        Mod::Replace(sv("pwdProperties"), set(props.to_string())),
+        Mod::Replace(sv("pwdHistoryLength"), set(p.history.to_string())),
+        Mod::Replace(
+            sv("maxPwdAge"),
+            set(units_to_interval(p.max_age_days, 86_400).to_string()),
+        ),
+        Mod::Replace(
+            sv("minPwdAge"),
+            set(if p.min_age_days == 0 {
+                "0".to_string()
+            } else {
+                units_to_interval(p.min_age_days, 86_400).to_string()
+            }),
+        ),
+        Mod::Replace(sv("lockoutThreshold"), set(p.lockout_threshold.to_string())),
+        Mod::Replace(
+            sv("lockoutDuration"),
+            set(units_to_interval(p.lockout_minutes, 60).to_string()),
+        ),
+        Mod::Replace(
+            sv("lockOutObservationWindow"),
+            set(units_to_interval(p.observation_minutes, 60).to_string()),
+        ),
+        Mod::Replace(
+            sv("ms-DS-MachineAccountQuota"),
+            set(p.machine_account_quota.to_string()),
+        ),
+    ];
+
+    ldap.modify(base_dn, mods)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to update the password policy: {}", e))?;
+    Ok(())
+}
+
 // ── zone create / delete ──────────────────────────────────────────────────────
 //
 // A zone is a dnsZone object holding dNSProperty settings, plus an "@" dnsNode
@@ -2159,5 +2344,75 @@ mod zone_tests {
         assert!(validate_zone_name("exa mple.com").is_err());
         assert!(validate_zone_name("example..com").is_err());
         assert!(validate_zone_name(&format!("{}.com", "a".repeat(64))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod password_policy_tests {
+    use super::*;
+
+    #[test]
+    fn stored_intervals_round_trip() {
+        // Samba's default maximum age.
+        assert_eq!(interval_to_units(-36_288_000_000_000, 86_400), 42);
+        assert_eq!(units_to_interval(42, 86_400), -36_288_000_000_000);
+        // 30 minutes of lockout.
+        assert_eq!(interval_to_units(-18_000_000_000, 60), 30);
+        assert_eq!(units_to_interval(30, 60), -18_000_000_000);
+    }
+
+    #[test]
+    fn never_reads_as_zero_and_writes_back_as_never() {
+        assert_eq!(interval_to_units(i64::MIN, 86_400), 0);
+        assert_eq!(interval_to_units(0, 86_400), 0);
+        assert_eq!(units_to_interval(0, 86_400), i64::MIN);
+    }
+
+    fn sane() -> PasswordPolicy {
+        PasswordPolicy {
+            min_length: 8,
+            complexity: true,
+            history: 24,
+            max_age_days: 42,
+            min_age_days: 1,
+            lockout_threshold: 5,
+            lockout_minutes: 30,
+            observation_minutes: 30,
+            machine_account_quota: 0,
+        }
+    }
+
+    #[test]
+    fn a_sane_policy_validates() {
+        assert!(validate_password_policy(&sane()).is_ok());
+    }
+
+    #[test]
+    fn rejects_policies_the_directory_would_refuse() {
+        let mut p = sane();
+        p.min_age_days = 60; // longer than the maximum age
+        assert!(validate_password_policy(&p).is_err());
+
+        let mut p = sane();
+        p.observation_minutes = 60; // longer than the lockout duration
+        assert!(validate_password_policy(&p).is_err());
+
+        let mut p = sane();
+        p.min_length = -1;
+        assert!(validate_password_policy(&p).is_err());
+
+        let mut p = sane();
+        p.lockout_threshold = 1000;
+        assert!(validate_password_policy(&p).is_err());
+    }
+
+    /// Passwords that never expire are a legitimate choice, so a zero maximum
+    /// age must not be rejected — and a minimum age is then unconstrained.
+    #[test]
+    fn never_expiring_is_allowed() {
+        let mut p = sane();
+        p.max_age_days = 0;
+        p.min_age_days = 7;
+        assert!(validate_password_policy(&p).is_ok());
     }
 }

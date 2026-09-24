@@ -83,6 +83,29 @@ disabled), delete them, and **link or unlink** them to OUs.
 Browse the OU tree, **create**, **rename** and **delete** OUs, and **move** users,
 groups and computers from one OU to another.
 
+## Password policy
+
+**Password Policy** on a server edits the domain-wide settings that
+`samba-tool domain passwordsettings` manages — they apply to every account in the domain,
+unlike [Settings](#easydc-administrators), which covers EasyDC's own logins.
+
+| Setting | Notes |
+|---|---|
+| **Minimum length** | 0 allows an empty password. Samba's provisioning default is 7 |
+| **Complexity** | Mixed case, digits or symbols, and no part of the username |
+| **History** | How many previous passwords cannot be reused; 0 allows immediate reuse |
+| **Maximum age** | 0 means passwords never expire |
+| **Minimum age** | How long before a password may be changed again |
+| **Lockout threshold** | Bad attempts before lockout; **0 disables lockout**, so guessing is unlimited |
+| **Lockout duration** | 0 means locked until an administrator unlocks |
+| **Attempt window** | Must not be longer than the lockout duration |
+| **Machine account quota** | `ms-DS-MachineAccountQuota` — machines a normal user may join; the default of 10 is a known privilege-escalation path |
+
+Durations are stored as negative 100-nanosecond intervals, which EasyDC converts to days and
+minutes in both directions. Combinations the directory would refuse — a minimum age longer
+than the maximum, an attempt window longer than the lockout duration — are rejected before
+anything is written, and the whole policy is recorded in the audit log as `policy.update`.
+
 ## EasyDC administrators
 
 **Settings** in the top bar manages the accounts that sign in to *EasyDC* — not domain

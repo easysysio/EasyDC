@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Password Policy - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">Password Policy</li>
+    </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+    <i class="bi bi-shield-lock fs-2 text-primary me-3"></i>
+    <div>
+        <h4 class="mb-0">Password Policy</h4>
+        <small class="text-muted">
+            Applies to every account in {% if domain %}{{ domain }}{% else %}the domain{% endif %}
+        </small>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger d-flex align-items-start">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div>{{ error }}</div>
+</div>
+{% endif %}
+
+{% if notice %}
+<div class="alert alert-success d-flex align-items-start">
+    <i class="bi bi-check-circle-fill me-2 mt-1"></i>
+    <div>{{ notice }}</div>
+</div>
+{% endif %}
+
+{% if policy %}
+<form method="post" action="/servers/{{ server.id }}/policy">
+    <div class="row g-4">
+
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-white">
+                    <i class="bi bi-key me-2 text-primary"></i><strong>Passwords</strong>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Minimum length</label>
+                        <input type="number" name="min_length" class="form-control" required
+                            min="0" max="255" value="{{ policy.min_length }}">
+                        <div class="form-text">0 allows an empty password. Samba's default is 7.</div>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="complexity" value="1"
+                            id="complexity" {% if policy.complexity %}checked{% endif %}>
+                        <label class="form-check-label" for="complexity">Require complexity</label>
+                        <div class="form-text">Mixed case, digits or symbols, and no part of the username.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Remember previous passwords</label>
+                        <input type="number" name="history" class="form-control" required
+                            min="0" max="1024" value="{{ policy.history }}">
+                        <div class="form-text">0 lets the same password be reused immediately.</div>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-sm-6">
+                            <label class="form-label">Maximum age (days)</label>
+                            <input type="number" name="max_age_days" class="form-control" required
+                                min="0" value="{{ policy.max_age_days }}">
+                            <div class="form-text">0 = never expires.</div>
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label">Minimum age (days)</label>
+                            <input type="number" name="min_age_days" class="form-control" required
+                                min="0" value="{{ policy.min_age_days }}">
+                            <div class="form-text">0 = change at any time.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-white">
+                    <i class="bi bi-lock me-2 text-primary"></i><strong>Lockout</strong>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Lock after this many bad attempts</label>
+                        <input type="number" name="lockout_threshold" class="form-control" required
+                            min="0" max="999" value="{{ policy.lockout_threshold }}">
+                        <div class="form-text">0 disables lockout, so password guessing is unlimited.</div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-sm-6">
+                            <label class="form-label">Lockout duration (minutes)</label>
+                            <input type="number" name="lockout_minutes" class="form-control" required
+                                min="0" value="{{ policy.lockout_minutes }}">
+                            <div class="form-text">0 = until an administrator unlocks.</div>
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label">Attempt window (minutes)</label>
+                            <input type="number" name="observation_minutes" class="form-control" required
+                                min="0" value="{{ policy.observation_minutes }}">
+                            <div class="form-text">Must not exceed the lockout duration.</div>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="mb-1">
+                        <label class="form-label">Machine accounts a user may join</label>
+                        <input type="number" name="machine_account_quota" class="form-control" required
+                            min="0" value="{{ policy.machine_account_quota }}">
+                        <div class="form-text">
+                            <code>ms-DS-MachineAccountQuota</code>. The default of 10 lets any
+                            authenticated user join ten machines; 0 leaves joining to administrators.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="d-flex align-items-center gap-3 mt-4">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check2 me-1"></i> Save policy
+        </button>
+        <a href="/servers/{{ server.id }}/health" class="text-decoration-none small">
+            <i class="bi bi-clipboard-pulse me-1"></i> Check this against the health report
+        </a>
+    </div>
+</form>
+{% endif %}
+
+{% endblock %}

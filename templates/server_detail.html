@@ -80,6 +80,18 @@
     </div>
 
     <div class="col">
+        <a href="/servers/{{ server.id }}/policy" class="text-decoration-none">
+            <div class="card h-100 shadow-sm hover-card">
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-shield-lock fs-1 text-primary"></i>
+                    <h5 class="card-title mt-3">Password Policy</h5>
+                    <p class="card-text text-muted small">Length, complexity, expiry, lockout and machine account quota</p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    <div class="col">
         <a href="/servers/{{ server.id }}/health" class="text-decoration-none">
             <div class="card h-100 shadow-sm hover-card">
                 <div class="card-body text-center py-5">
