@@ -15,10 +15,23 @@ on:
 permissions:
   contents: write
 
+env:
+  # The newest glibc the binary may require. Building on the runner itself
+  # (ubuntu-24.04, glibc 2.39) produced a binary that would not start on
+  # Debian 12, Ubuntu 22.04 or RHEL 9, so the build runs in a Debian 11
+  # container instead, and the check below fails the release if anything
+  # raises the requirement past this.
+  GLIBC_CEILING: "2.31"
+
 jobs:
   build:
     name: Build ${{ matrix.arch }} packages
     runs-on: ${{ matrix.runner }}
+    # Debian 11 (glibc 2.31), with a Rust toolchain, a C compiler, perl for the
+    # vendored OpenSSL, and dpkg-dev for cargo-deb's dependency calculation
+    # already installed. Covers Debian 11+, Ubuntu 20.04+ and RHEL 9+; RHEL 8
+    # (glibc 2.28) is not covered.
+    container: rust:1-bullseye
     strategy:
       fail-fast: false
       matrix:
@@ -45,12 +58,6 @@ jobs:
             exit 1
           fi
 
-      # perl and make are needed by the vendored OpenSSL build.
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential perl
-
-      - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
 
       - name: Install packaging tools
@@ -61,6 +68,19 @@ jobs:
 
       - name: Strip binary
         run: strip target/release/EasyDC
+
+      # The compatibility promise is only as good as this check: it reads the
+      # versioned glibc symbols the binary actually links against.
+      - name: Check the glibc requirement
+        run: |
+          needed=$(objdump -T target/release/EasyDC | grep -o 'GLIBC_[0-9][0-9.]*' \
+                   | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "binary requires glibc ${needed}; ceiling is ${GLIBC_CEILING}"
+          highest=$(printf '%s\n%s\n' "$needed" "$GLIBC_CEILING" | sort -V | tail -1)
+          if [ "$highest" != "$GLIBC_CEILING" ]; then
+            echo "::error::The binary needs glibc ${needed}, newer than the ${GLIBC_CEILING} ceiling"
+            exit 1
+          fi
 
       - name: Build .deb
         run: cargo deb --no-build

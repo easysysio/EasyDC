@@ -920,10 +920,11 @@ async fn check_privileged_groups(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResu
     let groups = ["Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators"];
     let mut c = c;
     let mut total = 0usize;
-    let mut disabled_members = Vec::new();
+    let mut disabled_members: Vec<String> = Vec::new();
+    let mut fell_back = false;
 
     for g in &groups {
-        let filter = format!("(&(objectClass=group)(sAMAccountName={}))", g);
+        let filter = format!("(&(objectClass=group)(sAMAccountName={}))", ldap::ldap_escape(g));
         let found = match search(conn, &ctx.base_dn, Scope::Subtree, &filter, vec!["member"]).await {
             Ok(e) => e,
             Err(_) => continue,
@@ -932,21 +933,61 @@ async fn check_privileged_groups(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResu
             continue;
         };
 
-        let members = attrs_ci(&entry, "member");
-        total += members.len();
-        c = c.line(format!("{}: {}", g, plural(members.len(), "member", "members")));
-
-        // These groups are small by nature, so a per-member read is cheap and
-        // catches the disabled-but-still-privileged case.
-        for m in &members {
-            if let Ok(me) = read_one(conn, m, vec!["userAccountControl", "sAMAccountName"]).await {
-                let uac = int_ci(&me, "userAccountControl");
-                if (uac & 2) != 0 {
-                    let name = attr_ci(&me, "sAMAccountName");
-                    let label = format!("{} (in {})", if name.is_empty() { rdn_value(m) } else { name }, g);
-                    if !disabled_members.contains(&label) {
-                        disabled_members.push(label);
+        // Membership through nested groups counts: a disabled user inside a
+        // group that is itself in Domain Admins holds domain admin rights just
+        // the same. LDAP_MATCHING_RULE_IN_CHAIN has the server follow the
+        // nesting, so one search per group finds every disabled user at any
+        // depth.
+        let chain = format!(
+            "(&(objectCategory=person)(memberOf:1.2.840.113556.1.4.1941:={}))",
+            ldap::ldap_escape(&entry.dn)
+        );
+        let members = match search(
+            conn,
+            &ctx.base_dn,
+            Scope::Subtree,
+            &chain,
+            vec!["sAMAccountName", "userAccountControl"],
+        )
+        .await
+        {
+            Ok(m) => m,
+            Err(_) => {
+                // A server without the matching rule: fall back to the direct
+                // members only, and say so in the report.
+                fell_back = true;
+                let mut direct = Vec::new();
+                for m in attrs_ci(&entry, "member") {
+                    if let Ok(me) = read_one(conn, &m, vec!["userAccountControl", "sAMAccountName"]).await {
+                        direct.push(me);
                     }
+                }
+                direct
+            }
+        };
+
+        // Direct members can be groups (Domain Admins is a member of
+        // Administrators), so the useful count is accounts once the nesting is
+        // expanded — comparing it with the direct member count would compare
+        // groups with people.
+        total += members.len();
+        c = c.line(if fell_back {
+            format!(
+                "{}: {} (direct only)",
+                g,
+                plural(attrs_ci(&entry, "member").len(), "member", "members")
+            )
+        } else {
+            format!("{}: {}", g, plural(members.len(), "account", "accounts"))
+        });
+
+        for me in &members {
+            let uac = int_ci(me, "userAccountControl");
+            if (uac & 2) != 0 {
+                let name = attr_ci(me, "sAMAccountName");
+                let label = format!("{} (in {})", if name.is_empty() { rdn_value(&me.dn) } else { name }, g);
+                if !disabled_members.contains(&label) {
+                    disabled_members.push(label);
                 }
             }
         }
@@ -954,6 +995,9 @@ async fn check_privileged_groups(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResu
 
     for d in &disabled_members {
         c = c.line(format!("Disabled but still privileged: {}", d));
+    }
+    if fell_back {
+        c = c.line("Nested groups were not followed: this server did not accept LDAP_MATCHING_RULE_IN_CHAIN.");
     }
 
     if !disabled_members.is_empty() {
@@ -968,7 +1012,17 @@ async fn check_privileged_groups(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResu
     } else if total == 0 {
         c.skipped("No privileged groups readable with this bind account")
     } else {
-        c.set(PASS, format!("{} across the four privileged groups, all enabled", plural(total, "member", "members")))
+        c.set(
+            PASS,
+            if fell_back {
+                format!("{} across the four privileged groups, all enabled", plural(total, "member", "members"))
+            } else {
+                format!(
+                    "{} across the four privileged groups, nested groups expanded, all enabled",
+                    plural(total, "account", "accounts")
+                )
+            },
+        )
     }
 }
 

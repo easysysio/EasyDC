@@ -102,7 +102,10 @@ unlike [Settings](#easydc-administrators), which covers EasyDC's own logins.
 | **Machine account quota** | `ms-DS-MachineAccountQuota` — machines a normal user may join; the default of 10 is a known privilege-escalation path |
 
 Durations are stored as negative 100-nanosecond intervals, which EasyDC converts to days and
-minutes in both directions. Combinations the directory would refuse — a minimum age longer
+minutes in both directions. A value set elsewhere with finer precision — a 12-hour minimum
+age, say — is shown rounded down, and **kept exactly as stored** unless you change that
+field. With lockout enabled, the attempt window must be at least 1 minute: 0 would mean a
+failed attempt is never forgotten. Combinations the directory would refuse — a minimum age longer
 than the maximum, an attempt window longer than the lockout duration — are rejected before
 anything is written, and the whole policy is recorded in the audit log as `policy.update`.
 
@@ -117,8 +120,9 @@ users. The first one is created by the setup wizard.
   names who made a change. Every administrator has full access; there are no roles yet.
 - **Remove an administrator** — their sessions are dropped immediately.
 
-You cannot delete the account you are signed in as, and at least one administrator always
-remains.
+Usernames may contain letters, digits and `. _ - @`. You cannot delete the account you are
+signed in as, and at least one administrator always remains — even when two administrators
+remove each other at the same moment.
 
 !!! note "Separate from the directory"
     These accounts live in EasyDC's own database, with bcrypt-hashed passwords. Resetting a

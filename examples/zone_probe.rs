@@ -380,6 +380,17 @@ async fn create(conn: &mut Conn, zone: &str, template: Option<&str>) -> R<()> {
 /// deliberately does not reach for the tree-delete control, so nothing can
 /// remove more than the probe put there.
 async fn delete(conn: &mut Conn, zone: &str) -> R<()> {
+    // The same refusal EasyDC applies (ldap::refuse_protected_zone). This tool
+    // is run by hand from copied commands, which is exactly how the realm's own
+    // zone would get typed in here by mistake.
+    let lower = zone.to_lowercase();
+    if lower == domain_of(&conn.base_dn).to_lowercase() {
+        return Err(format!("refusing to delete '{}': it is the domain's own zone", zone));
+    }
+    if lower.starts_with("_msdcs.") || lower == "rootdnsservers" {
+        return Err(format!("refusing to delete '{}': it is an internal zone", zone));
+    }
+
     let zone_dn = format!("DC={},{}", zone, conn.dns_root);
 
     let (entries, _) = conn

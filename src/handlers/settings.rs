@@ -20,6 +20,14 @@ use crate::{
 
 const MIN_PASSWORD_LEN: usize = 8;
 
+/// Letters, digits, and `. _ - @`. Names appear in URL paths and in the page,
+/// so anything outside this set would need escaping somewhere it could be
+/// forgotten.
+fn valid_username(name: &str) -> bool {
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@'))
+}
+
 #[derive(Deserialize)]
 pub struct SettingsQuery {
     /// Set by the post-redirect-get after a successful change.
@@ -170,11 +178,13 @@ pub async fn create_admin(
         Some("Username is required.".to_string())
     } else if username.len() > 64 {
         Some("Username must be 64 characters or fewer.".to_string())
+    } else if !valid_username(&username) {
+        Some("Usernames may contain letters, digits, and . _ - @ only.".to_string())
     } else if form.password.len() < MIN_PASSWORD_LEN {
         Some(format!("Password must be at least {} characters.", MIN_PASSWORD_LEN))
     } else if form.password != form.confirm_password {
         Some("Passwords do not match.".to_string())
-    } else if db::admin_exists(&state.db, &username).await {
+    } else if db::admin_name_taken(&state.db, &username).await {
         Some(format!("An administrator named '{}' already exists.", username))
     } else {
         None
@@ -212,10 +222,10 @@ pub async fn delete_admin(
 ) -> Response {
     // Two guards, both of which would otherwise lock everyone out: deleting the
     // account you are using, and deleting the last one that exists.
+    // The last-administrator rule is enforced inside db::delete_admin, in the
+    // same statement as the delete; these checks only pick the message.
     let error = if username == actor {
         Some("You cannot delete the account you are signed in as.".to_string())
-    } else if db::admin_count(&state.db).await.unwrap_or(0) <= 1 {
-        Some("At least one administrator must remain.".to_string())
     } else if !db::admin_exists(&state.db, &username).await {
         Some(format!("No administrator named '{}'.", username))
     } else {
@@ -227,9 +237,13 @@ pub async fn delete_admin(
         return render(&state, &actor, Some(e), None).await;
     }
 
-    let result = db::delete_admin(&state.db, &username)
-        .await
-        .map_err(|e| e.to_string());
+    let result = match db::delete_admin(&state.db, &username).await {
+        Ok(true) => Ok(()),
+        // The account existed a moment ago, so nothing deleted means it was the
+        // last one — or it vanished in between; either way, report it.
+        Ok(false) => Err("At least one administrator must remain.".to_string()),
+        Err(e) => Err(e.to_string()),
+    };
     db::log_action(&state.db, &actor, "settings.admin_delete", &username, None, &result).await;
 
     match result {
@@ -311,6 +325,29 @@ mod tests {
         c.insert("entries", &Vec::<tera::Value>::new());
         let html = tera().render("audit.html", &c).expect("renders");
         assert!(html.contains("href=\"/settings\""));
+    }
+
+    /// Names that predate the character rules may still exist. A quote must
+    /// not reach a JavaScript context, and a slash must not break the URL.
+    #[test]
+    fn awkward_names_render_safely() {
+        let html = tera()
+            .render("settings.html", &ctx("alice", &["alice", "o'brien", "a/b"]))
+            .expect("renders");
+        assert!(!html.contains("onsubmit="), "no inline handlers");
+        assert!(html.contains("/settings/admins/o%27brien/delete"));
+        assert!(html.contains("/settings/admins/a%2Fb/delete"));
+        assert!(html.contains(r#"data-admin="o&#x27;brien""#));
+    }
+
+    #[test]
+    fn usernames_are_limited_to_safe_characters() {
+        assert!(super::valid_username("alice"));
+        assert!(super::valid_username("a.smith-2@corp"));
+        assert!(!super::valid_username("o'brien"));
+        assert!(!super::valid_username("a/b"));
+        assert!(!super::valid_username("x');alert(1);//"));
+        assert!(!super::valid_username("two words"));
     }
 
     #[test]

@@ -84,8 +84,8 @@
                         {% endif %}
                     </span>
                     {% if a != actor and admins | length > 1 %}
-                    <form method="post" action="/settings/admins/{{ a }}/delete"
-                        onsubmit="return confirm('Remove administrator {{ a }}? They will be signed out immediately.');">
+                    <form method="post" action="/settings/admins/{{ a | urlencode_strict }}/delete"
+                        class="js-delete-admin" data-admin="{{ a }}">
                         <button type="submit" class="btn btn-outline-danger btn-sm">
                             <i class="bi bi-trash"></i>
                         </button>
@@ -126,4 +126,17 @@
     </div>
 
 </div>
+<script>
+// The name is read from a data attribute, where HTML escaping is the right
+// escaping. Inside a JavaScript string in an onsubmit attribute it is not: the
+// browser decodes &#x27; back to a quote before the script runs.
+document.querySelectorAll('.js-delete-admin').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+        const name = form.dataset.admin;
+        if (!confirm('Remove administrator ' + name + '? They will be signed out immediately.')) {
+            e.preventDefault();
+        }
+    });
+});
+</script>
 {% endblock %}

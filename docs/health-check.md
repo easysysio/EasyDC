@@ -23,7 +23,7 @@ the report runs it again.
 | **Security** | Machine account quota | `ms-DS-MachineAccountQuota` above 0, so any user can join machines |
 | **Security** | Anonymous LDAP access | `dSHeuristics` allows anonymous operations |
 | **Security** | Unconstrained delegation | An account other than a DC is trusted for unconstrained delegation |
-| **Security** | Privileged groups | A disabled account is still in Domain Admins, Enterprise Admins, Schema Admins or Administrators |
+| **Security** | Privileged groups | A disabled account is still in Domain Admins, Enterprise Admins, Schema Admins or Administrators — directly or through nested groups |
 | **Hygiene** | Stale computers | Enabled computer accounts with no logon for **90 days** |
 | **Hygiene** | Password flags | Accounts flagged *password not required* (fail) or *password never expires* (warn) |
 

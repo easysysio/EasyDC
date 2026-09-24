@@ -44,6 +44,25 @@ pub(crate) fn base_dn_to_domain(base_dn: &str) -> String {
         .join(".")
 }
 
+/// Escape a value for use inside an LDAP search filter (RFC 4515). Every
+/// filter built from input goes through this: an unescaped `*` is a wildcard,
+/// so a name taken from a URL could otherwise match — and a delete handler then
+/// act on — whichever object the directory happened to return first.
+pub(crate) fn ldap_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\5c"),
+            '*' => out.push_str("\\2a"),
+            '(' => out.push_str("\\28"),
+            ')' => out.push_str("\\29"),
+            '\0' => out.push_str("\\00"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 pub(crate) fn attr(e: &SearchEntry, key: &str) -> String {
     e.attrs
         .get(key)
@@ -97,7 +116,7 @@ async fn find_user_dn(
     base_dn: &str,
     username: &str,
 ) -> LdapResult<String> {
-    let filter = format!("(&(objectClass=user)(sAMAccountName={}))", username);
+    let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
     let (entries, _) = ldap
         .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
         .await
@@ -406,7 +425,7 @@ async fn find_group_dn(
     base_dn: &str,
     name: &str,
 ) -> LdapResult<String> {
-    let filter = format!("(&(objectClass=group)(sAMAccountName={}))", name);
+    let filter = format!("(&(objectClass=group)(sAMAccountName={}))", ldap_escape(name));
     let (entries, _) = ldap
         .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
         .await
@@ -678,7 +697,7 @@ async fn find_computer_dn(
     base_dn: &str,
     name: &str,
 ) -> LdapResult<String> {
-    let filter = format!("(&(objectClass=computer)(cn={}))", name);
+    let filter = format!("(&(objectClass=computer)(cn={}))", ldap_escape(name));
     let (entries, _) = ldap
         .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
         .await
@@ -1046,7 +1065,7 @@ pub async fn find_zone_dn(
     base_dn: &str,
     zone_name: &str,
 ) -> LdapResult<String> {
-    let filter = format!("(&(objectClass=dnsZone)(dc={}))", zone_name);
+    let filter = format!("(&(objectClass=dnsZone)(dc={}))", ldap_escape(zone_name));
     let candidates = [
         format!("CN=MicrosoftDNS,DC=DomainDnsZones,{}", base_dn),
         format!("CN=MicrosoftDNS,CN=System,{}", base_dn),
@@ -1346,7 +1365,7 @@ pub async fn move_object_to_ou(
     target_ou_dn: &str,
 ) -> LdapResult<()> {
     // Find the object by sAMAccountName
-    let filter = format!("(sAMAccountName={})", sam_account);
+    let filter = format!("(sAMAccountName={})", ldap_escape(sam_account));
     let (entries, _) = ldap
         .search(base_dn, Scope::Subtree, &filter, vec!["cn"])
         .await
@@ -1747,6 +1766,25 @@ fn units_to_interval(units: i64, seconds_per_unit: i64) -> i64 {
     -(units * seconds_per_unit * 10_000_000)
 }
 
+/// The value to store for an interval the form submitted in whole units.
+///
+/// The page shows each interval in whole days or minutes, so a value set
+/// elsewhere with finer precision — a 12-hour minimum age, a 90-second lockout
+/// — is displayed rounded down. Writing the displayed number back would quietly
+/// change a setting nobody touched, so a field whose submitted value still
+/// matches what was displayed keeps its stored value exactly. `zero_means` is
+/// what 0 stores when the field was changed to it: "never" for most intervals,
+/// but a literal 0 for the minimum password age.
+fn resolve_interval(submitted: i64, current_raw: i64, seconds_per_unit: i64, zero_means: i64) -> i64 {
+    if submitted == interval_to_units(current_raw, seconds_per_unit) {
+        return current_raw;
+    }
+    if submitted <= 0 {
+        return zero_means;
+    }
+    units_to_interval(submitted, seconds_per_unit)
+}
+
 pub async fn get_password_policy(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
@@ -1814,7 +1852,21 @@ pub fn validate_password_policy(p: &PasswordPolicy) -> LdapResult<()> {
     if p.lockout_minutes < 0 || p.observation_minutes < 0 {
         return Err("Lockout times cannot be negative".to_string());
     }
-    // The directory enforces this one; catching it here gives a better message.
+    // 0 minutes stores "never" for the attempt window too, which would mean a
+    // failed attempt is never forgotten: with lockout on, an account would lock
+    // after its threshold of typos spread over any length of time.
+    if p.lockout_threshold > 0 && p.observation_minutes == 0 {
+        return Err(
+            "With lockout enabled, the attempt window must be at least 1 minute".to_string(),
+        );
+    }
+    // The directory requires the window to be no longer than the lockout
+    // duration, and a "never" window is longer than any finite duration.
+    if p.lockout_minutes > 0 && p.observation_minutes == 0 {
+        return Err(
+            "Set an attempt window no longer than the lockout duration".to_string(),
+        );
+    }
     if p.lockout_minutes > 0 && p.observation_minutes > p.lockout_minutes {
         return Err(
             "The observation window must not be longer than the lockout duration".to_string(),
@@ -1833,19 +1885,33 @@ pub async fn set_password_policy(
 ) -> LdapResult<()> {
     validate_password_policy(p)?;
 
-    // pwdProperties carries other flags too, so flip only the complexity bit.
+    // The current raw values: pwdProperties carries other flags, so only the
+    // complexity bit is flipped, and each interval is kept exactly as stored
+    // unless its field was changed (see resolve_interval).
     let (entries, _) = ldap
-        .search(base_dn, Scope::Base, "(objectClass=*)", vec!["pwdProperties"])
+        .search(
+            base_dn,
+            Scope::Base,
+            "(objectClass=*)",
+            vec![
+                "pwdProperties",
+                "maxPwdAge",
+                "minPwdAge",
+                "lockoutDuration",
+                "lockOutObservationWindow",
+            ],
+        )
         .await
         .map_err(|e| e.to_string())?
         .success()
         .map_err(|e| e.to_string())?;
-    let raw_props = entries
+    let current = entries
         .into_iter()
         .next()
         .map(SearchEntry::construct)
-        .map(|e| attr(&e, "pwdProperties").parse::<i64>().unwrap_or(0))
-        .unwrap_or(0);
+        .ok_or_else(|| "Could not read the domain object".to_string())?;
+    let raw = |k: &str| attr(&current, k).parse::<i64>().unwrap_or(0);
+    let raw_props = raw("pwdProperties");
     let props = if p.complexity {
         raw_props | PWD_COMPLEX
     } else {
@@ -1858,24 +1924,23 @@ pub async fn set_password_policy(
         Mod::Replace(sv("pwdHistoryLength"), set(p.history.to_string())),
         Mod::Replace(
             sv("maxPwdAge"),
-            set(units_to_interval(p.max_age_days, 86_400).to_string()),
+            set(resolve_interval(p.max_age_days, raw("maxPwdAge"), 86_400, i64::MIN).to_string()),
         ),
         Mod::Replace(
             sv("minPwdAge"),
-            set(if p.min_age_days == 0 {
-                "0".to_string()
-            } else {
-                units_to_interval(p.min_age_days, 86_400).to_string()
-            }),
+            set(resolve_interval(p.min_age_days, raw("minPwdAge"), 86_400, 0).to_string()),
         ),
         Mod::Replace(sv("lockoutThreshold"), set(p.lockout_threshold.to_string())),
         Mod::Replace(
             sv("lockoutDuration"),
-            set(units_to_interval(p.lockout_minutes, 60).to_string()),
+            set(resolve_interval(p.lockout_minutes, raw("lockoutDuration"), 60, i64::MIN).to_string()),
         ),
         Mod::Replace(
             sv("lockOutObservationWindow"),
-            set(units_to_interval(p.observation_minutes, 60).to_string()),
+            set(
+                resolve_interval(p.observation_minutes, raw("lockOutObservationWindow"), 60, i64::MIN)
+                    .to_string(),
+            ),
         ),
         Mod::Replace(
             sv("ms-DS-MachineAccountQuota"),
@@ -2159,20 +2224,12 @@ pub async fn create_dns_zone(
     Ok(())
 }
 
-/// Delete a zone and everything in it. LDAP will not remove an object that
-/// still has children, so the nodes go first; the tree-delete control is
-/// deliberately not used, so nothing can be removed beyond this zone.
-pub async fn delete_dns_zone(
-    ldap: &mut ldap3::Ldap,
-    base_dn: &str,
-    zone: &str,
-) -> LdapResult<usize> {
-    // Deleting the realm's own zone takes the SRV records every domain member
-    // uses to find a DC with it, so it is refused outright rather than left to
-    // a confirmation dialog.
-    let domain = base_dn_to_domain(base_dn);
+/// Zones that must never be deleted from EasyDC. The realm's own zone holds
+/// the SRV records every domain member uses to find a DC; the others are
+/// Samba's internal zones.
+pub fn refuse_protected_zone(zone: &str, base_dn: &str) -> LdapResult<()> {
     let lower = zone.to_lowercase();
-    if lower == domain.to_lowercase() {
+    if lower == base_dn_to_domain(base_dn).to_lowercase() {
         return Err(format!(
             "'{}' is the domain's own zone and cannot be deleted from EasyDC",
             zone
@@ -2181,8 +2238,39 @@ pub async fn delete_dns_zone(
     if lower.starts_with("_msdcs.") || lower == "rootdnsservers" {
         return Err(format!("'{}' is an internal zone and cannot be deleted", zone));
     }
+    Ok(())
+}
+
+/// Delete a zone and everything in it. LDAP will not remove an object that
+/// still has children, so the nodes go first; the tree-delete control is
+/// deliberately not used, so nothing can be removed beyond this zone.
+pub async fn delete_dns_zone(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    zone: &str,
+) -> LdapResult<usize> {
+    // Only a well-formed name can reach the lookup, so nothing here depends on
+    // the filter escaping alone.
+    validate_zone_name(zone)?;
+    refuse_protected_zone(zone, base_dn)?;
 
     let zone_dn = find_zone_dn(ldap, base_dn, zone).await?;
+
+    // Check the zone that was actually found, not just the name that was
+    // asked for: this is the object about to be deleted.
+    let resolved = zone_dn
+        .split(',')
+        .next()
+        .and_then(|rdn| rdn.split_once('='))
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default();
+    refuse_protected_zone(&resolved, base_dn)?;
+    if !resolved.eq_ignore_ascii_case(zone) {
+        return Err(format!(
+            "Asked to delete '{}' but the directory returned '{}'; nothing was deleted",
+            zone, resolved
+        ));
+    }
 
     let (entries, _) = ldap
         .search(&zone_dn, Scope::OneLevel, "(objectClass=*)", vec!["dc"])
@@ -2414,5 +2502,95 @@ mod password_policy_tests {
         p.max_age_days = 0;
         p.min_age_days = 7;
         assert!(validate_password_policy(&p).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod review_fix_tests {
+    use super::*;
+
+    #[test]
+    fn filter_metacharacters_are_escaped() {
+        assert_eq!(ldap_escape("*"), "\\2a");
+        assert_eq!(ldap_escape("h*"), "h\\2a");
+        assert_eq!(ldap_escape("a(b)c"), "a\\28b\\29c");
+        assert_eq!(ldap_escape("back\\slash"), "back\\5cslash");
+        assert_eq!(ldap_escape("plain.name-01"), "plain.name-01");
+    }
+
+    /// The bypass the review found: "*" passed a guard that compared strings,
+    /// then matched the realm zone as a wildcard. It must now fail validation
+    /// before any lookup.
+    #[test]
+    fn wildcard_zone_names_are_rejected_before_lookup() {
+        assert!(validate_zone_name("*").is_err());
+        assert!(validate_zone_name("h*").is_err());
+        assert!(validate_zone_name("hakim.*").is_err());
+    }
+
+    #[test]
+    fn the_realm_and_internal_zones_are_protected() {
+        let base = "DC=hakim,DC=family";
+        assert!(refuse_protected_zone("hakim.family", base).is_err());
+        assert!(refuse_protected_zone("HAKIM.FAMILY", base).is_err());
+        assert!(refuse_protected_zone("_msdcs.hakim.family", base).is_err());
+        assert!(refuse_protected_zone("RootDNSServers", base).is_err());
+        assert!(refuse_protected_zone("10.168.192.in-addr.arpa", base).is_ok());
+    }
+
+    #[test]
+    fn an_untouched_interval_keeps_its_stored_value() {
+        // 12 hours, shown as 0 days. Submitting the 0 that was displayed must
+        // not rewrite it.
+        let twelve_hours = -(12 * 3600 * 10_000_000i64);
+        assert_eq!(resolve_interval(0, twelve_hours, 86_400, 0), twelve_hours);
+        // 90 seconds, shown as 1 minute.
+        let ninety_seconds = -(90 * 10_000_000i64);
+        assert_eq!(resolve_interval(1, ninety_seconds, 60, i64::MIN), ninety_seconds);
+        // "Never", shown as 0, stays "never".
+        assert_eq!(resolve_interval(0, i64::MIN, 86_400, i64::MIN), i64::MIN);
+    }
+
+    #[test]
+    fn a_changed_interval_is_written() {
+        assert_eq!(resolve_interval(42, i64::MIN, 86_400, i64::MIN), -36_288_000_000_000);
+        // Changed to 0: "never" for most fields, a literal 0 for minimum age.
+        assert_eq!(resolve_interval(0, -36_288_000_000_000, 86_400, i64::MIN), i64::MIN);
+        assert_eq!(resolve_interval(0, -864_000_000_000, 86_400, 0), 0);
+    }
+
+    fn policy(threshold: i64, duration: i64, window: i64) -> PasswordPolicy {
+        PasswordPolicy {
+            min_length: 8,
+            complexity: true,
+            history: 24,
+            max_age_days: 42,
+            min_age_days: 1,
+            lockout_threshold: threshold,
+            lockout_minutes: duration,
+            observation_minutes: window,
+            machine_account_quota: 0,
+        }
+    }
+
+    /// The case the review found: lockout on, window 0. That used to store an
+    /// infinite window, so failed attempts were never forgotten.
+    #[test]
+    fn a_zero_attempt_window_is_refused_when_lockout_is_on() {
+        assert!(validate_password_policy(&policy(5, 30, 0)).is_err());
+        assert!(validate_password_policy(&policy(5, 0, 0)).is_err());
+    }
+
+    #[test]
+    fn a_zero_window_beside_a_finite_duration_is_refused() {
+        // Lockout off, but the directory still requires window <= duration.
+        assert!(validate_password_policy(&policy(0, 30, 0)).is_err());
+    }
+
+    #[test]
+    fn valid_window_combinations_pass() {
+        assert!(validate_password_policy(&policy(5, 30, 30)).is_ok());
+        assert!(validate_password_policy(&policy(5, 0, 30)).is_ok()); // until an admin unlocks
+        assert!(validate_password_policy(&policy(0, 0, 0)).is_ok()); // lockout off entirely
     }
 }

@@ -5,6 +5,10 @@ EasyDC is packaged for the **Debian** and **Red Hat** families on **x86_64** and
 package manager. Nothing is installed on your domain controllers — EasyDC reaches them
 over LDAP/LDAPS.
 
+The packages and the bare binary need **glibc 2.31 or newer**: Debian 11 and later,
+Ubuntu 20.04 and later, and RHEL, Rocky and AlmaLinux 9 and later. RHEL 8 (glibc 2.28) is
+not supported.
+
 ## Install from the package repository
 
 === "Debian / Ubuntu"

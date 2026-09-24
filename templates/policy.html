@@ -103,7 +103,7 @@
                             <label class="form-label">Attempt window (minutes)</label>
                             <input type="number" name="observation_minutes" class="form-control" required
                                 min="0" value="{{ policy.observation_minutes }}">
-                            <div class="form-text">Must not exceed the lockout duration.</div>
+                            <div class="form-text">Must not exceed the lockout duration; at least 1 when lockout is on.</div>
                         </div>
                     </div>
                     <hr>

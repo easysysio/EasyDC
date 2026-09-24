@@ -40,6 +40,13 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await;
 
+    // Sessions from before that column cannot be tied to an account, so a
+    // password change or an administrator's removal cannot end them — and
+    // sessions do not expire. Drop them: their owners sign in once more.
+    sqlx::query("DELETE FROM sessions WHERE username IS NULL")
+        .execute(pool)
+        .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,15 +151,21 @@ pub async fn list_admins(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> 
     Ok(rows.iter().map(|r| r.get::<String, _>("username")).collect())
 }
 
-pub async fn admin_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-    use sqlx::Row;
-    let row = sqlx::query("SELECT COUNT(*) AS count FROM users")
-        .fetch_one(pool)
-        .await?;
-    Ok(row.get::<i64, _>("count"))
+/// Exact match, the same comparison login and delete use.
+pub async fn admin_exists(pool: &SqlitePool, username: &str) -> bool {
+    sqlx::query("SELECT 1 FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }
 
-pub async fn admin_exists(pool: &SqlitePool, username: &str) -> bool {
+/// Case-insensitive, used only to refuse a new name that differs from an
+/// existing one by case alone — "Alice" beside "alice" is a trap for whoever
+/// types the name next.
+pub async fn admin_name_taken(pool: &SqlitePool, username: &str) -> bool {
     sqlx::query("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE")
         .bind(username)
         .fetch_optional(pool)
@@ -199,12 +212,21 @@ pub async fn create_admin(
         .map(|_| ())
 }
 
-pub async fn delete_admin(pool: &SqlitePool, username: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM users WHERE username = ?")
-        .bind(username)
-        .execute(pool)
-        .await
-        .map(|_| ())
+/// Delete an administrator unless they are the last one, in a single
+/// statement. Returns whether a row was removed.
+///
+/// The count is part of the DELETE rather than a check before it: two
+/// administrators deleting each other at the same moment would otherwise both
+/// see a count of two, both succeed, and leave no accounts — at which point
+/// /setup is open to anyone.
+pub async fn delete_admin(pool: &SqlitePool, username: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM users WHERE username = ? AND (SELECT COUNT(*) FROM users) > 1",
+    )
+    .bind(username)
+    .execute(pool)
+    .await
+    .map(|r| r.rows_affected() > 0)
 }
 
 /// Drop an account's sessions, optionally sparing one token. Used to sign a
@@ -226,4 +248,95 @@ pub async fn delete_sessions_for(pool: &SqlitePool, username: &str, except: Opti
                 .await
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use std::str::FromStr;
+
+    /// A real file, not an in-memory database: each pooled connection to
+    /// :memory: gets its own empty database, which would make the concurrency
+    /// test below meaningless.
+    async fn pool() -> SqlitePool {
+        let path = std::env::temp_dir().join(format!("easydc-test-{}.db", uuid::Uuid::new_v4()));
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        init_tables(&pool).await.unwrap();
+        pool
+    }
+
+    async fn add(pool: &SqlitePool, name: &str) {
+        create_admin(pool, name, "hash").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_last_administrator_cannot_be_deleted() {
+        let pool = pool().await;
+        add(&pool, "alice").await;
+        assert!(!delete_admin(&pool, "alice").await.unwrap());
+        assert!(admin_exists(&pool, "alice").await);
+    }
+
+    /// The race the review found: two administrators deleting each other at
+    /// once both passed a separate count check and left no accounts, which
+    /// reopens /setup. Run it many times with real concurrent connections.
+    #[tokio::test]
+    async fn concurrent_deletions_never_remove_every_administrator() {
+        let pool = pool().await;
+        for round in 0..25 {
+            add(&pool, "alice").await;
+            add(&pool, "bob").await;
+            let (a, b) = tokio::join!(delete_admin(&pool, "bob"), delete_admin(&pool, "alice"));
+            let removed = [a.unwrap(), b.unwrap()].iter().filter(|r| **r).count();
+            let left = list_admins(&pool).await.unwrap();
+            assert_eq!(removed, 1, "round {}: exactly one deletion may succeed", round);
+            assert_eq!(left.len(), 1, "round {}: one administrator must remain, got {:?}", round, left);
+            sqlx::query("DELETE FROM users").execute(&pool).await.unwrap();
+        }
+    }
+
+    /// Existence for delete is exact, matching login and the DELETE itself;
+    /// look-alike names are only refused at creation.
+    #[tokio::test]
+    async fn existence_is_exact_but_look_alikes_are_caught() {
+        let pool = pool().await;
+        add(&pool, "alice").await;
+        add(&pool, "bob").await;
+        assert!(!admin_exists(&pool, "Alice").await);
+        assert!(admin_name_taken(&pool, "Alice").await);
+        // A differently-cased delete removes nothing, and says so.
+        assert!(!delete_admin(&pool, "Alice").await.unwrap());
+        assert!(admin_exists(&pool, "alice").await);
+    }
+
+    /// Sessions from before usernames were recorded cannot be ended by a
+    /// password change, so startup removes them.
+    #[tokio::test]
+    async fn unattributable_sessions_are_dropped_at_startup() {
+        let pool = pool().await;
+        sqlx::query("INSERT INTO sessions (token, created_at, username) VALUES ('legacy', 0, NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sessions (token, created_at, username) VALUES ('current', 0, 'alice')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        init_tables(&pool).await.unwrap();
+        assert_eq!(username_for_token(&pool, "legacy").await, None);
+        assert_eq!(username_for_token(&pool, "current").await.as_deref(), Some("alice"));
+        let legacy_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE token = 'legacy'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(legacy_left, 0);
+    }
 }
