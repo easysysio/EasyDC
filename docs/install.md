@@ -84,18 +84,61 @@ the package stops and disables the service but **leaves `/var/lib/easydc` and th
 
 ### Moving from a manual install
 
-Earlier instructions installed EasyDC by hand, with the same `easydc` user and the same
-`/var/lib/easydc` directory the package uses, so your database carries over as-is. Remove
-the two pieces the package replaces before installing it:
+If EasyDC already runs as a service you set up by hand — from the old README recipe, or a
+binary in `/opt` or anywhere else — installing the package moves it over for you
+(from **0.3.1**; with 0.3.0, follow [the steps below](#by-hand)).
+
+It looks for a hand-made unit at `/etc/systemd/system/easydc.service` that runs something
+other than `/usr/bin/easydc`. That unit matters because systemd reads `/etc` before the
+package's own unit, so left alone it would keep starting the old binary. When it finds one,
+the install:
+
+1. stops the old service;
+2. copies `easydc.db` from the old unit's working directory into `/var/lib/easydc`, owned
+   by the `easydc` user — unless a database is already there;
+3. keeps a `--port` from the old command line, in `/etc/default/easydc` or
+   `/etc/sysconfig/easydc`;
+4. disables the old unit and renames it to `easydc.service.pre-package`;
+5. starts the packaged service if the old one was running.
+
+**Nothing is deleted.** The old binary, database and unit stay where they were, so you can
+check everything and remove them later — or go back. The install prints each step, and
+afterwards
 
 ```bash
-sudo systemctl disable --now easydc
-sudo rm /etc/systemd/system/easydc.service /usr/local/bin/easydc
-sudo systemctl daemon-reload
+systemctl cat easydc | head -1
 ```
 
-The first matters most: a unit in `/etc/systemd/system` takes precedence over the one the
-package installs, so leaving it would keep starting the old binary.
+should show `/usr/lib/systemd/system/easydc.service`. Log in with your existing account and
+your servers should all be there.
+
+The step runs on every install and upgrade and does nothing when there is nothing to move;
+run `/usr/share/easydc/migrate-legacy` yourself to repeat it. A unit in
+`/etc/systemd/system` that already runs `/usr/bin/easydc` is taken as a deliberate
+override and left alone.
+
+#### By hand
+
+On 0.3.0, or to do it yourself, first see what the old service runs and where it keeps its
+database — the `WorkingDirectory` line, or `/` if there is none:
+
+```bash
+systemctl cat easydc
+```
+
+Then, as root, with `/opt/easydc` standing in for that directory:
+
+```bash
+systemctl stop easydc && cp -a /opt/easydc /opt/easydc.bak
+install -d -o easydc -g easydc -m 700 /var/lib/easydc
+cp /opt/easydc/easydc.db* /var/lib/easydc/
+chown easydc:easydc /var/lib/easydc/easydc.db* && chmod 600 /var/lib/easydc/easydc.db*
+systemctl disable easydc && rm /etc/systemd/system/easydc.service && systemctl daemon-reload
+systemctl enable --now easydc
+```
+
+If the old `ExecStart` had `--port`, put the same port in `/etc/default/easydc` (Debian) or
+`/etc/sysconfig/easydc` (Red Hat) as `EASYDC_PORT=…` before the last line.
 
 ## Without a package
 

@@ -52,6 +52,11 @@ jobs:
             exit 1
           fi
 
+      # /bin/sh on the runner is dash, the shell Debian runs package scripts
+      # with, so this also proves the migration script has no bashisms.
+      - name: Test the legacy-install migration
+        run: sh packaging/tests/migrate-legacy.sh
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

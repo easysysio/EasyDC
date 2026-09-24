@@ -1,0 +1,156 @@
+#!/bin/sh
+# =========================================================
+# migrate-legacy — move a hand-made EasyDC install onto the package.
+#
+# Run by the deb postinst and the rpm %post on every install and
+# upgrade. It does nothing unless it finds a legacy install, and
+# can be run again by hand at any time.
+#
+# A legacy install is a unit at /etc/systemd/system/easydc.service
+# — a place the package never writes — whose ExecStart runs
+# something other than /usr/bin/easydc. systemd reads /etc before
+# /usr/lib, so that unit shadows the packaged one and keeps the old
+# binary running after the package is installed. A unit there that
+# already runs /usr/bin/easydc is an administrator's deliberate
+# override, and is left alone.
+#
+# For a legacy install it:
+#   1. stops the old service
+#   2. copies easydc.db (with any -wal/-shm) from the old unit's
+#      WorkingDirectory into /var/lib/easydc, owned by easydc and
+#      mode 0600 — unless a database is already there
+#   3. carries a --port from the old ExecStart into the defaults
+#      file, unless that file already sets EASYDC_PORT
+#   4. disables the old unit and renames it (and any drop-in
+#      directory) with a .pre-package suffix
+#   5. enables and starts the packaged service to match what the
+#      old one was
+#
+# Nothing is deleted: the old database, binary and unit all stay,
+# and the new database is a copy.
+#
+# For testing without a real system (packaging/tests/migrate-legacy.sh):
+# EASYDC_MIGRATE_ROOT prefixes every path, EASYDC_MIGRATE_USER and
+# EASYDC_MIGRATE_GROUP replace the service account, SYSTEMCTL replaces
+# systemctl, and SYSTEMCTL_FORCE=1 behaves as if systemd were running.
+# =========================================================
+set -e
+
+ROOT="${EASYDC_MIGRATE_ROOT:-}"
+SERVICE_USER="${EASYDC_MIGRATE_USER:-easydc}"
+SERVICE_GROUP="${EASYDC_MIGRATE_GROUP:-$SERVICE_USER}"
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+
+UNIT="$ROOT/etc/systemd/system/easydc.service"
+STATE_DIR="$ROOT/var/lib/easydc"
+PACKAGED_BINARY="/usr/bin/easydc"
+
+say() { echo "easydc: $*"; }
+
+[ -f "$UNIT" ] || exit 0
+
+# The unit's own settings; a later assignment wins, as in systemd.
+unit_value() { sed -n "s/^[[:space:]]*$1=//p" "$UNIT" | tail -n 1; }
+
+exec_start=$(unit_value ExecStart)
+# ExecStart may carry systemd's prefix characters (-, @, :, +, !).
+exec_bin=$(printf '%s\n' "$exec_start" | sed 's/^[-@:+!]*//' | awk '{print $1}')
+
+if [ "$exec_bin" = "$PACKAGED_BINARY" ]; then
+    say "keeping $UNIT: it already runs $PACKAGED_BINARY, so it is a deliberate override"
+    exit 0
+fi
+
+say "found a hand-made install: $UNIT runs ${exec_bin:-an unknown command}"
+say "moving it onto the package — nothing will be deleted"
+
+have_systemd=0
+if [ -n "${SYSTEMCTL_FORCE:-}" ] || [ -d /run/systemd/system ]; then
+    have_systemd=1
+fi
+
+was_active=0
+was_enabled=0
+if [ "$have_systemd" -eq 1 ]; then
+    "$SYSTEMCTL" is-active --quiet easydc.service 2>/dev/null && was_active=1
+    "$SYSTEMCTL" is-enabled --quiet easydc.service 2>/dev/null && was_enabled=1
+    # Stopped before the database is copied, so the copy is consistent.
+    if [ "$was_active" -eq 1 ]; then
+        say "stopping the old service"
+        "$SYSTEMCTL" stop easydc.service || true
+    fi
+fi
+
+# The database lives in the old unit's working directory; a system service
+# without one runs in /. WorkingDirectory may carry a leading - (optional).
+workdir=$(unit_value WorkingDirectory | sed 's/^-//')
+[ -n "$workdir" ] || workdir="/"
+old_db="$ROOT${workdir%/}/easydc.db"
+
+if [ -e "$STATE_DIR/easydc.db" ]; then
+    say "leaving $STATE_DIR/easydc.db as it is: a database is already there"
+    if [ -e "$old_db" ]; then
+        say "the old one is still at $old_db if you need it"
+    fi
+elif [ -e "$old_db" ]; then
+    install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 700 "$STATE_DIR"
+    for f in easydc.db easydc.db-wal easydc.db-shm; do
+        if [ -e "$ROOT${workdir%/}/$f" ]; then
+            cp -p "$ROOT${workdir%/}/$f" "$STATE_DIR/$f"
+            chown "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR/$f"
+            chmod 600 "$STATE_DIR/$f"
+        fi
+    done
+    say "copied the database from $old_db to $STATE_DIR (the original is untouched)"
+else
+    say "no easydc.db found in $workdir; the packaged service will start with a new one"
+fi
+
+# A port given on the old command line, as --port N, --port=N or -p N, or
+# through EASYDC_PORT in the unit.
+port=$(printf '%s\n' "$exec_start" \
+    | sed -n 's/.*--port[= ]\([0-9][0-9]*\).*/\1/p; s/.*[[:space:]]-p[[:space:]]\([0-9][0-9]*\).*/\1/p' \
+    | head -n 1)
+if [ -z "$port" ]; then
+    port=$(sed -n 's/^[[:space:]]*Environment=.*EASYDC_PORT=\([0-9][0-9]*\).*/\1/p' "$UNIT" | tail -n 1)
+fi
+if [ -n "$port" ] && [ "$port" != "3000" ]; then
+    if [ -d "$ROOT/etc/sysconfig" ]; then
+        defaults="$ROOT/etc/sysconfig/easydc"
+    else
+        defaults="$ROOT/etc/default/easydc"
+    fi
+    if [ -f "$defaults" ] && grep -q '^[[:space:]]*EASYDC_PORT=' "$defaults"; then
+        say "leaving the port in $defaults as it is"
+    else
+        mkdir -p "$(dirname "$defaults")"
+        echo "EASYDC_PORT=$port" >> "$defaults"
+        say "kept port $port: set EASYDC_PORT=$port in $defaults"
+    fi
+fi
+
+# Disable first, while systemd still knows the old unit, so its boot-time
+# symlink goes with it; then rename the unit out of systemd's sight.
+if [ "$have_systemd" -eq 1 ] && [ "$was_enabled" -eq 1 ]; then
+    "$SYSTEMCTL" disable easydc.service >/dev/null 2>&1 || true
+fi
+mv "$UNIT" "$UNIT.pre-package"
+say "renamed the old unit to $UNIT.pre-package"
+if [ -d "$UNIT.d" ]; then
+    mv "$UNIT.d" "$UNIT.d.pre-package"
+    say "renamed its drop-in directory to $UNIT.d.pre-package — check it for settings you want to keep"
+fi
+
+if [ "$have_systemd" -eq 1 ]; then
+    "$SYSTEMCTL" daemon-reload >/dev/null 2>&1 || true
+    if [ "$was_enabled" -eq 1 ]; then
+        "$SYSTEMCTL" enable easydc.service >/dev/null 2>&1 || true
+    fi
+    if [ "$was_active" -eq 1 ]; then
+        "$SYSTEMCTL" start easydc.service || true
+        say "started the packaged service in its place"
+    fi
+fi
+
+say "done — /opt or wherever the old install lived can be removed once you are happy"
+exit 0

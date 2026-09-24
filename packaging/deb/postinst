@@ -20,6 +20,13 @@ case "$1" in
                 --shell /usr/sbin/nologin easydc
         fi
 
+        # A hand-made install's unit in /etc/systemd/system would shadow the
+        # packaged one and keep the old binary running; move it onto the
+        # package, database included. Does nothing on a normal install. A
+        # failure here must not fail the package install itself.
+        /usr/share/easydc/migrate-legacy \
+            || echo "easydc: moving the old install over failed; see /usr/share/easydc/migrate-legacy"
+
         if [ -d /run/systemd/system ]; then
             # The unit ships with the package and may have changed.
             systemctl daemon-reload >/dev/null 2>&1 || true

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Installing the package moves a hand-made install onto it.** A unit at `/etc/systemd/system/easydc.service` running anything other than `/usr/bin/easydc` shadows the packaged unit, so the old binary kept running after the package was installed — and moving by hand meant finding the database, fixing its ownership and carrying the port over. The package now does it: it stops the old service, copies `easydc.db` (with any `-wal`/`-shm`) from the old working directory into `/var/lib/easydc` unless a database is already there, keeps a `--port`, renames the old unit to `easydc.service.pre-package`, and starts the packaged service if the old one was running. Nothing is deleted, a unit that already runs `/usr/bin/easydc` is left alone as a deliberate override, and the step does nothing on a normal install. It lives in `/usr/share/easydc/migrate-legacy` and can be rerun by hand
+- The migration is covered by 29 checks over eleven scenarios, run against a throwaway directory tree and a stub `systemctl`, and run in CI under dash — the shell Debian uses for package scripts
+
 ## [0.3.0] - 2026-09-24
 
 ### Added

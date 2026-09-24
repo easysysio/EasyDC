@@ -53,6 +53,7 @@ maintainer-scripts = "packaging/deb"
 assets = [
     ["target/release/EasyDC", "usr/bin/easydc", "755"],
     ["packaging/easydc.service", "usr/lib/systemd/system/easydc.service", "644"],
+    ["packaging/migrate-legacy", "usr/share/easydc/migrate-legacy", "755"],
     ["README.md", "usr/share/doc/easydc/README.md", "644"],
 ]
 
@@ -64,6 +65,7 @@ auto-req = "no"
 assets = [
     { source = "target/release/EasyDC", dest = "/usr/bin/easydc", mode = "755" },
     { source = "packaging/easydc.service", dest = "/usr/lib/systemd/system/easydc.service", mode = "644" },
+    { source = "packaging/migrate-legacy", dest = "/usr/share/easydc/migrate-legacy", mode = "755" },
     { source = "README.md", dest = "/usr/share/doc/easydc/README.md", mode = "644", doc = true },
 ]
 # $1 is 1 on first install and 2 or more on upgrade.
@@ -72,6 +74,9 @@ if ! getent passwd easydc >/dev/null; then
     useradd --system --user-group --home-dir /var/lib/easydc --no-create-home \
         --shell /sbin/nologin easydc
 fi
+# Move a hand-made install onto the package (see the script's header). Does
+# nothing on a normal install, and must not fail the package install.
+/usr/share/easydc/migrate-legacy || echo "easydc: moving the old install over failed; see /usr/share/easydc/migrate-legacy"
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     # try-restart: pick up the new binary if it was running, but never start a
