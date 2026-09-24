@@ -47,7 +47,8 @@ the domain password policy, with a read-only health check and an audit log of \
 every change. It connects over LDAP/LDAPS, so nothing is installed on the DCs."""
 section = "admin"
 priority = "optional"
-depends = "$auto"
+# Statically linked against musl, so the binary needs no shared library at all.
+depends = ""
 maintainer-scripts = "packaging/deb"
 assets = [
     ["target/release/EasyDC", "usr/bin/easydc", "755"],
@@ -58,7 +59,7 @@ assets = [
 [package.metadata.generate-rpm]
 name = "easydc"
 summary = "EasyDC - manage Samba AD domain controllers from the browser"
-# OpenSSL is vendored and everything else is glibc, which every target has.
+# Statically linked against musl: nothing to require.
 auto-req = "no"
 assets = [
     { source = "target/release/EasyDC", dest = "/usr/bin/easydc", mode = "755" },

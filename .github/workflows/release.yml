@@ -1,6 +1,11 @@
-# Release pipeline: on a v* tag, build .deb + .rpm for x86_64 and arm64 on
-# native runners, then publish a GitHub Release whose body is the matching
-# CHANGELOG section, with the packages attached.
+# Release pipeline: on a v* tag, build .deb + .rpm for x86_64 and arm64, then
+# publish a GitHub Release whose body is the matching CHANGELOG section, with
+# the packages attached.
+#
+# The binary is linked statically against musl, so it needs no glibc at all and
+# the same package runs on any Linux distribution — RHEL 8 included. It is
+# built with cargo-zigbuild, whose bundled headers compile the vendored OpenSSL
+# and SQLite for musl without a separate cross toolchain.
 #
 # EasyDC-repo's github2repo.sh pulls those assets down and publishes them,
 # signed, at repo.easysys.io/easydc — `--stable` from a release, `--testing`
@@ -15,32 +20,21 @@ on:
 permissions:
   contents: write
 
-env:
-  # The newest glibc the binary may require. Building on the runner itself
-  # (ubuntu-24.04, glibc 2.39) produced a binary that would not start on
-  # Debian 12, Ubuntu 22.04 or RHEL 9, so the build runs in a Debian 11
-  # container instead, and the check below fails the release if anything
-  # raises the requirement past this.
-  GLIBC_CEILING: "2.31"
-
 jobs:
   build:
     name: Build ${{ matrix.arch }} packages
     runs-on: ${{ matrix.runner }}
-    # Debian 11 (glibc 2.31), with a Rust toolchain, a C compiler, perl for the
-    # vendored OpenSSL, and dpkg-dev for cargo-deb's dependency calculation
-    # already installed. Covers Debian 11+, Ubuntu 20.04+ and RHEL 9+; RHEL 8
-    # (glibc 2.28) is not covered.
-    container: rust:1-bullseye
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
             runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
             binary: easydc-linux-x86_64
           - arch: arm64
             runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
             binary: easydc-linux-arm64
     steps:
       - uses: actions/checkout@v4
@@ -58,45 +52,59 @@ jobs:
             exit 1
           fi
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      - name: Install packaging tools
-        run: cargo install cargo-deb cargo-generate-rpm --locked
+      # The same zig release the static build was verified with locally.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
 
-      - name: Build release binary
-        run: cargo build --release --locked
+      - name: Install build and packaging tools
+        run: cargo install cargo-zigbuild cargo-deb cargo-generate-rpm --locked
+
+      - name: Build static binary
+        run: cargo zigbuild --release --locked --target ${{ matrix.target }}
 
       - name: Strip binary
-        run: strip target/release/EasyDC
+        run: strip target/${{ matrix.target }}/release/EasyDC
 
-      # The compatibility promise is only as good as this check: it reads the
-      # versioned glibc symbols the binary actually links against.
-      - name: Check the glibc requirement
+      # The point of the musl build is that nothing is resolved at runtime. A
+      # dependency that quietly pulled in dynamic linking would bring the glibc
+      # problem straight back, so refuse any binary with a program interpreter
+      # or a dynamic section.
+      - name: Check the binary is fully static
         run: |
-          needed=$(objdump -T target/release/EasyDC | grep -o 'GLIBC_[0-9][0-9.]*' \
-                   | sed 's/GLIBC_//' | sort -V | tail -1)
-          echo "binary requires glibc ${needed}; ceiling is ${GLIBC_CEILING}"
-          highest=$(printf '%s\n%s\n' "$needed" "$GLIBC_CEILING" | sort -V | tail -1)
-          if [ "$highest" != "$GLIBC_CEILING" ]; then
-            echo "::error::The binary needs glibc ${needed}, newer than the ${GLIBC_CEILING} ceiling"
+          bin=target/${{ matrix.target }}/release/EasyDC
+          readelf -l "$bin" | sed -n '/Program Headers/,/Section to Segment/p'
+          if readelf -l "$bin" | grep -Eq '^\s+(INTERP|DYNAMIC)\b'; then
+            echo "::error::${bin} is dynamically linked"
             exit 1
           fi
+          echo "fully static: no INTERP, no DYNAMIC"
 
+      # Both tools write straight into dist/: cargo-deb's own output directory
+      # differs between versions once --target is given. cargo-generate-rpm
+      # will not create the directory itself, so it is made up front rather
+      # than relying on the .deb step running first.
       - name: Build .deb
-        run: cargo deb --no-build
+        run: |
+          mkdir -p dist
+          cargo deb --no-build --target ${{ matrix.target }} --output dist/
 
       - name: Build .rpm
-        run: cargo generate-rpm
+        run: cargo generate-rpm --target ${{ matrix.target }} --output dist/
 
       - name: Collect packages
         run: |
-          mkdir -p dist
-          cp target/debian/*.deb dist/
-          cp target/generate-rpm/*.rpm dist/
-          # The bare binary as well, for hosts outside the Debian and RHEL
-          # families and for anyone following the older download instructions.
-          # github2repo.sh publishes only the .deb and .rpm.
-          cp target/release/EasyDC "dist/${{ matrix.binary }}"
+          # The bare binary as well, for anyone who wants it without a package
+          # manager. github2repo.sh publishes only the .deb and .rpm.
+          cp target/${{ matrix.target }}/release/EasyDC "dist/${{ matrix.binary }}"
           ls -l dist
 
       - uses: actions/upload-artifact@v4
