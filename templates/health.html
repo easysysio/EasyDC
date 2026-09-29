@@ -113,8 +113,39 @@
                     {% if c.remediation %}
                     <div class="mt-2 p-2 rounded bg-light border-start border-3 border-primary-subtle small">
                         <i class="bi bi-tools me-1 text-primary"></i>{{ c.remediation }}
+                        {% if c.link %}
+                        <a href="/servers/{{ server.id }}/{{ c.link.path }}" class="ms-2 fw-semibold text-decoration-none">
+                            {{ c.link.label }} <i class="bi bi-arrow-right"></i>
+                        </a>
+                        {% endif %}
                     </div>
                     {% endif %}
+
+                    {% for fix in c.fixes %}
+                    <form method="post" action="/servers/{{ server.id }}/health/fix"
+                        class="mt-2 p-3 rounded border border-primary-subtle">
+                        <input type="hidden" name="kind" value="{{ fix.kind }}">
+                        <input type="hidden" name="stage" value="preview">
+                        {% if fix.targets | length > 0 %}
+                        <div class="small mb-2">
+                            {% for t in fix.targets %}
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="t{{ loop.index0 }}"
+                                    value="{{ t.key }}" id="{{ c.id }}-{{ loop.index0 }}" checked>
+                                <label class="form-check-label" for="{{ c.id }}-{{ loop.index0 }}">{{ t.label }}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <input type="hidden" name="t0" value="quota">
+                        {% endif %}
+                        <div class="small text-muted mb-2">{{ fix.explain }}</div>
+                        <button type="submit" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-eye me-1"></i> {{ fix.label }}…
+                        </button>
+                        <span class="small text-muted ms-2">You will see exactly what changes before anything is written.</span>
+                    </form>
+                    {% endfor %}
                 </div>
             </div>
         </div>
@@ -124,7 +155,8 @@
 
 <p class="text-muted small mt-3">
     <i class="bi bi-info-circle me-1"></i>
-    These checks run entirely over LDAP and change nothing. Checks that need shell access on the
+    These checks run entirely over LDAP and change nothing by themselves. Where a finding has a
+    fix, it is shown under it and asks for confirmation first. Checks that need shell access on the
     DC — <span class="font-monospace">samba-tool dbcheck</span>, SYSVOL replication, service
     status — are not covered here.
 </p>

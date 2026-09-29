@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::ldap::{self, base_dn_to_domain, LdapResult};
 use crate::models::Server;
+use crate::remediate;
 
 pub const PASS: &str = "pass";
 pub const WARN: &str = "warn";
@@ -33,8 +34,19 @@ pub struct CheckResult {
     pub summary: String,
     /// Supporting lines shown under the summary.
     pub detail: Vec<String>,
-    /// What to do about it. Task #3 turns these into guided fixes.
+    /// What to do about it, in words.
     pub remediation: Option<String>,
+    /// Changes EasyDC can make for this finding, each behind a preview.
+    pub fixes: Vec<crate::remediate::Fix>,
+    /// A page elsewhere in EasyDC that fixes it, relative to the server.
+    pub link: Option<Link>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct Link {
+    pub label: &'static str,
+    /// Relative to /servers/:id/, e.g. "policy".
+    pub path: &'static str,
 }
 
 impl CheckResult {
@@ -47,7 +59,19 @@ impl CheckResult {
             summary: String::new(),
             detail: Vec::new(),
             remediation: None,
+            fixes: Vec::new(),
+            link: None,
         }
+    }
+
+    fn offer(mut self, fix: Option<crate::remediate::Fix>) -> Self {
+        self.fixes.extend(fix);
+        self
+    }
+
+    fn link(mut self, label: &'static str, path: &'static str) -> Self {
+        self.link = Some(Link { label, path });
+        self
     }
 
     fn set(mut self, status: &'static str, summary: impl Into<String>) -> Self {
@@ -117,7 +141,7 @@ struct Ctx {
 
 // ── low-level helpers ─────────────────────────────────────────────────────────
 
-async fn search(
+pub(crate) async fn search(
     conn: &mut ldap3::Ldap,
     base: &str,
     scope: Scope,
@@ -134,7 +158,7 @@ async fn search(
 }
 
 /// Base-scope read of a single object.
-async fn read_one(
+pub(crate) async fn read_one(
     conn: &mut ldap3::Ldap,
     dn: &str,
     attrs: Vec<&str>,
@@ -146,7 +170,7 @@ async fn read_one(
         .ok_or_else(|| format!("{} not found", dn))
 }
 
-fn now_unix() -> i64 {
+pub(crate) fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -177,7 +201,7 @@ fn parse_generalized_time(s: &str) -> Option<i64> {
 }
 
 /// Windows FILETIME (100ns ticks since 1601-01-01) to unix seconds.
-fn filetime_to_unix(ft: i64) -> i64 {
+pub(crate) fn filetime_to_unix(ft: i64) -> i64 {
     ft / 10_000_000 - 11_644_473_600
 }
 
@@ -197,7 +221,7 @@ fn format_guid(b: &[u8]) -> String {
 }
 
 /// First RDN value of a DN — `CN=DC1,CN=Servers,…` becomes `DC1`.
-fn rdn_value(dn: &str) -> String {
+pub(crate) fn rdn_value(dn: &str) -> String {
     dn.split(',')
         .next()
         .and_then(|p| p.split_once('='))
@@ -361,7 +385,7 @@ async fn load_dns(conn: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<HashMap<S
 // Servers vary in the casing they echo back for requested attributes, so every
 // read in this module goes through these rather than indexing `attrs` directly.
 
-fn attr_ci(e: &SearchEntry, key: &str) -> String {
+pub(crate) fn attr_ci(e: &SearchEntry, key: &str) -> String {
     let k = key.to_lowercase();
     e.attrs
         .iter()
@@ -371,7 +395,7 @@ fn attr_ci(e: &SearchEntry, key: &str) -> String {
         .unwrap_or_default()
 }
 
-fn attrs_ci(e: &SearchEntry, key: &str) -> Vec<String> {
+pub(crate) fn attrs_ci(e: &SearchEntry, key: &str) -> Vec<String> {
     let k = key.to_lowercase();
     e.attrs
         .iter()
@@ -389,7 +413,7 @@ fn bin_ci(e: &SearchEntry, key: &str) -> Vec<Vec<u8>> {
         .unwrap_or_default()
 }
 
-fn int_ci(e: &SearchEntry, key: &str) -> i64 {
+pub(crate) fn int_ci(e: &SearchEntry, key: &str) -> i64 {
     attr_ci(e, key).parse().unwrap_or(0)
 }
 
@@ -818,21 +842,17 @@ async fn check_ldaps(server: &Server) -> CheckResult {
 async fn check_machine_account_quota(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
     let c = CheckResult::new("machine_account_quota", "Security", "Machine account quota");
 
-    let entry = match read_one(conn, &ctx.base_dn, vec!["ms-DS-MachineAccountQuota"]).await {
-        Ok(e) => e,
+    let quota = match remediate::machine_account_quota(conn, &ctx.base_dn).await {
+        Ok(Some(q)) => q,
+        Ok(None) => return c.skipped("Attribute not set on this domain"),
         Err(e) => return c.skipped(format!("Could not read domain object: {}", e)),
     };
-
-    let raw = attr_ci(&entry, "ms-DS-MachineAccountQuota");
-    if raw.is_empty() {
-        return c.skipped("Attribute not set on this domain");
-    }
-    let quota: i64 = raw.parse().unwrap_or(-1);
     let c = c.line(format!("ms-DS-MachineAccountQuota = {}", quota));
 
     if quota > 0 {
         c.set(WARN, format!("Any authenticated user can join {} machines", quota))
             .fix("Set ms-DS-MachineAccountQuota to 0 and delegate machine joins to a specific group instead.")
+            .offer(remediate::quota_fix(Some(quota)))
     } else {
         c.set(PASS, "Unprivileged users cannot join machines")
     }
@@ -917,111 +937,51 @@ async fn check_delegation(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
 async fn check_privileged_groups(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
     let c = CheckResult::new("privileged_groups", "Security", "Privileged group membership");
 
-    let groups = ["Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators"];
+    let scan = match remediate::privileged_members(conn, &ctx.base_dn).await {
+        Ok(s) => s,
+        Err(e) => return c.skipped(format!("Search failed: {}", e)),
+    };
+
     let mut c = c;
-    let mut total = 0usize;
-    let mut disabled_members: Vec<String> = Vec::new();
-    let mut fell_back = false;
-
-    for g in &groups {
-        let filter = format!("(&(objectClass=group)(sAMAccountName={}))", ldap::ldap_escape(g));
-        let found = match search(conn, &ctx.base_dn, Scope::Subtree, &filter, vec!["member"]).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let Some(entry) = found.into_iter().next() else {
-            continue;
-        };
-
-        // Membership through nested groups counts: a disabled user inside a
-        // group that is itself in Domain Admins holds domain admin rights just
-        // the same. LDAP_MATCHING_RULE_IN_CHAIN has the server follow the
-        // nesting, so one search per group finds every disabled user at any
-        // depth.
-        let chain = format!(
-            "(&(objectCategory=person)(memberOf:1.2.840.113556.1.4.1941:={}))",
-            ldap::ldap_escape(&entry.dn)
-        );
-        let members = match search(
-            conn,
-            &ctx.base_dn,
-            Scope::Subtree,
-            &chain,
-            vec!["sAMAccountName", "userAccountControl"],
-        )
-        .await
-        {
-            Ok(m) => m,
-            Err(_) => {
-                // A server without the matching rule: fall back to the direct
-                // members only, and say so in the report.
-                fell_back = true;
-                let mut direct = Vec::new();
-                for m in attrs_ci(&entry, "member") {
-                    if let Ok(me) = read_one(conn, &m, vec!["userAccountControl", "sAMAccountName"]).await {
-                        direct.push(me);
-                    }
-                }
-                direct
-            }
-        };
-
-        // Direct members can be groups (Domain Admins is a member of
-        // Administrators), so the useful count is accounts once the nesting is
-        // expanded — comparing it with the direct member count would compare
-        // groups with people.
-        total += members.len();
-        c = c.line(if fell_back {
+    for l in &scan.lines {
+        c = c.line(l.clone());
+    }
+    for d in &scan.disabled {
+        c = c.line(if d.via.is_empty() {
             format!(
-                "{}: {} (direct only)",
-                g,
-                plural(attrs_ci(&entry, "member").len(), "member", "members")
+                "Disabled but still privileged: {} (in {}, through its primary group — change that in the account's properties)",
+                d.user_name,
+                d.grants.join(", ")
             )
         } else {
-            format!("{}: {}", g, plural(members.len(), "account", "accounts"))
+            format!("Disabled but still privileged: {} (in {})", d.user_name, d.grants.join(", "))
         });
-
-        for me in &members {
-            let uac = int_ci(me, "userAccountControl");
-            if (uac & 2) != 0 {
-                let name = attr_ci(me, "sAMAccountName");
-                let label = format!("{} (in {})", if name.is_empty() { rdn_value(&me.dn) } else { name }, g);
-                if !disabled_members.contains(&label) {
-                    disabled_members.push(label);
-                }
-            }
-        }
     }
-
-    for d in &disabled_members {
-        c = c.line(format!("Disabled but still privileged: {}", d));
-    }
-    if fell_back {
+    if scan.fell_back {
         c = c.line("Nested groups were not followed: this server did not accept LDAP_MATCHING_RULE_IN_CHAIN.");
     }
 
-    if !disabled_members.is_empty() {
+    if !scan.disabled.is_empty() {
         c.set(
             WARN,
             format!(
                 "{} disabled but still in a privileged group",
-                plural(disabled_members.len(), "account", "accounts")
+                plural(scan.disabled.len(), "account", "accounts")
             ),
         )
         .fix("A disabled account in Domain Admins is a re-enable away from full control. Remove the membership rather than relying on the disabled flag.")
-    } else if total == 0 {
+        .offer(remediate::privileged_fix(&scan))
+    } else if scan.total == 0 {
         c.skipped("No privileged groups readable with this bind account")
+    } else if scan.fell_back {
+        c.set(PASS, format!("{} across the four privileged groups, all enabled", plural(scan.total, "member", "members")))
     } else {
         c.set(
             PASS,
-            if fell_back {
-                format!("{} across the four privileged groups, all enabled", plural(total, "member", "members"))
-            } else {
-                format!(
-                    "{} across the four privileged groups, nested groups expanded, all enabled",
-                    plural(total, "account", "accounts")
-                )
-            },
+            format!(
+                "{} across the four privileged groups, nested groups expanded, all enabled",
+                plural(scan.total, "account", "accounts")
+            ),
         )
     }
 }
@@ -1121,6 +1081,7 @@ async fn check_password_policy(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult
     if min_len == 0 {
         c = c.fix("Set a minimum length with `samba-tool domain passwordsettings set --min-pwd-length=8`, or from the Password Policy page.");
         c.set(FAIL, "No minimum password length — an empty password is allowed")
+            .link("Open Password Policy", "policy")
     } else if min_len < 7 || !weak.is_empty() {
         let mut parts = weak;
         if min_len < 7 {
@@ -1128,6 +1089,7 @@ async fn check_password_policy(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult
         }
         c = c.fix("Samba's own defaults are 7 characters with complexity required and a 42-day maximum age. The Password Policy page edits these.");
         c.set(WARN, format!("Weaker than Samba's defaults: {}", parts.join(", ")))
+            .link("Open Password Policy", "policy")
     } else {
         c.set(PASS, format!("Minimum {} characters, complexity required, lockout enabled", min_len))
     }
@@ -1135,132 +1097,75 @@ async fn check_password_policy(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult
 
 // ── hygiene ───────────────────────────────────────────────────────────────────
 
-const STALE_DAYS: i64 = 90;
-
 async fn check_stale_computers(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
     let c = CheckResult::new("stale_computers", "Hygiene", "Stale computer accounts");
 
-    let entries = match search(
-        conn,
-        &ctx.base_dn,
-        Scope::Subtree,
-        "(objectClass=computer)",
-        vec!["sAMAccountName", "lastLogonTimestamp", "userAccountControl"],
-    )
-    .await
-    {
-        Ok(e) => e,
+    let scan = match remediate::stale_computers(conn, &ctx.base_dn).await {
+        Ok(s) => s,
         Err(e) => return c.skipped(format!("Search failed: {}", e)),
     };
 
-    let cutoff = now_unix() - STALE_DAYS * 86_400;
-    let mut stale: Vec<(String, i64)> = Vec::new();
-    let mut total = 0usize;
-
-    for e in &entries {
-        let uac = int_ci(e, "userAccountControl");
-        if (uac & 2) != 0 {
-            continue; // already disabled
-        }
-        total += 1;
-        let ts = int_ci(e, "lastLogonTimestamp");
-        if ts == 0 {
-            continue; // never replicated a logon time; not evidence of staleness
-        }
-        let last = filetime_to_unix(ts);
-        if last < cutoff {
-            let days = (now_unix() - last) / 86_400;
-            stale.push((attr_ci(e, "sAMAccountName"), days));
-        }
+    let mut c = c.line(format!("{} enabled computer accounts", scan.enabled));
+    for sc in scan.stale.iter().take(15) {
+        c = c.line(if sc.is_dc {
+            format!("{} — last logon {} days ago (a domain controller: not offered for disabling)", sc.name, sc.days)
+        } else {
+            format!("{} — last logon {} days ago", sc.name, sc.days)
+        });
+    }
+    if scan.stale.len() > 15 {
+        c = c.line(format!("… and {} more", scan.stale.len() - 15));
     }
 
-    stale.sort_by(|a, b| b.1.cmp(&a.1));
-    let mut c = c.line(format!("{} enabled computer accounts", total));
-    for (name, days) in stale.iter().take(15) {
-        c = c.line(format!("{} — last logon {} days ago", name, days));
-    }
-    if stale.len() > 15 {
-        c = c.line(format!("… and {} more", stale.len() - 15));
-    }
-
-    if stale.is_empty() {
-        c.set(PASS, format!("No computer inactive for over {} days", STALE_DAYS))
+    if scan.stale.is_empty() {
+        c.set(PASS, format!("No computer inactive for over {} days", remediate::STALE_DAYS))
     } else {
         c.set(
             WARN,
             format!(
                 "{} inactive for over {} days",
-                plural(stale.len(), "computer", "computers"),
-                STALE_DAYS
+                plural(scan.stale.len(), "computer", "computers"),
+                remediate::STALE_DAYS
             ),
         )
         .fix("Disable rather than delete first — a deleted computer account cannot be un-joined cleanly if the machine comes back.")
+        .offer(remediate::stale_computer_fix(&scan))
     }
 }
 
 async fn check_password_hygiene(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
     let c = CheckResult::new("password_hygiene", "Hygiene", "Account password flags");
 
-    let entries = match search(
-        conn,
-        &ctx.base_dn,
-        Scope::Subtree,
-        "(&(objectClass=user)(!(objectClass=computer)))",
-        vec!["sAMAccountName", "userAccountControl", "pwdLastSet"],
-    )
-    .await
-    {
-        Ok(e) => e,
+    let scan = match remediate::password_flags(conn, &ctx.base_dn).await {
+        Ok(s) => s,
         Err(e) => return c.skipped(format!("Search failed: {}", e)),
     };
 
-    const DONT_EXPIRE_PASSWORD: i64 = 0x10000;
-    const PASSWD_NOTREQD: i64 = 0x0020;
-
-    let mut never_expires = Vec::new();
-    let mut not_required = Vec::new();
-    let mut must_change = 0usize;
-    let mut enabled = 0usize;
-
-    for e in &entries {
-        let uac = int_ci(e, "userAccountControl");
-        if (uac & 2) != 0 {
-            continue;
-        }
-        enabled += 1;
-        let name = attr_ci(e, "sAMAccountName");
-        if (uac & DONT_EXPIRE_PASSWORD) != 0 {
-            never_expires.push(name.clone());
-        }
-        if (uac & PASSWD_NOTREQD) != 0 {
-            not_required.push(name.clone());
-        }
-        if int_ci(e, "pwdLastSet") == 0 {
-            must_change += 1;
-        }
+    let mut c = c.line(format!("{} enabled user accounts", scan.enabled));
+    if !scan.never_expires.is_empty() {
+        c = c.line(format!("Password never expires: {}", scan.never_expires.join(", ")));
+    }
+    if !scan.not_required.is_empty() {
+        let names: Vec<&str> = scan.not_required.iter().map(|a| a.name.as_str()).collect();
+        c = c.line(format!("Password not required: {}", names.join(", ")));
+    }
+    if scan.must_change > 0 {
+        c = c.line(format!("{} must change password at next logon", scan.must_change));
     }
 
-    let mut c = c.line(format!("{} enabled user accounts", enabled));
-    if !never_expires.is_empty() {
-        c = c.line(format!("Password never expires: {}", never_expires.join(", ")));
-    }
-    if !not_required.is_empty() {
-        c = c.line(format!("Password not required: {}", not_required.join(", ")));
-    }
-    if must_change > 0 {
-        c = c.line(format!("{} must change password at next logon", must_change));
-    }
-
-    if !not_required.is_empty() {
+    if !scan.not_required.is_empty() {
         c.set(
             FAIL,
-            format!("{} can have an empty password", plural(not_required.len(), "account", "accounts")),
+            format!("{} can have an empty password", plural(scan.not_required.len(), "account", "accounts")),
         )
         .fix("Clear the PASSWD_NOTREQD flag (0x0020) on these accounts and set a real password.")
-    } else if !never_expires.is_empty() {
+        .offer(remediate::password_flag_fix(&scan))
+    } else if !scan.never_expires.is_empty() {
+        // Deliberately no button: non-expiring passwords are usually service
+        // accounts, and expiring one unannounced breaks whatever uses it.
         c.set(
             WARN,
-            format!("{} with non-expiring passwords", plural(never_expires.len(), "account", "accounts")),
+            format!("{} with non-expiring passwords", plural(scan.never_expires.len(), "account", "accounts")),
         )
         .fix("Service accounts are the usual reason. Confirm each is intentional and rotate them on a schedule.")
     } else {

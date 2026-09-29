@@ -50,7 +50,40 @@ over LDAP:
 Replication is reported as **partner presence only**. For last-success times and failure
 counts, run `samba-tool drs showrepl` on the DC.
 
-!!! info "Why no fix buttons"
-    Remediation is deliberately not automated. Some fixes are safe, like recreating a missing
-    DNS record; others, like seizing an FSMO role, can split a domain if done wrongly. The
-    hints tell you what to do, and the changes are yours to make.
+## Fixing what it finds
+
+Where a finding can be fixed safely, the fix is shown under it:
+
+| Finding | Fix | Undo |
+|---|---|---|
+| **Stale computers** | Disable the selected computer accounts | Re-enable on the Computers page |
+| **Privileged groups** | Remove a disabled account from the group that grants the rights | Add it back on the Groups page |
+| **Password flags** | Require a password on accounts flagged *password not required* | Set the flag again with samba-tool |
+| **Machine account quota** | Set it to 0 | Change it on the Password Policy page |
+
+The **password policy** finding links to the Password Policy page, which is where it is
+fixed.
+
+Every fix works the same way:
+
+- You choose which items to change, then see **exactly what will be written** before
+  anything is.
+- When you apply, the list is **worked out again from the directory** rather than taken
+  from the page — so an item someone else has already fixed, or one that no longer
+  qualifies, is left alone.
+- Each change is recorded in the **audit log** under `health.fix.*`, and the result page
+  shows which succeeded and why any failed.
+
+A few rules keep the fixes safe:
+
+- **Domain controller accounts are never offered for disabling**, even when stale.
+- **Membership through nested groups** is removed from the group the account actually
+  belongs to. That also ends whatever else that group grants, which the preview says.
+- Membership through an account's **primary group** cannot be removed this way. It is
+  reported, but no fix is offered.
+- **Non-expiring passwords get no button.** They are usually service accounts, and
+  expiring one without warning breaks whatever uses it.
+
+Some findings have no button at all, because a wrong fix is hard to undo: FSMO roles,
+replication, missing DNS records, delegation and anonymous access. The hint under each
+says what to do.

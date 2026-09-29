@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Apply fix - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}/health">Health Check</a></li>
+        <li class="breadcrumb-item active">Fix</li>
+    </ol>
+</nav>
+
+{% if error %}
+<div class="alert alert-danger d-flex align-items-start">
+    <i class="bi bi-exclamation-octagon-fill me-2 mt-1"></i>
+    <div>{{ error }}</div>
+</div>
+<a href="/servers/{{ server.id }}/health" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i> Back to the health check
+</a>
+
+{% elif stage == "preview" %}
+<h4 class="mb-3"><i class="bi bi-eye me-2 text-primary"></i>Review the changes</h4>
+
+{% if preview | length == 0 %}
+<div class="alert alert-info">
+    Nothing to change — every selected item has already been dealt with, or no longer qualifies.
+</div>
+<a href="/servers/{{ server.id }}/health" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i> Back to the health check
+</a>
+{% else %}
+<p class="text-muted">EasyDC will make these changes on <strong>{{ server.name }}</strong>. Each is recorded in the audit log.</p>
+<div class="card shadow-sm mb-3">
+    <ul class="list-group list-group-flush">
+        {% for p in preview %}
+        <li class="list-group-item"><i class="bi bi-arrow-right-short text-primary me-1"></i>{{ p }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% if skipped > 0 %}
+<p class="small text-muted">{{ skipped }} selected item(s) no longer need fixing and will be left alone.</p>
+{% endif %}
+<form method="post" action="/servers/{{ server.id }}/health/fix" class="d-flex gap-2">
+    <input type="hidden" name="kind" value="{{ kind }}">
+    <input type="hidden" name="stage" value="apply">
+    {% for k in keys %}
+    <input type="hidden" name="t{{ loop.index0 }}" value="{{ k }}">
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check2 me-1"></i> Apply {{ preview | length }} change{% if preview | length != 1 %}s{% endif %}
+    </button>
+    <a href="/servers/{{ server.id }}/health" class="btn btn-outline-secondary">Cancel</a>
+</form>
+<p class="small text-muted mt-3">The list is worked out again when you apply, so anything that changes in the meantime is not touched.</p>
+{% endif %}
+
+{% elif stage == "done" %}
+<h4 class="mb-3">
+    {% if failed == 0 %}
+    <i class="bi bi-check-circle-fill me-2 text-success"></i>Done
+    {% else %}
+    <i class="bi bi-exclamation-triangle-fill me-2 text-warning"></i>Done, with {{ failed }} failure{% if failed != 1 %}s{% endif %}
+    {% endif %}
+</h4>
+<div class="card shadow-sm mb-3">
+    <ul class="list-group list-group-flush">
+        {% for o in outcomes %}
+        <li class="list-group-item">
+            {% if o.1 %}
+            <i class="bi bi-x-circle-fill text-danger me-1"></i>{{ o.0 }}
+            <div class="small text-danger ms-4">{{ o.1 }}</div>
+            {% else %}
+            <i class="bi bi-check-circle-fill text-success me-1"></i>{{ o.0 }}
+            {% endif %}
+        </li>
+        {% endfor %}
+        {% if outcomes | length == 0 %}
+        <li class="list-group-item text-muted">Nothing needed changing by the time the fix was applied.</li>
+        {% endif %}
+    </ul>
+</div>
+<a href="/servers/{{ server.id }}/health" class="btn btn-primary">
+    <i class="bi bi-arrow-clockwise me-1"></i> Re-run the health check
+</a>
+<a href="/audit" class="btn btn-outline-secondary ms-2">View the audit log</a>
+{% endif %}
+
+{% endblock %}
