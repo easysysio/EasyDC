@@ -328,6 +328,31 @@ pub async fn delete_user(
 
 // ── enable / disable user ────────────────────────────────────────────────────
 
+/// userAccountControl with only the ACCOUNTDISABLE bit changed.
+///
+/// Enabling and disabling used to write fixed values — 512/514 for users,
+/// 4096/4098 for computers — which silently cleared every other flag: "password
+/// never expires", delegation, and for a domain controller SERVER_TRUST_ACCOUNT,
+/// turning its account into a workstation's.
+fn with_account_disabled(uac: i64, disabled: bool) -> i64 {
+    if disabled { uac | 0x2 } else { uac & !0x2 }
+}
+
+async fn read_uac(ldap: &mut ldap3::Ldap, dn: &str) -> LdapResult<i64> {
+    let (entries, _) = ldap
+        .search(dn, Scope::Base, "(objectClass=*)", vec!["userAccountControl"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .and_then(|e| attr(&e, "userAccountControl").parse::<i64>().ok())
+        .ok_or_else(|| format!("Could not read userAccountControl of {}", dn))
+}
+
 pub async fn set_user_enabled(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
@@ -335,10 +360,10 @@ pub async fn set_user_enabled(
     enable: bool,
 ) -> LdapResult<()> {
     let dn = find_user_dn(ldap, base_dn, username).await?;
-    let uac = if enable { "512" } else { "514" };
+    let uac = with_account_disabled(read_uac(ldap, &dn).await?, !enable);
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
         sv("userAccountControl"),
-        HashSet::from([sv(uac)]),
+        HashSet::from([sv(&uac.to_string())]),
     )];
     ldap.modify(&dn, mods)
         .await
@@ -778,11 +803,10 @@ pub async fn set_computer_enabled(
     enable: bool,
 ) -> LdapResult<()> {
     let dn = find_computer_dn(ldap, base_dn, name).await?;
-    // Standard computer UAC: 4096 (enabled) or 4098 (disabled)
-    let uac = if enable { "4096" } else { "4098" };
+    let uac = with_account_disabled(read_uac(ldap, &dn).await?, !enable);
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
         sv("userAccountControl"),
-        HashSet::from([sv(uac)]),
+        HashSet::from([sv(&uac.to_string())]),
     )];
     ldap.modify(&dn, mods)
         .await
@@ -2592,5 +2616,41 @@ mod review_fix_tests {
         assert!(validate_password_policy(&policy(5, 30, 30)).is_ok());
         assert!(validate_password_policy(&policy(5, 0, 30)).is_ok()); // until an admin unlocks
         assert!(validate_password_policy(&policy(0, 0, 0)).is_ok()); // lockout off entirely
+    }
+}
+
+#[cfg(test)]
+mod account_toggle_tests {
+    use super::with_account_disabled;
+
+    #[test]
+    fn plain_accounts_toggle_as_before() {
+        assert_eq!(with_account_disabled(512, true), 514);
+        assert_eq!(with_account_disabled(514, false), 512);
+        assert_eq!(with_account_disabled(4096, true), 4098);
+        assert_eq!(with_account_disabled(4098, false), 4096);
+    }
+
+    /// Administrator on the test domain: NORMAL_ACCOUNT + DONT_EXPIRE_PASSWORD.
+    /// The old code would have written 514, dropping "password never expires".
+    #[test]
+    fn other_user_flags_survive() {
+        assert_eq!(with_account_disabled(66048, true), 66050);
+        assert_eq!(with_account_disabled(66050, false), 66048);
+    }
+
+    /// A domain controller: SERVER_TRUST_ACCOUNT + TRUSTED_FOR_DELEGATION. The
+    /// old code wrote 4098 — a disabled workstation account.
+    #[test]
+    fn a_domain_controller_stays_a_domain_controller() {
+        let dc = 0x2000 | 0x80000;
+        assert_eq!(with_account_disabled(dc, true), dc | 0x2);
+        assert_eq!(with_account_disabled(dc | 0x2, false), dc);
+    }
+
+    #[test]
+    fn toggling_is_idempotent() {
+        assert_eq!(with_account_disabled(514, true), 514);
+        assert_eq!(with_account_disabled(512, false), 512);
     }
 }
