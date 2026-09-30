@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.1] - 2026-09-30
 
 ### Added
 - **Fixes in the health check.** Four findings now offer a fix under them: disable stale computers, remove disabled accounts from privileged groups, require a password on accounts flagged *password not required*, and set the machine account quota to 0; the password policy finding links to its page. Every fix shows exactly what will change before anything is written, and when applied is worked out again from the directory rather than taken from the page — so an item that has since been fixed or no longer qualifies is skipped, and a forged request can act on nothing. Each change is written to the audit log as `health.fix.*`
