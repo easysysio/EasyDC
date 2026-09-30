@@ -15,32 +15,12 @@ All notable changes to this project will be documented in this file.
 ## [0.3.0] - 2026-09-24
 
 ### Added
-- **Password policy page** (`/servers/:id/policy`) for the domain-wide settings `samba-tool domain passwordsettings` manages: minimum length, complexity, history, maximum and minimum age, lockout threshold, duration and attempt window, and `ms-DS-MachineAccountQuota`
-  - Durations are stored as negative 100-nanosecond intervals and converted to days and minutes in both directions, with "never" round-tripping correctly
-  - Combinations the directory would refuse — a minimum age at or beyond the maximum, an attempt window longer than the lockout duration — are rejected before anything is written
-  - The complexity flag is set without disturbing the other bits of `pwdProperties`
-  - The whole resulting policy is written to the audit log as `policy.update`, so a later "who loosened this?" has an answer
-- **Password policy health check** — reports the current settings and fails on no minimum length, warns when weaker than Samba's own defaults (7 characters, complexity required, 42-day expiry)
+- **Packages for Debian and Red Hat** — `.deb` and `.rpm` for x86_64 and arm64, installable from `repo.easysys.io`. The binary is statically linked, so it runs on any distribution. The service runs as its own `easydc` user, with its database in `/var/lib/easydc`. Moving from a manual install? Follow [the install guide](https://github.com/easysysio/EasyDC/blob/main/docs/install.md#moving-from-a-manual-install), or install 0.3.1, which does it for you.
+- **Password policy page** for the domain's length, complexity, expiry, lockout and machine account quota settings, and a health check that flags a policy weaker than Samba's defaults.
 
 ### Fixed
-- **LDAP filter injection.** Names taken from URLs went unescaped into LDAP search filters, so a `*` matched whichever object the directory returned first. Deleting the zone `*` could remove the realm's own zone despite the guard against it, and the user, group and computer delete routes had the same flaw. Every filter value is now escaped (RFC 4515), zone names are validated before any lookup, and the realm-zone guard is applied to the zone actually resolved, not only to the name requested
-- **Removing administrators could leave none.** The last-administrator rule was a count followed by a separate delete, so two administrators removing each other at once both passed it — leaving no accounts and reopening `/setup` to anyone. The rule is now part of the `DELETE` statement itself
-- **Removing an administrator by a differently-cased name** reported success and removed nothing; existence is now checked exactly, and look-alike names that differ only by case are refused at creation
-- **Administrator names in the Settings page** were placed inside a JavaScript string, where HTML escaping gives no protection: a name with a quote skipped the delete confirmation, and a crafted one could run script. Names are now read from a data attribute and percent-encoded in URLs, and new usernames are limited to letters, digits and `. _ - @`
-- **A password change left pre-0.2.0 sessions valid.** Sessions created before usernames were recorded could not be attributed, so neither a password change nor an administrator's removal could end them, and sessions do not expire. They are removed at startup
-- **Saving the password policy changed fields nobody touched.** Intervals are shown in whole days or minutes, and writing the displayed value back truncated anything finer — a 12-hour minimum age became none. A field whose value is unchanged now keeps its stored value exactly
-- **An attempt window of 0 was stored as "never"**, so with lockout enabled failed attempts were never forgotten, or the save failed against the directory's own rules. A zero window is now refused when lockout is on or a lockout duration is set
-- **The privileged-group check ignored nested groups**, so a disabled account inside a group that is itself in Domain Admins was reported as fine. It now follows nesting with `LDAP_MATCHING_RULE_IN_CHAIN`, falling back to direct members if a server does not support it, and counts accounts rather than a mix of accounts and groups
-- **Packages would not have run on most supported distributions.** The build moved to native `ubuntu-24.04` runners, producing a binary that needs glibc 2.39 — newer than Debian 12, Ubuntu 22.04 or RHEL 9. The binary is now linked statically against musl with cargo-zigbuild, so it needs no glibc at all, and the release fails if a binary with a program interpreter or a dynamic section is ever produced
-- The `zone_probe` development tool refuses to delete the realm's zone or Samba's internal zones, as EasyDC does
-
-### Packaging
-- **`.deb` and `.rpm` packages** for x86_64 and arm64, built by the release workflow on every `v*` tag and attached to the GitHub Release. The binary inside is statically linked, so one package runs on any distribution of its family, RHEL 8 included. [EasyDC-repo](https://github.com/easysysio/EasyDC-repo)'s `github2repo.sh` publishes them, signed, to `repo.easysys.io/easydc`
-- The packages install `/usr/bin/easydc` and an `easydc.service` that runs as a dedicated `easydc` user with its database in `/var/lib/easydc` (mode `0700`, since it holds every DC's bind password). The port can be set in `/etc/default/easydc` or `/etc/sysconfig/easydc`
-- Upgrades restart the service only if it was running; removal stops and disables it but leaves the user and the database in place
-- The user and directory match the earlier manual install instructions, so an existing database carries over; the install guide lists the two files to remove first, since a unit in `/etc/systemd/system` would otherwise shadow the packaged one
-- The release workflow now refuses a tag that does not match the version in `Cargo.toml`, rather than publishing packages that carry the wrong version
-- The bare `easydc-linux-x86_64` and `easydc-linux-arm64` binaries are still attached to each release
+- **Security:** a crafted name in a URL could make a delete act on the wrong object — including the domain's own DNS zone. Two admins removing each other at once could leave none and reopen setup; admin usernames could inject script into the Settings page; and changing a password did not end sessions from before 0.2.0.
+- The privileged-group health check now follows nested groups.
 
 ## [0.2.3] - 2026-09-23
 
