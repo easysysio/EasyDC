@@ -4,16 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [0.3.1] - 2026-09-30
 
-### Added
-- **Fixes in the health check.** Four findings now offer a fix under them: disable stale computers, remove disabled accounts from privileged groups, require a password on accounts flagged *password not required*, and set the machine account quota to 0; the password policy finding links to its page. Every fix shows exactly what will change before anything is written, and when applied is worked out again from the directory rather than taken from the page — so an item that has since been fixed or no longer qualifies is skipped, and a forged request can act on nothing. Each change is written to the audit log as `health.fix.*`
-  - Domain controller accounts are never offered for disabling; membership through a nested group is removed from the group the account actually belongs to; membership through the primary group is reported but not offered; non-expiring passwords deliberately get no button
-  - The checks and the fixes share one scan, so what the report says and what a fix acts on cannot drift apart
-- **`--version`** (or `-V`) prints the version and exits, without opening the database or a port — so `easydc --version` answers "which build is this?" on any host, including one where the service is already running
-- **Installing the package moves a hand-made install onto it.** A unit at `/etc/systemd/system/easydc.service` running anything other than `/usr/bin/easydc` shadows the packaged unit, so the old binary kept running after the package was installed — and moving by hand meant finding the database, fixing its ownership and carrying the port over. The package now does it: it stops the old service, copies `easydc.db` (with any `-wal`/`-shm`) from the old working directory into `/var/lib/easydc` unless a database is already there, keeps a `--port`, renames the old unit to `easydc.service.pre-package`, and starts the packaged service if the old one was running. Nothing is deleted, a unit that already runs `/usr/bin/easydc` is left alone as a deliberate override, and the step does nothing on a normal install. It lives in `/usr/share/easydc/migrate-legacy` and can be rerun by hand
-- The migration is covered by 29 checks over eleven scenarios, run against a throwaway directory tree and a stub `systemctl`, and run in CI under dash — the shell Debian uses for package scripts
-
 ### Fixed
-- **Enabling or disabling an account wiped its other flags.** The Users and Computers pages wrote fixed `userAccountControl` values — `512`/`514` and `4096`/`4098` — so disabling an account silently cleared *password never expires*, delegation and the rest, and disabling a domain controller from the Computers page would have turned its account into a workstation's. Only the disabled bit is changed now
+- **Enabling or disabling an account no longer resets its other settings.** The Users and Computers pages overwrote the account's whole flag value, silently clearing options such as *password never expires* — and disabling a domain controller from the Computers page would have broken it.
+
+### Added
+- **Fixes in the health check.** Stale computers, disabled accounts left in admin groups, accounts that need no password, and the machine account quota can now be fixed from the report. Each fix shows a preview first and is recorded in the audit log.
+- **Automatic move from a manual install.** Installing the package takes over an existing hand-made EasyDC service, keeping its database and port. Nothing is deleted.
+- **`easydc --version`** prints the installed version.
 
 ## [0.3.0] - 2026-09-24
 
