@@ -56,12 +56,10 @@ Get started
 <span class="es-mono">admin@mgmt-01 — bash</span>
 <span style="width: 47px;"></span>
 </div>
-<div class="es-term-body es-mono"><span class="t-c"># 1 — download the binary and run it</span>
-<span class="t-p">$</span> curl -fLo easydc https://github.com/easysysio/EasyDC/\
-    releases/latest/download/easydc-linux-x86_64
-<span class="t-p">$</span> chmod +x easydc &amp;&amp; ./easydc
-EasyDC running on http://0.0.0.0:3000
-<span class="t-c"># 2 — create the admin, then add your DC</span>
+<div class="es-term-body es-mono"><span class="t-c"># Debian / Ubuntu, with the EasySYS repository added</span>
+<span class="t-p">$</span> sudo apt install easydc
+<span class="t-p">$</span> sudo systemctl enable --now easydc
+<span class="t-c"># create the admin, then add your DC</span>
 <span class="t-ok">→</span> http://mgmt-01:3000/setup</div>
 <div class="es-term-meta">
 <div><div class="es-term-meta-label">Web UI</div><div class="es-term-meta-value es-mono">:3000</div></div>
@@ -73,11 +71,12 @@ EasyDC running on http://0.0.0.0:3000
 </div>
 <div class="es-strip">
 <div class="es-wrap es-strip-inner">
-<span class="es-strip-label">Works with</span>
+<span class="es-strip-label">Packaged for</span>
 <div class="es-strip-items">
-<span>Samba AD domain controllers</span>
-<span>Several DCs, one dashboard</span>
-<span>systemd</span>
+<span>Debian / Ubuntu</span>
+<span>RHEL / Fedora</span>
+<span>openSUSE / SLES</span>
+<span>Air-gapped .deb / .rpm</span>
 <span class="es-mono">x86_64 · arm64</span>
 </div>
 </div>
@@ -274,37 +273,66 @@ EasyDC running on http://0.0.0.0:3000
 <div class="es-wrap es-install">
 <div>
 <span class="es-kicker-lg">Deploy</span>
-<h2 class="es-h2">Running in minutes, on any Linux host.</h2>
-<p class="es-desc">EasyDC is one binary for x86_64 or arm64. Run it in place to try it, or install it as a systemd service under its own user. The <a href="install/">installation guide</a> has the details.</p>
+<h2 class="es-h2">Running in minutes. Upgraded like everything else.</h2>
+<p class="es-desc">EasyDC installs from the signed EasySYS package repository, starts on boot under systemd, and upgrades through the package manager you already use. Already running it by hand? The package moves it over for you. The <a href="install/">installation guide</a> has the details.</p>
 <div class="es-steps">
-<div class="es-step"><span class="es-step-num es-mono">1</span><div><div class="es-step-title">Download the binary</div><div class="es-step-text">From the GitHub releases, for x86_64 or arm64.</div></div></div>
-<div class="es-step"><span class="es-step-num es-mono">2</span><div><div class="es-step-title">Run it, or enable the service</div><div class="es-step-text">It listens on port 3000 and keeps its state in one SQLite file.</div></div></div>
+<div class="es-step"><span class="es-step-num es-mono">1</span><div><div class="es-step-title">Add the signed repository</div><div class="es-step-text">apt, dnf and zypper channels for x86_64 and arm64, signed with the same key as the other EasySYS products.</div></div></div>
+<div class="es-step"><span class="es-step-num es-mono">2</span><div><div class="es-step-title">Install and enable the service</div><div class="es-step-text">It runs as its own user, listens on port 3000 and keeps its state in one SQLite file.</div></div></div>
 <div class="es-step"><span class="es-step-num es-mono">3</span><div><div class="es-step-title">Create your admin, add a DC</div><div class="es-step-text">Point it at a domain controller with an ldaps:// URL and a bind account.</div></div></div>
 </div>
 </div>
 <div class="es-terminal es-code">
 <input class="es-os-radio" type="radio" name="es-os" id="es-os-deb" checked />
 <input class="es-os-radio" type="radio" name="es-os" id="es-os-rpm" />
+<input class="es-os-radio" type="radio" name="es-os" id="es-os-suse" />
+<input class="es-os-radio" type="radio" name="es-os" id="es-os-air" />
 <div class="es-tabs">
-<label for="es-os-deb">Try it</label>
-<label for="es-os-rpm">systemd service</label>
+<label for="es-os-deb">Debian / Ubuntu</label>
+<label for="es-os-rpm">RHEL / Fedora</label>
+<label for="es-os-suse">openSUSE / SLES</label>
+<label for="es-os-air">Air-gapped</label>
 </div>
-<div class="es-panel es-panel--deb"><div class="es-term-body es-mono"><span class="t-c"># 1 — download for your architecture</span>
-<span class="t-p">$</span> curl -fLo easydc https://github.com/easysysio/EasyDC/\
-    releases/latest/download/easydc-linux-x86_64
-<span class="t-p">$</span> chmod +x easydc
-<span class="t-c"># 2 — run it in place</span>
-<span class="t-p">$</span> ./easydc
-<span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/setup</div></div>
-<div class="es-panel es-panel--rpm"><div class="es-term-body es-mono"><span class="t-c"># 1 — install the binary under its own user</span>
-<span class="t-p">$</span> sudo cp easydc /usr/local/bin/easydc
-<span class="t-p">$</span> sudo useradd -r -s /bin/false easydc
-<span class="t-p">$</span> sudo install -d -o easydc -g easydc /var/lib/easydc
-<span class="t-c"># 2 — add the unit from the guide, then start it</span>
+<div class="es-panel es-panel--deb"><div class="es-term-body es-mono"><span class="t-c"># 1 — trust the repository</span>
+<span class="t-p">$</span> curl -fsSL https://repo.easysys.io/easydc/stable/debian/key.gpg \
+    | sudo gpg --dearmor -o /usr/share/keyrings/easysys.gpg
+<span class="t-p">$</span> echo "deb [signed-by=/usr/share/keyrings/easysys.gpg] \
+    https://repo.easysys.io/easydc/stable/debian ./" \
+    | sudo tee /etc/apt/sources.list.d/easydc.list
+<span class="t-c"># 2 — install and start</span>
+<span class="t-p">$</span> sudo apt update &amp;&amp; sudo apt install easydc
 <span class="t-p">$</span> sudo systemctl enable --now easydc
 <span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/setup</div></div>
+<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<div class="es-panel es-panel--rpm"><div class="es-term-body es-mono"><span class="t-c"># 1 — trust the repository</span>
+<span class="t-p">$</span> sudo tee /etc/yum.repos.d/easydc.repo &gt;/dev/null &lt;&lt;'EOF'
+[easydc]
+name=EasyDC
+baseurl=https://repo.easysys.io/easydc/stable/redhat
+enabled=1
+gpgcheck=1
+gpgkey=https://repo.easysys.io/easydc/stable/redhat/key.gpg
+EOF
+<span class="t-c"># 2 — install and start</span>
+<span class="t-p">$</span> sudo dnf install easydc
+<span class="t-p">$</span> sudo systemctl enable --now easydc
+<span class="t-c"># 3 — create your admin</span>
+<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<div class="es-panel es-panel--suse"><div class="es-term-body es-mono"><span class="t-c"># 1 — trust the repository</span>
+<span class="t-p">$</span> sudo zypper addrepo -fg \
+    https://repo.easysys.io/easydc/stable/redhat easydc
+<span class="t-c"># 2 — install and start</span>
+<span class="t-p">$</span> sudo zypper install easydc
+<span class="t-p">$</span> sudo systemctl enable --now easydc
+<span class="t-c"># 3 — create your admin</span>
+<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<div class="es-panel es-panel--air"><div class="es-term-body es-mono"><span class="t-c"># 1 — download the package for your architecture</span>
+<span class="t-c">#     github.com/easysysio/EasyDC/releases</span>
+<span class="t-c"># 2 — install and start</span>
+<span class="t-p">$</span> sudo dpkg -i easydc_*_amd64.deb     <span class="t-c"># or _arm64.deb</span>
+<span class="t-p">$</span> sudo rpm  -i easydc-*.x86_64.rpm    <span class="t-c"># or .aarch64.rpm</span>
+<span class="t-p">$</span> sudo systemctl enable --now easydc
+<span class="t-c"># 3 — create your admin</span>
+<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
 </div>
 </div>
 </section>

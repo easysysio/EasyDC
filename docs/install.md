@@ -63,7 +63,9 @@ runs on others such as Alpine.
     Upgrades then mean downloading the next package by hand — the repository is the
     easier path where the host has network access.
 
-The keyring is shared with the other EasySYS products, which are signed with the same key.
+Already using another EasySYS product, such as EasyLog? The key is the same, so
+`/usr/share/keyrings/easysys.gpg` is already in place — add only the `easydc` repository
+line.
 
 ## What the package installs
 
@@ -81,6 +83,36 @@ A fresh install does not start the service — `systemctl enable --now easydc` d
 upgrade restarts the service if it was running, so the new version takes effect. Removing
 the package stops and disables the service but **leaves `/var/lib/easydc` and the
 `easydc` user in place**: they are your data.
+
+## Upgrading
+
+Upgrades come through the package manager like any other package:
+
+=== "Debian / Ubuntu"
+
+    ```bash
+    sudo apt update && sudo apt upgrade
+    ```
+
+=== "RHEL / Fedora"
+
+    ```bash
+    sudo dnf upgrade easydc
+    ```
+
+=== "openSUSE / SLES"
+
+    ```bash
+    sudo zypper update easydc
+    ```
+
+A running service is restarted onto the new version; a stopped one is left stopped.
+`easydc --version` shows which version is installed, and the version is also in the footer
+of every page once you are signed in.
+
+To remove EasyDC, `sudo apt remove easydc` or `sudo dnf remove easydc` stops and disables
+the service. `/var/lib/easydc` and the `easydc` user are kept — they hold your database —
+so delete them yourself if you are removing EasyDC for good.
 
 ### Moving from a manual install
 
