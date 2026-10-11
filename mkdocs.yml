@@ -95,10 +95,10 @@ extra:
   # accepts: the analytics script is not loaded, and no cookie is set, until
   # then. (The theme's fonts come from Google Fonts either way.)
   # "Cookie settings" in the footer opens the choice again. Same setup as
-  # easywaf.easysys.io.
+  # easywaf.easysys.io, with EasyDC's own property.
   analytics:
     provider: google
-    property: G-XLSZLEJQDE
+    property: G-3685Y0YCQK
   consent:
     title: Cookies
     description: >-
