@@ -382,7 +382,7 @@ EOF
 </div>
 <div class="es-wrap">
 <div class="es-footer-bottom">
-<span>© 2026 EasySYS · MIT licensed</span>
+<span>© 2026 EasySYS · MIT licensed · <a href="#__consent">Cookie settings</a></span>
 <span class="es-mono">easydc.easysys.io</span>
 </div>
 </div>

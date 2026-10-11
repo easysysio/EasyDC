@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- The documentation site counts visits with Google Analytics, only for visitors who accept the cookie banner. EasyDC itself is unchanged and sends nothing anywhere.
+
 ## [0.3.1] - 2026-09-30
 
 ### Fixed

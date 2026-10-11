@@ -14,7 +14,9 @@ site_url: https://easydc.easysys.io/
 site_description: Manage Samba Active Directory domain controllers from the browser, in a single Rust binary.
 repo_url: https://github.com/easysysio/EasyDC
 repo_name: easysysio/EasyDC
-copyright: MIT licensed · part of the EasySYS suite
+copyright: >
+  MIT licensed · part of the EasySYS suite ·
+  <a href="#__consent">Cookie settings</a>
 
 nav:
   - Home: index.md
@@ -89,6 +91,24 @@ plugins:
   - glightbox
 
 extra:
+  # Visits are counted with Google Analytics, and only for a visitor who
+  # accepts: the analytics script is not loaded, and no cookie is set, until
+  # then. (The theme's fonts come from Google Fonts either way.)
+  # "Cookie settings" in the footer opens the choice again. Same setup as
+  # easywaf.easysys.io.
+  analytics:
+    provider: google
+    property: G-XLSZLEJQDE
+  consent:
+    title: Cookies
+    description: >-
+      This site uses Google Analytics to count visits and see which pages are
+      read, so the documentation can be made better. Nothing is sent unless
+      you accept.
+    actions:
+      - accept
+      - reject
+      - manage
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/easysysio/EasyDC
@@ -102,3 +122,7 @@ extra_css:
   # instead of serving a cached copy.
   - stylesheets/easysys.css?v=1
   - stylesheets/easydc.css?v=1
+
+extra_javascript:
+  # Makes the cookie banner's Accept button accept after an earlier Reject.
+  - javascripts/consent.js?v=1
