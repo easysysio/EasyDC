@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.2] - 2026-10-16
 
 ### Security
 - Upgraded dependencies to clear every `cargo audit` advisory (8 vulnerabilities, 4 warnings), most of them from sqlx 0.7's unused TLS and MySQL code. sqlx is now 0.8 with SQLite support only.
