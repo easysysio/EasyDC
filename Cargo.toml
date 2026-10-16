@@ -11,7 +11,9 @@ repository = "https://github.com/easysysio/EasyDC"
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.5", features = ["fs", "trace"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "tls-rustls", "sqlite"] }
+# SQLite only: no TLS (meaningless for a local file), no query macros or other
+# drivers — every feature dropped is code that cannot carry an advisory.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "derive"] }
 ldap3 = "0.11"
 bcrypt = "0.15"
 serde = { version = "1.0", features = ["derive"] }

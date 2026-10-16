@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Upgraded dependencies to clear every `cargo audit` advisory (8 vulnerabilities, 4 warnings), most of them from sqlx 0.7's unused TLS and MySQL code. sqlx is now 0.8 with SQLite support only.
+
 ### Changed
 - The documentation site counts visits with Google Analytics, only for visitors who accept the cookie banner. EasyDC itself is unchanged and sends nothing anywhere.
 
