@@ -1,0 +1,84 @@
+# Continuous integration: every push to main and every pull request runs the
+# tests, clippy, the packaging script's tests, a dependency audit and a strict
+# docs build — so a regression is found when it is pushed, not when a release
+# is tagged. release.yml stays responsible for building and publishing.
+#
+# The audit also runs weekly on its own: advisories are published against code
+# that has not changed, and 0.3.2's eight were all found that way.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked
+
+      # Fails on clippy's error-level lints, which flag likely bugs — a loop
+      # that never loops, an operation that always yields zero. Style warnings
+      # are reported but do not fail the build.
+      - name: Clippy
+        run: cargo clippy --all-targets --locked
+
+      # /bin/sh on the runner is dash, the shell Debian runs package scripts with.
+      - name: Test the legacy-install migration
+        run: sh packaging/tests/migrate-legacy.sh
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
+
+  docs:
+    name: Docs build
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs-requirements.txt
+
+      - name: Install MkDocs
+        run: pip install -r docs-requirements.txt
+
+      # --strict turns a broken link or a missing page into a failure, the same
+      # check deploy-docs.sh runs before it replaces the live site.
+      - name: Build
+        run: mkdocs build --strict

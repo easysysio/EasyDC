@@ -21,8 +21,21 @@ permissions:
   contents: write
 
 jobs:
+  # The same tests CI runs on every push. A tag on a commit that fails them
+  # must not produce packages.
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --locked
+
   build:
     name: Build ${{ matrix.arch }} packages
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
