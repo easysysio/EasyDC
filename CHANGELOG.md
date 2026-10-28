@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.3] - 2026-10-28
 
 ### Fixed
 - `easydc` ignored everything after `--port`, so a mistyped option there was never reported. Every argument is checked now.
