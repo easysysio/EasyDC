@@ -1322,9 +1322,14 @@ mod policy_tests {
 
     #[test]
     fn complexity_is_the_first_bit_of_pwd_properties() {
-        assert_eq!(0i64 & PWD_COMPLEX, 0, "0 = complexity off");
-        assert_ne!(1i64 & PWD_COMPLEX, 0, "1 = complexity required");
-        // Other bits set without bit 0 still means complexity off.
-        assert_eq!(0x10i64 & PWD_COMPLEX, 0);
+        // pwdProperties values as the directory stores them.
+        let complexity_required = |props: i64| (props & PWD_COMPLEX) != 0;
+        assert_eq!(PWD_COMPLEX, 1, "DOMAIN_PASSWORD_COMPLEX is bit 0");
+        assert!(!complexity_required(0), "0 = complexity off");
+        assert!(complexity_required(1), "1 = complexity required");
+        // Other flags set without bit 0 still mean complexity off, and with
+        // it, on.
+        assert!(!complexity_required(0x10));
+        assert!(complexity_required(0x11));
     }
 }

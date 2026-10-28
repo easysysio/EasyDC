@@ -213,6 +213,9 @@ fn version_line() -> String {
 /// Port precedence: the flag, then EASYDC_PORT, then 3000. Kept separate from
 /// main so the parsing is testable without binding a socket.
 fn parse_port<I: AsRef<str>>(args: &[I], env_port: Option<String>) -> Result<u16, String> {
+    // Every argument is checked: anything unrecognised is an error wherever it
+    // appears, and a repeated --port takes the last value, as most tools do.
+    let mut port = None;
     let mut args = args.iter().map(|a| a.as_ref());
     while let Some(arg) = args.next() {
         let value = match arg {
@@ -223,7 +226,10 @@ fn parse_port<I: AsRef<str>>(args: &[I], env_port: Option<String>) -> Result<u16
             a if a.starts_with("--port=") => a.trim_start_matches("--port=").to_string(),
             a => return Err(format!("unknown argument '{}'", a)),
         };
-        return parse_port_value(&value, "--port");
+        port = Some(parse_port_value(&value, "--port")?);
+    }
+    if let Some(p) = port {
+        return Ok(p);
     }
 
     match env_port {
@@ -303,6 +309,21 @@ mod port_tests {
         assert_eq!(port(&["--port", "9000"], Some("8080")), Ok(9000));
         assert_eq!(port(&["--port=9000"], Some("8080")), Ok(9000));
         assert_eq!(port(&["-p", "9000"], Some("8080")), Ok(9000));
+    }
+
+    /// The loop used to return on its first argument, so anything after
+    /// --port was silently ignored.
+    #[test]
+    fn arguments_after_the_port_are_still_checked() {
+        assert!(port(&["--port", "8080", "--verbose"], None).is_err());
+        assert!(port(&["--port", "8080", "junk"], None).is_err());
+        assert!(port(&["--port", "8080", "--port", "nope"], None).is_err());
+    }
+
+    #[test]
+    fn a_repeated_port_takes_the_last_value() {
+        assert_eq!(port(&["--port", "8080", "--port", "9090"], None), Ok(9090));
+        assert_eq!(port(&["-p", "8080", "--port=9090"], Some("7070")), Ok(9090));
     }
 
     #[test]
