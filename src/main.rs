@@ -1,3 +1,4 @@
+mod assets;
 mod auth;
 mod db;
 mod handlers;
@@ -81,7 +82,8 @@ async fn main() {
 
     let public = Router::new()
         .route("/setup", get(handlers::setup::get_setup).post(handlers::setup::post_setup))
-        .route("/login", get(handlers::auth_handlers::get_login).post(handlers::auth_handlers::post_login));
+        .route("/login", get(handlers::auth_handlers::get_login).post(handlers::auth_handlers::post_login))
+        .route("/static/*path", get(assets::serve));
 
     let protected = Router::new()
         .route("/", get(handlers::servers::dashboard))
