@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.4] - 2026-10-29
 
 ### Changed
 - Bootstrap and its icons are built into the binary instead of loaded from a CDN, so EasyDC works on networks with no internet access.
