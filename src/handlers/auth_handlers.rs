@@ -1,6 +1,6 @@
 use axum::{
-    extract::State,
-    http::{header, HeaderValue},
+    extract::{Query, State},
+    http::{header, HeaderMap, HeaderValue},
     response::{Html, IntoResponse, Redirect},
     Form,
 };
@@ -8,7 +8,10 @@ use serde::Deserialize;
 use tera::Context;
 use uuid::Uuid;
 
-use crate::{auth::extract_session_cookie, db, AppState};
+use crate::{
+    auth::{clear_session_cookie, extract_session_cookie, session_cookie, via_https},
+    db, AppState,
+};
 
 #[derive(Deserialize)]
 pub struct LoginForm {
@@ -16,16 +19,28 @@ pub struct LoginForm {
     pub password: String,
 }
 
-pub async fn get_login(State(state): State<AppState>) -> impl IntoResponse {
+#[derive(Deserialize)]
+pub struct LoginQuery {
+    expired: Option<String>,
+}
+
+pub async fn get_login(
+    State(state): State<AppState>,
+    Query(q): Query<LoginQuery>,
+) -> impl IntoResponse {
     if !db::has_users(&state.db).await.unwrap_or(true) {
         return Redirect::to("/setup").into_response();
     }
-    let ctx = Context::new();
+    let mut ctx = Context::new();
+    if q.expired.is_some() {
+        ctx.insert("notice", "Your session expired. Sign in again.");
+    }
     Html(state.tera.render("login.html", &ctx).unwrap_or_default()).into_response()
 }
 
 pub async fn post_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> impl IntoResponse {
     use sqlx::Row;
@@ -49,21 +64,21 @@ pub async fn post_login(
         return Html(state.tera.render("login.html", &ctx).unwrap_or_default()).into_response();
     }
 
-    let token = Uuid::new_v4().to_string();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    db::purge_expired_sessions(&state.db).await;
 
-    sqlx::query("INSERT INTO sessions (token, created_at, username) VALUES (?, ?, ?)")
+    let token = Uuid::new_v4().to_string();
+    let now = db::unix_now();
+
+    sqlx::query("INSERT INTO sessions (token, created_at, last_seen, username) VALUES (?, ?, ?, ?)")
         .bind(&token)
+        .bind(now)
         .bind(now)
         .bind(&form.username)
         .execute(&state.db)
         .await
         .unwrap();
 
-    let cookie = format!("session={}; Path=/; HttpOnly; SameSite=Strict", token);
+    let cookie = session_cookie(&token, via_https(&headers));
     let mut response = Redirect::to("/").into_response();
     response
         .headers_mut()
@@ -79,9 +94,9 @@ pub async fn logout(State(state): State<AppState>, req: axum::extract::Request) 
             .await;
     }
     let mut response = Redirect::to("/login").into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static("session=; Path=/; HttpOnly; Max-Age=0"),
-    );
+    let secure = via_https(req.headers());
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, clear_session_cookie(secure));
     response
 }

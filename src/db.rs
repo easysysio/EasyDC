@@ -47,6 +47,16 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
+    // Migration: the time of each session's latest request, for the idle
+    // timeout. Older sessions count from their sign-in.
+    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN last_seen INTEGER")
+        .execute(pool)
+        .await;
+    sqlx::query("UPDATE sessions SET last_seen = created_at WHERE last_seen IS NULL")
+        .execute(pool)
+        .await?;
+    purge_expired_sessions(pool).await;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +73,26 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     Ok(())
+}
+
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Delete every session past its idle or absolute limit. A request on an
+/// expired session is refused either way; this only keeps the table small.
+pub async fn purge_expired_sessions(pool: &SqlitePool) {
+    let now = unix_now();
+    let _ = sqlx::query(
+        "DELETE FROM sessions WHERE created_at <= ? OR COALESCE(last_seen, created_at) <= ?",
+    )
+    .bind(now - crate::auth::MAX_SESSION_AGE)
+    .bind(now - crate::auth::IDLE_TIMEOUT)
+    .execute(pool)
+    .await;
 }
 
 // ── audit log ────────────────────────────────────────────────────────────────
@@ -326,7 +356,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO sessions (token, created_at, username) VALUES ('current', 0, 'alice')")
+        sqlx::query("INSERT INTO sessions (token, created_at, username) VALUES ('current', ?, 'alice')")
+            .bind(unix_now())
             .execute(&pool)
             .await
             .unwrap();
@@ -338,5 +369,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(legacy_left, 0);
+    }
+
+    /// Startup clears sessions past either limit and keeps live ones; sessions
+    /// from before last_seen existed count from their sign-in.
+    #[tokio::test]
+    async fn expired_sessions_are_purged_at_startup() {
+        let pool = pool().await;
+        let now = unix_now();
+        for (token, created, seen) in [
+            ("live", now - 3600, Some(now - 60)),
+            ("idle", now - 10 * 3600, Some(now - 9 * 3600)),
+            ("old", now - 25 * 3600, Some(now - 60)),
+            ("legacy_recent", now - 3600, None),
+            ("legacy_stale", now - 9 * 3600, None),
+        ] {
+            sqlx::query("INSERT INTO sessions (token, created_at, username, last_seen) VALUES (?, ?, 'alice', ?)")
+                .bind(token)
+                .bind(created)
+                .bind(seen)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        init_tables(&pool).await.unwrap();
+        let mut left: Vec<String> = sqlx::query_scalar("SELECT token FROM sessions")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        left.sort();
+        assert_eq!(left, ["legacy_recent", "live"]);
+        let seen: i64 = sqlx::query_scalar("SELECT last_seen FROM sessions WHERE token = 'legacy_recent'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(seen, now - 3600);
     }
 }

@@ -36,8 +36,10 @@ or writes the directory directly. Nothing runs on the domain controllers themsel
 - **Bind passwords** for the servers you add are stored in the EasyDC database. Restrict
   the file to the service user.
 - **Admin passwords** are stored as bcrypt hashes. Sessions use an `HttpOnly`,
-  `SameSite=Strict` cookie.
-  Changing a password, or removing an administrator, drops that account's other sessions.
+  `SameSite=Strict` cookie, marked `Secure` when the proxy reports HTTPS.
+- **Sessions end** after 8 hours without activity, and 24 hours after sign-in however
+  active. Changing a password, or removing an administrator, drops that account's other
+  sessions.
 - The web UI is **plain HTTP**; publish it through a TLS reverse proxy (see
   [Installation](install.md#put-tls-in-front-of-it)).
 - **Password writes** require LDAPS; Samba refuses them over plain LDAP.

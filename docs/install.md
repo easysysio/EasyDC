@@ -217,6 +217,10 @@ EasyDC serves **plain HTTP** on port 3000. Anywhere beyond a trusted management 
 publish it through a TLS reverse proxy — [EasyWAF](https://easywaf.easysys.io), Nginx or
 Caddy all work — and firewall port 3000 to the proxy.
 
+Have the proxy send `X-Forwarded-Proto` (Caddy does by default; in Nginx add
+`proxy_set_header X-Forwarded-Proto $scheme;`). EasyDC then marks its session cookie
+`Secure`, so the browser never sends it over plain HTTP.
+
 !!! note "Two separate TLS links"
     The proxy protects the browser → EasyDC connection. The EasyDC → domain controller
     connection is protected by using an `ldaps://` URL when you add the server.

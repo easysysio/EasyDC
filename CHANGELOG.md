@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Security
+- Sessions now end after 8 hours without activity, and 24 hours after sign-in. They used to last until you logged out.
+- Behind an HTTPS reverse proxy that sends `X-Forwarded-Proto`, the session cookie is marked `Secure`.
+
 ## [0.3.4] - 2026-10-29
 
 ### Changed
