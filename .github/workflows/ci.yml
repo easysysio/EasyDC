@@ -39,11 +39,11 @@ jobs:
       - name: Test
         run: cargo test --locked
 
-      # Fails on clippy's error-level lints, which flag likely bugs — a loop
-      # that never loops, an operation that always yields zero. Style warnings
-      # are reported but do not fail the build.
+      # Any clippy warning fails the build, so they cannot pile up. A new Rust
+      # release can add lints and turn this red on a push that changed nothing
+      # related: fix the new warnings, don't silence the check.
       - name: Clippy
-        run: cargo clippy --all-targets --locked
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       # /bin/sh on the runner is dash, the shell Debian runs package scripts with.
       - name: Test the legacy-install migration
