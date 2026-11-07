@@ -290,7 +290,7 @@ async fn load_dcs(conn: &mut ldap3::Ldap, config_dn: &str) -> LdapResult<Vec<DcI
             .unwrap_or_default();
 
         // The parent of the NTDS Settings object is the server object.
-        let server_dn = e.dn.splitn(2, ',').nth(1).unwrap_or("").to_string();
+        let server_dn = e.dn.split_once(',').map(|(_, parent)| parent).unwrap_or("").to_string();
         let dns_host_name = read_one(conn, &server_dn, vec!["dNSHostName"])
             .await
             .map(|s| attr_ci(&s, "dNSHostName"))
@@ -299,7 +299,7 @@ async fn load_dcs(conn: &mut ldap3::Ldap, config_dn: &str) -> LdapResult<Vec<DcI
         dcs.push(DcInfo { name, site, dns_host_name, guid });
     }
 
-    dcs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dcs.sort_by_key(|a| a.name.to_lowercase());
     Ok(dcs)
 }
 
@@ -368,10 +368,10 @@ async fn load_dns(conn: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<HashMap<S
 
             let types = map.entry(fqdn).or_default();
             for r in raw {
-                if let Some((rtype, _, _)) = ldap::parse_dns_record_binary(&r) {
-                    if !types.contains(&rtype) {
-                        types.push(rtype);
-                    }
+                if let Some((rtype, _, _)) = ldap::parse_dns_record_binary(&r)
+                    && !types.contains(&rtype)
+                {
+                    types.push(rtype);
                 }
             }
         }

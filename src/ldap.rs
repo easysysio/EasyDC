@@ -178,7 +178,7 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
         .filter(|u| !u.username.is_empty())
         .collect();
 
-    users.sort_by(|a, b| a.username.to_lowercase().cmp(&b.username.to_lowercase()));
+    users.sort_by_key(|a| a.username.to_lowercase());
     Ok(users)
 }
 
@@ -499,7 +499,7 @@ pub async fn list_groups(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Ve
         .filter(|g| !g.name.is_empty())
         .collect();
 
-    groups.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    groups.sort_by_key(|a| a.name.to_lowercase());
     Ok(groups)
 }
 
@@ -654,7 +654,7 @@ pub async fn list_group_members(
         }
     }
 
-    members.sort_by(|a, b| a.username.to_lowercase().cmp(&b.username.to_lowercase()));
+    members.sort_by_key(|a| a.username.to_lowercase());
     Ok(members)
 }
 
@@ -778,7 +778,7 @@ pub async fn list_computers(
         .filter(|c| !c.name.is_empty())
         .collect();
 
-    computers.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    computers.sort_by_key(|a| a.name.to_lowercase());
     Ok(computers)
 }
 
@@ -827,7 +827,7 @@ fn to_hex(bytes: &[u8]) -> String {
 }
 
 fn from_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
@@ -1055,11 +1055,10 @@ pub async fn list_dns_zones(
             .search(base, Scope::OneLevel, "(objectClass=dnsZone)", vec!["dc"])
             .await
             .map(|r| r.success())
+            && !e.is_empty()
         {
-            if !e.is_empty() {
-                entries = e;
-                break;
-            }
+            entries = e;
+            break;
         }
     }
 
@@ -1101,10 +1100,9 @@ pub async fn find_zone_dn(
             .search(base, Scope::OneLevel, &filter, vec!["dc"])
             .await
             .map(|r| r.success())
+            && let Some(e) = entries.into_iter().next()
         {
-            if let Some(e) = entries.into_iter().next() {
-                return Ok(SearchEntry::construct(e).dn);
-            }
+            return Ok(SearchEntry::construct(e).dn);
         }
     }
     Err(format!("Zone '{}' not found", zone_name))
@@ -1321,7 +1319,7 @@ pub async fn list_ous_tree(
         .filter(|o| !o.name.is_empty())
         .collect();
 
-    nodes.sort_by(|a, b| dn_tree_sort_key(&a.dn).cmp(&dn_tree_sort_key(&b.dn)));
+    nodes.sort_by_key(|a| dn_tree_sort_key(&a.dn));
     Ok(nodes)
 }
 
@@ -1458,7 +1456,7 @@ pub async fn list_gpos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<
         .filter(|g| !g.guid.is_empty())
         .collect();
 
-    gpos.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+    gpos.sort_by_key(|a| a.display_name.to_lowercase());
     Ok(gpos)
 }
 
@@ -1557,7 +1555,7 @@ pub async fn list_ous(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<L
         .filter(|o| !o.name.is_empty())
         .collect();
 
-    ous.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    ous.sort_by_key(|a| a.name.to_lowercase());
 
     // Domain root goes first
     ous.insert(0, LdapOu {
@@ -2125,10 +2123,9 @@ pub async fn dns_partition_dn(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResu
             .search(base, Scope::Base, "(objectClass=*)", vec!["dn"])
             .await
             .map(|r| r.success())
+            && !entries.is_empty()
         {
-            if !entries.is_empty() {
-                return Ok(base.clone());
-            }
+            return Ok(base.clone());
         }
     }
     Err("Could not find the DNS partition on this server".to_string())

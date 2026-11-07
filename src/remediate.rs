@@ -128,7 +128,7 @@ pub async fn stale_computers(conn: &mut ldap3::Ldap, base_dn: &str) -> LdapResul
             });
         }
     }
-    stale.sort_by(|a, b| b.days.cmp(&a.days));
+    stale.sort_by_key(|c| std::cmp::Reverse(c.days));
     Ok(StaleScan { enabled, stale })
 }
 
@@ -228,10 +228,10 @@ pub async fn privileged_members(conn: &mut ldap3::Ldap, base_dn: &str) -> LdapRe
                         "(memberOf:1.2.840.113556.1.4.1941:={})",
                         ldap::ldap_escape(&group.dn)
                     );
-                    if let Ok(hit) = search(conn, &m, Scope::Base, &inside, vec!["cn"]).await {
-                        if !hit.is_empty() {
-                            via.push((m.clone(), rdn_value(&m)));
-                        }
+                    if let Ok(hit) = search(conn, &m, Scope::Base, &inside, vec!["cn"]).await
+                        && !hit.is_empty()
+                    {
+                        via.push((m.clone(), rdn_value(&m)));
                     }
                 }
             }
@@ -482,10 +482,11 @@ pub async fn plan(conn: &mut ldap3::Ldap, base_dn: &str, kind: &str, keys: &[Str
             }
         }
         "zero_machine_quota" => {
-            if let Some(q) = machine_account_quota(conn, base_dn).await? {
-                if q > 0 && wanted.contains(QUOTA_KEY) {
-                    changes.push(Change::ZeroQuota { base_dn: base_dn.to_string(), from: q });
-                }
+            if let Some(q) = machine_account_quota(conn, base_dn).await?
+                && q > 0
+                && wanted.contains(QUOTA_KEY)
+            {
+                changes.push(Change::ZeroQuota { base_dn: base_dn.to_string(), from: q });
             }
         }
         other => return Err(format!("Unknown fix '{}'", other)),
