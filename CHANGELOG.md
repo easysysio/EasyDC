@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.5] - 2026-11-07
 
 ### Security
 - Sessions now end after 8 hours without activity, and 24 hours after sign-in. They used to last until you logged out.
