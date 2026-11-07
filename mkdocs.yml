@@ -6,7 +6,7 @@
 # same tokens in stylesheets/easydc.css. The pages live beside the code they
 # describe, so a feature and its documentation land in one commit.
 #
-# Build:   pip install -r docs-requirements.txt && mkdocs serve
+# Build:   pip install --require-hashes -r docs-requirements.txt && mkdocs serve
 # Deploy:  ./deploy-docs.sh   (on the host that serves the site)
 
 site_name: EasyDC

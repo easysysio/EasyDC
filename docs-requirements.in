@@ -1,0 +1,7 @@
+# Top-level packages for the documentation site. The locked list CI
+# installs is docs-requirements.txt; regenerate it after editing this file:
+#
+#   uv pip compile docs-requirements.in --universal --python-version 3.12 \
+#       --generate-hashes --only-binary :all: -o docs-requirements.txt
+mkdocs-material
+mkdocs-glightbox
