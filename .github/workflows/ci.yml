@@ -3,9 +3,6 @@
 # docs build — so a regression is found when it is pushed, not when a release
 # is tagged. release.yml stays responsible for building and publishing.
 #
-# Actions are pinned to full commit hashes, with the version in a comment: a
-# tag can be moved to other code, a commit cannot.
-#
 # The audit also runs weekly on its own: advisories are published against code
 # that has not changed, and 0.3.2's eight were all found that way.
 name: CI
@@ -31,14 +28,13 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: clippy
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: cargo test --locked
@@ -57,9 +53,9 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@v4
 
-      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+      - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
 
@@ -71,9 +67,9 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip

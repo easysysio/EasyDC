@@ -28,11 +28,9 @@ jobs:
     name: Test
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --locked
 
@@ -53,7 +51,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             binary: easydc-linux-arm64
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@v4
 
       # A v0.2.4 tag on a tree whose Cargo.toml still says 0.2.3 would publish
       # easydc_0.2.3 packages under a v0.2.4 release, and the package repos
@@ -73,17 +71,16 @@ jobs:
       - name: Test the legacy-install migration
         run: sh packaging/tests/migrate-legacy.sh
 
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
       # The same zig release the static build was verified with locally.
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - uses: mlugg/setup-zig@v2
         with:
           version: 0.14.1
 
@@ -129,7 +126,7 @@ jobs:
           cp target/${{ matrix.target }}/release/EasyDC "dist/${{ matrix.binary }}"
           ls -l dist
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.arch }}
           path: dist/*
@@ -142,10 +139,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@v4
 
       - name: Download all packages
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
@@ -165,7 +162,7 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Publish release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@v2
         with:
           name: EasyDC ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
