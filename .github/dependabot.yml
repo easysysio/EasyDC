@@ -1,0 +1,19 @@
+# Keeps the workflows' pinned actions current. Every action is pinned to a
+# commit hash with its version in a comment; Dependabot updates both and opens
+# one pull request per week with everything that moved, so CI tests the new
+# versions before they are merged.
+#
+# Rust crates are not listed here: `cargo audit` in CI flags the ones with
+# advisories, and they are upgraded deliberately.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
