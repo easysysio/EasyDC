@@ -28,7 +28,7 @@ jobs:
     name: Test
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
@@ -51,7 +51,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             binary: easydc-linux-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A v0.2.4 tag on a tree whose Cargo.toml still says 0.2.3 would publish
       # easydc_0.2.3 packages under a v0.2.4 release, and the package repos
@@ -126,7 +126,7 @@ jobs:
           cp target/${{ matrix.target }}/release/EasyDC "dist/${{ matrix.binary }}"
           ls -l dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.arch }}
           path: dist/*
@@ -139,10 +139,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -162,7 +162,7 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: EasyDC ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
