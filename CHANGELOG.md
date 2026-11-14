@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.6] - 2026-11-14
 
 ### Added
 - DNS records can be edited in place: value and TTL, saved in one step.
