@@ -1796,6 +1796,19 @@ pub async fn delete_dns_record(
         .map_err(|e| e.to_string())?
         .success()
         .map_err(|e| format!("Failed to delete record: {}", e))?;
+
+    // That was the name's last record: remove the name too, or an empty
+    // dnsNode stays in the directory. Best effort — the record is gone
+    // either way.
+    let now_empty = ldap
+        .search(&node_dn, Scope::Base, "(&(objectClass=dnsNode)(!(dnsRecord=*)))", vec!["dc"])
+        .await
+        .ok()
+        .and_then(|r| r.success().ok())
+        .is_some_and(|(e, _)| !e.is_empty());
+    if now_empty {
+        let _ = ldap.delete(&node_dn).await;
+    }
     Ok(())
 }
 

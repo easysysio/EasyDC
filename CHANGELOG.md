@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - MX priorities were stored byte-swapped, so DNS served priority 10 as 2560. Existing MX records made with EasyDC show their real (wrong) priority now; edit them to fix it.
 - SRV records showed wrong numbers, for example `0 25600 34049` instead of `0 100 389`.
 - A TXT value longer than 255 bytes was stored corrupted. It is split into several strings now.
+- Deleting the last record of a name left an empty entry for that name in the directory. The name is removed with its last record now.
 - Hostnames in CNAME, NS, PTR, MX and SRV records are checked. An invalid one, such as `a..example.com`, used to be stored as a corrupt record.
 
 ### Security
