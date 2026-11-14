@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Security
+- Updated `rustix` to clear RUSTSEC-2026-0486.
+- A new SQLite advisory (RUSTSEC-2026-0459) needs a crafted file planted next to the database, in a folder only the `easydc` user can write, so it does not affect EasyDC. It is ignored until sqlx ships the fixed SQLite.
+
 ## [0.3.5] - 2026-11-07
 
 ### Security
