@@ -83,10 +83,17 @@
                     <td class="text-muted small">{{ record.ttl }}s</td>
                     <td class="text-end">
                         {% if record.record_type != "SOA" %}
+                        <button type="button" class="btn btn-outline-secondary btn-sm" title="Edit record"
+                            data-bs-toggle="modal" data-bs-target="#editRecordModal"
+                            data-node="{{ node.name }}" data-type="{{ record.record_type }}"
+                            data-value="{{ record.value }}" data-ttl="{{ record.ttl }}"
+                            data-raw="{{ record.raw_hex }}">
+                            <i class="bi bi-pencil"></i>
+                        </button>
                         <form method="post"
                             action="/servers/{{ server.id }}/dns/{{ zone_name }}/delete"
                             class="d-inline"
-                            onsubmit="return confirm('Delete {{ record.record_type }} record for {{ node.name }}?')">
+                            data-confirm="Delete {{ record.record_type }} record for {{ node.name }}?">
                             <input type="hidden" name="node_name" value="{{ node.name }}">
                             <input type="hidden" name="raw_hex" value="{{ record.raw_hex }}">
                             <button type="submit" class="btn btn-outline-danger btn-sm" title="Delete record">
@@ -132,6 +139,7 @@
                             <option value="TXT">TXT — Text record</option>
                             <option value="PTR">PTR — Reverse DNS</option>
                             <option value="NS">NS — Name server</option>
+                            <option value="SRV">SRV — Service location</option>
                         </select>
                     </div>
                     <div class="mb-3">
@@ -155,6 +163,51 @@
     </div>
 </div>
 
+<!-- ── Edit Record Modal ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="editRecordModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Edit DNS Record</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="/servers/{{ server.id }}/dns/{{ zone_name }}/edit">
+                <input type="hidden" name="node_name" id="editNode">
+                <input type="hidden" name="raw_hex" id="editRaw">
+                <div class="modal-body">
+                    <div class="row mb-3">
+                        <div class="col-8">
+                            <label class="form-label">Name</label>
+                            <input type="text" class="form-control font-monospace" id="editNodeShown" disabled>
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Type</label>
+                            <input type="text" class="form-control" id="editType" disabled>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Value <span class="text-danger">*</span></label>
+                        <input type="text" name="value" class="form-control font-monospace" id="editValue" required>
+                        <div class="form-text" id="editValueHint"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">TTL (seconds)</label>
+                        <input type="number" name="ttl" class="form-control" id="editTtl" min="0" max="2147483647" required>
+                    </div>
+                    <div class="form-text">
+                        The record is replaced in one step: if anything fails, the old record stays.
+                        To change the name or type, add a new record and delete this one.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
 const valueHints = {
     A:     'IPv4 address, e.g. 192.168.1.10',
@@ -164,6 +217,7 @@ const valueHints = {
     TXT:   'Text value, e.g. v=spf1 include:example.com ~all',
     PTR:   'Target FQDN, e.g. host.example.com',
     NS:    'Name server hostname, e.g. ns1.example.com',
+    SRV:   'Priority, weight, port and target, e.g. 0 100 389 dc1.example.com',
 };
 const nodeHints = {
     PTR:   'Last octet only, e.g. 53 (not the full IP or FQDN)',
@@ -173,6 +227,7 @@ const nodeHints = {
     MX:    '@ for zone apex',
     TXT:   '@ for zone apex, or a label',
     NS:    '@ for zone apex',
+    SRV:   'Service and protocol, e.g. _ldap._tcp or _sip._udp',
 };
 document.getElementById('recordTypeSelect').addEventListener('change', function () {
     const vHint = valueHints[this.value] || '';
@@ -181,7 +236,27 @@ document.getElementById('recordTypeSelect').addEventListener('change', function 
 
     const nHint = nodeHints[this.value] || '@ for zone apex, or a relative label like www';
     document.getElementById('nodeNameHint').textContent = nHint;
-    document.getElementById('nodeNameInput').placeholder = this.value === 'PTR' ? '53' : '@';
+    document.getElementById('nodeNameInput').placeholder =
+        this.value === 'PTR' ? '53' : this.value === 'SRV' ? '_ldap._tcp' : '@';
+});
+
+// Fill the edit dialog from the row's button.
+document.getElementById('editRecordModal').addEventListener('show.bs.modal', function (event) {
+    const b = event.relatedTarget.dataset;
+    document.getElementById('editNode').value = b.node;
+    document.getElementById('editNodeShown').value = b.node;
+    document.getElementById('editRaw').value = b.raw;
+    document.getElementById('editType').value = b.type;
+    document.getElementById('editValue').value = b.value;
+    document.getElementById('editTtl').value = b.ttl;
+    document.getElementById('editValueHint').textContent = valueHints[b.type] || '';
+});
+
+// Delete confirmations read their text from data-confirm, never from script.
+document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+        if (!confirm(form.dataset.confirm)) event.preventDefault();
+    });
 });
 </script>
 

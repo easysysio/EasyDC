@@ -29,9 +29,19 @@ accounts for machines that are gone.
 ## DNS
 
 Browse the domain's **AD-integrated DNS zones** — the ones stored in the directory under
-`DC=DomainDnsZones` — and add or delete records:
+`DC=DomainDnsZones` — and add, edit or delete records:
 
-`A` · `AAAA` · `CNAME` · `MX` · `TXT` · `NS` · `PTR`
+`A` · `AAAA` · `CNAME` · `MX` · `TXT` · `NS` · `PTR` · `SRV`
+
+An **SRV** record's name is the service and protocol, such as `_sip._udp`, and its value
+is priority, weight, port and target: `10 50 5060 sip.example.com`. A **TXT** value longer
+than 255 bytes, such as a DKIM key, is split into several strings, which resolvers join.
+
+**Edit** (the pencil) changes a record's value and TTL in one step: if the save fails, the
+old record stays. Everything else about the record is kept, including whether a client
+registered it dynamically. To change a record's name or type, add a new one and delete the
+old. If someone else changed the record after your page loaded, nothing is saved and you
+are told to check again.
 
 Internal zones such as `_msdcs` and `RootDNSServers` are hidden from the list. Errors
 returned by the server are shown on the page rather than swallowed.

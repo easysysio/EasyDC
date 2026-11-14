@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- DNS records can be edited in place: value and TTL, saved in one step.
+- SRV records can be created.
+
+### Fixed
+- MX priorities were stored byte-swapped, so DNS served priority 10 as 2560. Existing MX records made with EasyDC show their real (wrong) priority now; edit them to fix it.
+- SRV records showed wrong numbers, for example `0 25600 34049` instead of `0 100 389`.
+- A TXT value longer than 255 bytes was stored corrupted. It is split into several strings now.
+- Hostnames in CNAME, NS, PTR, MX and SRV records are checked. An invalid one, such as `a..example.com`, used to be stored as a corrupt record.
+
 ### Security
 - Updated `rustix` to clear RUSTSEC-2026-0486.
 - A new SQLite advisory (RUSTSEC-2026-0459) needs a crafted file planted next to the database, in a folder only the `easydc` user can write, so it does not affect EasyDC. It is ignored until sqlx ships the fixed SQLite.

@@ -863,6 +863,25 @@ fn encode_dns_rpc_name(name: &str) -> Vec<u8> {
     out
 }
 
+/// A hostname the record formats can hold: labels of 1 to 63 bytes, 253 in
+/// all. "@" and "." (the zone apex / no target) are allowed.
+fn check_dns_name(name: &str) -> LdapResult<()> {
+    let bare = name.trim_end_matches('.');
+    if bare.is_empty() || bare == "@" {
+        return Ok(());
+    }
+    if bare.len() > 253 {
+        return Err(format!("'{}' is longer than 253 characters", name));
+    }
+    if bare.split('.').any(|l| l.is_empty() || l.len() > 63) {
+        return Err(format!("'{}' is not a valid hostname: each part must be 1 to 63 characters", name));
+    }
+    if bare.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!("'{}' is not a valid hostname", name));
+    }
+    Ok(())
+}
+
 fn parse_dns_rpc_name(data: &[u8]) -> String {
     if data.len() < 2 {
         return ".".to_string();
@@ -932,16 +951,17 @@ pub(crate) fn parse_dns_record_binary(data: &[u8]) -> Option<(String, String, u3
         5 => ("CNAME".to_string(), parse_dns_rpc_name(payload)),
         6 => ("SOA".to_string(), "(zone authority)".to_string()),
         12 => ("PTR".to_string(), parse_dns_rpc_name(payload)),
+        // MX and SRV numbers are big-endian (Samba's dnsp.idl).
         15 if payload.len() >= 2 => {
-            let priority = u16::from_le_bytes([payload[0], payload[1]]);
+            let priority = u16::from_be_bytes([payload[0], payload[1]]);
             let name = parse_dns_rpc_name(&payload[2..]);
             ("MX".to_string(), format!("{} {}", priority, name))
         }
         16 => ("TXT".to_string(), parse_txt_bytes(payload)),
         33 if payload.len() >= 6 => {
-            let priority = u16::from_le_bytes([payload[0], payload[1]]);
-            let weight = u16::from_le_bytes([payload[2], payload[3]]);
-            let port = u16::from_le_bytes([payload[4], payload[5]]);
+            let priority = u16::from_be_bytes([payload[0], payload[1]]);
+            let weight = u16::from_be_bytes([payload[2], payload[3]]);
+            let port = u16::from_be_bytes([payload[4], payload[5]]);
             let target = parse_dns_rpc_name(&payload[6..]);
             ("SRV".to_string(), format!("{} {} {} {}", priority, weight, port, target))
         }
@@ -965,13 +985,26 @@ fn build_dns_record_binary(record_type: &str, value: &str, ttl: u32) -> LdapResu
                 .map_err(|_| format!("Invalid IPv6: {}", value))?;
             (28, addr.octets().to_vec())
         }
-        "NS" => (2, encode_dns_rpc_name(value)),
-        "CNAME" => (5, encode_dns_rpc_name(value)),
-        "PTR" => (12, encode_dns_rpc_name(value)),
+        "NS" | "CNAME" | "PTR" => {
+            check_dns_name(value)?;
+            let code = match record_type { "NS" => 2, "CNAME" => 5, _ => 12 };
+            (code, encode_dns_rpc_name(value))
+        }
         "TXT" => {
+            // A DNS character-string holds at most 255 bytes; longer text (DKIM
+            // keys, long SPF) is split across several, which resolvers join.
             let bytes = value.as_bytes();
-            let mut d = vec![bytes.len() as u8];
-            d.extend_from_slice(bytes);
+            if bytes.len() > 4000 {
+                return Err("TXT value is too long (4000 bytes at most)".to_string());
+            }
+            let mut d = Vec::with_capacity(bytes.len() + bytes.len() / 255 + 1);
+            for chunk in bytes.chunks(255) {
+                d.push(chunk.len() as u8);
+                d.extend_from_slice(chunk);
+            }
+            if bytes.is_empty() {
+                d.push(0);
+            }
             (16, d)
         }
         "MX" => {
@@ -982,10 +1015,29 @@ fn build_dns_record_binary(record_type: &str, value: &str, ttl: u32) -> LdapResu
                 .ok_or_else(|| "MX format: <priority> <hostname>".to_string())?;
             let name = parts
                 .get(1)
+                .map(|n| n.trim())
                 .ok_or_else(|| "MX format: <priority> <hostname>".to_string())?;
-            let mut d = priority.to_le_bytes().to_vec();
+            check_dns_name(name)?;
+            let mut d = priority.to_be_bytes().to_vec();
             d.extend(encode_dns_rpc_name(name));
             (15, d)
+        }
+        "SRV" => {
+            // priority weight port target, e.g. "0 100 389 dc1.example.com".
+            // The numbers are big-endian, as Samba stores them.
+            const FORMAT: &str = "SRV format: <priority> <weight> <port> <target>";
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            let [priority, weight, port, target] = parts[..] else {
+                return Err(FORMAT.to_string());
+            };
+            let mut d = Vec::new();
+            for n in [priority, weight, port] {
+                let n: u16 = n.parse().map_err(|_| FORMAT.to_string())?;
+                d.extend_from_slice(&n.to_be_bytes());
+            }
+            check_dns_name(target)?;
+            d.extend(encode_dns_rpc_name(target));
+            (33, d)
         }
         _ => return Err(format!("Unsupported type: {}", record_type)),
     };
@@ -1745,6 +1797,78 @@ pub async fn delete_dns_record(
         .success()
         .map_err(|e| format!("Failed to delete record: {}", e))?;
     Ok(())
+}
+
+// ── edit record ───────────────────────────────────────────────────────────────
+
+/// "TYPE value" for a record as the page submitted it, for the audit log.
+pub fn describe_record(raw_hex: &str) -> String {
+    from_hex(raw_hex)
+        .and_then(|raw| parse_dns_record_binary(&raw))
+        .map(|(t, v, _)| format!("{} {}", t, v))
+        .unwrap_or_else(|| "(unreadable record)".to_string())
+}
+
+/// The stored record after changing its value and TTL. Name and type stay.
+///
+/// Everything else in the header is kept as it was — rank, flags, serial and
+/// the timestamp that marks a record as dynamically registered — so an edit
+/// changes only what the form shows. A value submitted unchanged keeps its
+/// stored bytes exactly: a TXT record made of several strings is displayed
+/// joined, and rebuilding it from that text would alter it.
+pub(crate) fn edited_record(old: &[u8], value: &str, ttl: u32) -> LdapResult<Vec<u8>> {
+    let (rtype, old_value, _) =
+        parse_dns_record_binary(old).ok_or_else(|| "This record cannot be read".to_string())?;
+    if rtype == "SOA" {
+        return Err("The SOA record cannot be edited here".to_string());
+    }
+    let old_len = u16::from_le_bytes([old[0], old[1]]) as usize;
+    let payload = if value.trim() == old_value {
+        old[24..std::cmp::min(24 + old_len, old.len())].to_vec()
+    } else {
+        build_dns_record_binary(&rtype, value.trim(), ttl)?.split_off(24)
+    };
+
+    let mut rec = old[..24].to_vec();
+    rec[0..2].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+    rec[12..16].copy_from_slice(&ttl.to_be_bytes());
+    rec.extend(payload);
+    Ok(rec)
+}
+
+/// Replace one record of a node in a single LDAP modify: the old value is
+/// removed and the new one added together, or neither happens.
+/// Returns false when the edit changed nothing.
+pub async fn edit_dns_record(
+    ldap: &mut ldap3::Ldap,
+    zone_dn: &str,
+    node_name: &str,
+    raw_hex: &str,
+    value: &str,
+    ttl: u32,
+) -> LdapResult<bool> {
+    let old = from_hex(raw_hex).ok_or_else(|| "Invalid record data".to_string())?;
+    let new = edited_record(&old, value, ttl)?;
+    if new == old {
+        return Ok(false);
+    }
+    let node_dn = format!("DC={},{}", node_name, zone_dn);
+    let mods: Vec<Mod<Vec<u8>>> = vec![
+        Mod::Delete(sv("dnsRecord"), HashSet::from([old])),
+        Mod::Add(sv("dnsRecord"), HashSet::from([new])),
+    ];
+    let res = ldap.modify(&node_dn, mods).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(true),
+        // noSuchAttribute / noSuchObject: the old value is gone.
+        16 | 32 => Err("This record was changed or removed since the page loaded. \
+                       Nothing was saved; check the current records and try again."
+            .to_string()),
+        // attributeOrValueExists: the new value is already a record here.
+        20 => Err("An identical record already exists on this name. Nothing was saved."
+            .to_string()),
+        rc => Err(format!("Failed to edit record: {} (rc={})", res.text, rc)),
+    }
 }
 
 // ── domain password policy ────────────────────────────────────────────────────
@@ -2649,5 +2773,142 @@ mod account_toggle_tests {
     fn toggling_is_idempotent() {
         assert_eq!(with_account_disabled(514, true), 514);
         assert_eq!(with_account_disabled(512, false), 512);
+    }
+}
+
+#[cfg(test)]
+mod dns_record_tests {
+    use super::*;
+
+    /// `_ldap._tcp` -> dc1 as Samba stored it on a live DC (serial 110, TTL 900).
+    const DC1_LDAP_SRV: &str = "1a00210005f000006e0000000000038400000000000000000000006401851203036463310568616b696d0666616d696c7900";
+
+    fn hex(s: &str) -> Vec<u8> {
+        from_hex(s).unwrap()
+    }
+
+    #[test]
+    fn srv_is_encoded_exactly_as_samba_stores_it() {
+        let samba = hex(DC1_LDAP_SRV);
+        let ours = build_dns_record_binary("SRV", "0 100 389 dc1.hakim.family", 900).unwrap();
+        // Same length, type, TTL and data; ours has serial 0, like every add.
+        assert_eq!(ours[0..4], samba[0..4]);
+        assert_eq!(ours[12..16], samba[12..16]);
+        assert_eq!(ours[24..], samba[24..]);
+        assert_eq!(
+            parse_dns_record_binary(&ours).unwrap(),
+            ("SRV".to_string(), "0 100 389 dc1.hakim.family".to_string(), 900)
+        );
+    }
+
+    #[test]
+    fn samba_srv_records_display_correctly() {
+        let (_, value, ttl) = parse_dns_record_binary(&hex(DC1_LDAP_SRV)).unwrap();
+        assert_eq!((value.as_str(), ttl), ("0 100 389 dc1.hakim.family", 900));
+    }
+
+    /// dnsp.idl marks MX like SRV: priority 10 is stored 00 0a, or Samba
+    /// serves it as 2560.
+    #[test]
+    fn mx_priority_is_big_endian() {
+        let rec = build_dns_record_binary("MX", "10 mail.example.com", 3600).unwrap();
+        assert_eq!(rec[24..26], [0x00, 0x0a]);
+        assert_eq!(parse_dns_record_binary(&rec).unwrap().1, "10 mail.example.com");
+    }
+
+    #[test]
+    fn srv_input_is_checked() {
+        for bad in ["", "0 100 389", "0 100 70000 dc1", "a b c d", "0 100 389 dc1 extra"] {
+            assert!(build_dns_record_binary("SRV", bad, 900).is_err(), "{bad:?}");
+        }
+        // Extra spaces are fine.
+        assert!(build_dns_record_binary("SRV", " 10  5 5060   sip.example.com ", 900).is_ok());
+    }
+
+    #[test]
+    fn hostnames_are_checked_for_every_name_type() {
+        let long_label = format!("{}.example.com", "a".repeat(64));
+        for (t, v) in [
+            ("CNAME", "a..example.com"),
+            ("NS", long_label.as_str()),
+            ("PTR", "host name.example.com"),
+            ("MX", "10 a..b"),
+            ("SRV", "0 0 80 a..b"),
+        ] {
+            assert!(build_dns_record_binary(t, v, 300).is_err(), "{t} {v}");
+        }
+        let longest_label = format!("{}.example.com.", "a".repeat(63));
+        assert!(build_dns_record_binary("CNAME", &longest_label, 300).is_ok());
+        assert!(build_dns_record_binary("SRV", "0 0 0 .", 300).is_ok()); // "no service"
+    }
+
+    #[test]
+    fn long_txt_is_split_into_255_byte_strings() {
+        let long = "k".repeat(600);
+        let rec = build_dns_record_binary("TXT", &long, 300).unwrap();
+        let data = &rec[24..];
+        assert_eq!(data.len(), 600 + 3);
+        assert_eq!((data[0], data[256], data[512]), (255, 255, 90));
+        assert_eq!(u16::from_le_bytes([rec[0], rec[1]]) as usize, data.len());
+        assert!(build_dns_record_binary("TXT", &"k".repeat(4001), 300).is_err());
+    }
+
+    #[test]
+    fn an_edit_keeps_the_header_and_changes_value_and_ttl() {
+        let old = hex(DC1_LDAP_SRV);
+        let new = edited_record(&old, "5 50 636 dc1.hakim.family", 3600).unwrap();
+        // version, rank, flags, serial and timestamp are untouched.
+        assert_eq!(new[2..12], old[2..12]);
+        assert_eq!(new[16..24], old[16..24]);
+        assert_eq!(
+            parse_dns_record_binary(&new).unwrap(),
+            ("SRV".to_string(), "5 50 636 dc1.hakim.family".to_string(), 3600)
+        );
+    }
+
+    #[test]
+    fn a_dynamic_record_stays_dynamic() {
+        let mut old = build_dns_record_binary("A", "10.0.0.5", 1200).unwrap();
+        old[20..24].copy_from_slice(&3_700_000u32.to_le_bytes()); // dwTimeStamp
+        let new = edited_record(&old, "10.0.0.6", 1200).unwrap();
+        assert_eq!(new[20..24], old[20..24]);
+        assert_eq!(parse_dns_record_binary(&new).unwrap().1, "10.0.0.6");
+    }
+
+    #[test]
+    fn an_unchanged_value_keeps_its_bytes() {
+        // Three strings, displayed as "v=spf1 a ~all": a TTL-only edit must not
+        // rebuild them as one string.
+        let mut old = build_dns_record_binary("TXT", "x", 300).unwrap();
+        old.truncate(24);
+        let data = b"\x06v=spf1\x01a\x04~all";
+        old.extend_from_slice(data);
+        old[0..2].copy_from_slice(&(data.len() as u16).to_le_bytes());
+        let shown = parse_dns_record_binary(&old).unwrap().1;
+        assert_eq!(shown, "v=spf1 a ~all");
+
+        let same = edited_record(&old, &shown, 300).unwrap();
+        assert_eq!(same, old);
+        let ttl_only = edited_record(&old, &shown, 60).unwrap();
+        assert_eq!(ttl_only[24..], old[24..]);
+        assert_eq!(parse_dns_record_binary(&ttl_only).unwrap().2, 60);
+    }
+
+    #[test]
+    fn soa_and_bad_values_are_refused() {
+        let soa = build_soa_record("dc1.example.com", "hostmaster.example.com", 1, 3600);
+        assert!(edited_record(&soa, "anything", 3600).is_err());
+        let a = build_dns_record_binary("A", "10.0.0.5", 1200).unwrap();
+        assert!(edited_record(&a, "not-an-ip", 1200).is_err());
+        assert!(edited_record(&a[..10], "10.0.0.6", 1200).is_err());
+    }
+
+    #[test]
+    fn unknown_types_can_still_change_ttl() {
+        let rec = wrap_dns_record(99, 0, 300, vec![1, 2, 3]);
+        let shown = parse_dns_record_binary(&rec).unwrap().1;
+        let new = edited_record(&rec, &shown, 900).unwrap();
+        assert_eq!(new[24..], [1, 2, 3]);
+        assert!(edited_record(&rec, "010204", 900).is_err());
     }
 }

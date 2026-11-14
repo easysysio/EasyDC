@@ -744,6 +744,61 @@ pub async fn dns_delete_record(
     }
 }
 
+// ── edit DNS record ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct EditDnsRecordForm {
+    pub node_name: String,
+    pub raw_hex: String,
+    pub value: String,
+    pub ttl: u32,
+}
+
+/// Changes one record's value and TTL in place. The type comes from the stored
+/// record, not the form.
+pub async fn dns_edit_record(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path((id, zone_name)): Path<(i64, String)>,
+    Form(form): Form<EditDnsRecordForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+
+    let result = match ldap::open(&server).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => match ldap::find_zone_dn(&mut conn, &base_dn, &zone_name).await {
+            Err(e) => Err(e),
+            Ok(zone_dn) => {
+                ldap::edit_dns_record(&mut conn, &zone_dn, &form.node_name, &form.raw_hex, &form.value, form.ttl)
+                    .await
+            }
+        },
+    };
+
+    // Nothing changed: nothing to record.
+    if let Ok(false) = result {
+        return Redirect::to(&format!("/servers/{}/dns/{}", id, zone_name)).into_response();
+    }
+    let target = format!(
+        "{} {} {} -> {} (TTL {})",
+        zone_name,
+        form.node_name,
+        ldap::describe_record(&form.raw_hex),
+        form.value.trim(),
+        form.ttl
+    );
+    let logged = result.as_ref().map(|_| ()).map_err(|e| e.clone());
+    db::log_action(&state.db, &actor, "dns.edit_record", &target, Some(id), &logged).await;
+
+    match result {
+        Ok(_) => Redirect::to(&format!("/servers/{}/dns/{}", id, zone_name)).into_response(),
+        Err(e) => render_dns_zone(&state, &server, &zone_name, Some(e)).await,
+    }
+}
+
 // ── GPO list ──────────────────────────────────────────────────────────────────
 
 pub async fn gpo(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
@@ -1276,5 +1331,54 @@ mod dns_zone_tests {
             .expect("renders");
         assert!(html.contains("Type the zone name to confirm"));
         assert!(html.contains("until samba is"));
+    }
+
+    fn zone_ctx(node: &str, rtype: &str, value: &str) -> Context {
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("zone_name", "example.com");
+        c.insert(
+            "nodes",
+            &vec![crate::ldap::DnsNode {
+                name: node.to_string(),
+                records: vec![crate::ldap::DnsRecord {
+                    node_name: node.to_string(),
+                    record_type: rtype.to_string(),
+                    value: value.to_string(),
+                    ttl: 900,
+                    raw_hex: "abcd".to_string(),
+                }],
+            }],
+        );
+        c
+    }
+
+    #[test]
+    fn records_have_edit_buttons_and_srv_can_be_added() {
+        let html = tera()
+            .render("dns_zone.html", &zone_ctx("_ldap._tcp", "SRV", "0 100 389 dc1.example.com"))
+            .unwrap();
+        assert!(html.contains(r#"action="/servers/1/dns/example.com/edit""#));
+        assert!(html.contains(r#"data-value="0 100 389 dc1.example.com""#));
+        assert!(html.contains(r#"data-raw="abcd""#));
+        assert!(html.contains(r#"<option value="SRV">"#));
+    }
+
+    #[test]
+    fn soa_has_no_edit_or_delete() {
+        let html = tera().render("dns_zone.html", &zone_ctx("@", "SOA", "(zone authority)")).unwrap();
+        assert!(!html.contains("data-raw="));
+        assert!(!html.contains("data-confirm="));
+    }
+
+    /// A record name comes from the directory, where a client's dynamic update
+    /// may have put it. It must stay text: no script, no attribute break-out.
+    #[test]
+    fn hostile_names_are_escaped() {
+        let evil = r#"x');alert(1);//"><img src=x>"#;
+        let html = tera().render("dns_zone.html", &zone_ctx(evil, "A", "10.0.0.1")).unwrap();
+        assert!(!html.contains("<img src=x>"));
+        assert!(!html.contains(r#""><img"#));
+        assert!(!html.contains("onsubmit"));
     }
 }
