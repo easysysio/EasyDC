@@ -63,6 +63,31 @@ pub(crate) fn ldap_escape(value: &str) -> String {
     out
 }
 
+/// Escape a value for use as one part of a DN, as in `CN=<value>,CN=Users,…`
+/// (RFC 4514). Every DN built from a name goes through this: an unescaped
+/// comma ends the part, so `Doe, John` would otherwise be read as `CN=Doe`
+/// under a parent called ` John` — rejected, or worse, the wrong object.
+///
+/// Uses the `\,` form rather than `\2c`, because that is how Samba writes DNs
+/// back, and EasyDC compares DNs it built with DNs it read.
+pub(crate) fn dn_escape(value: &str) -> String {
+    let last = value.chars().count().saturating_sub(1);
+    let mut out = String::with_capacity(value.len() + 4);
+    for (i, c) in value.chars().enumerate() {
+        match c {
+            ',' | '+' | '"' | '\\' | '<' | '>' | ';' | '=' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\0' => out.push_str("\\00"),
+            '#' if i == 0 => out.push_str("\\#"),
+            ' ' if i == 0 || i == last => out.push_str("\\ "),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 pub(crate) fn attr(e: &SearchEntry, key: &str) -> String {
     e.attrs
         .get(key)
@@ -207,7 +232,7 @@ pub async fn create_user(
     };
     let domain = base_dn_to_domain(base_dn);
     let upn = format!("{}@{}", u.username, domain);
-    let user_dn = format!("CN={},CN=Users,{}", cn, base_dn);
+    let user_dn = format!("CN={},CN=Users,{}", dn_escape(&cn), base_dn);
 
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
         (
@@ -516,7 +541,7 @@ pub async fn create_group(
     base_dn: &str,
     g: &NewGroup<'_>,
 ) -> LdapResult<()> {
-    let group_dn = format!("CN={},CN=Users,{}", g.name, base_dn);
+    let group_dn = format!("CN={},CN=Users,{}", dn_escape(g.name), base_dn);
     let gt = g.group_type.to_string();
 
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
@@ -1240,7 +1265,7 @@ pub async fn add_dns_record(
     ttl: u32,
 ) -> LdapResult<()> {
     let record_bytes = build_dns_record_binary(record_type, value, ttl)?;
-    let node_dn = format!("DC={},{}", node_name, zone_dn);
+    let node_dn = format!("DC={},{}", dn_escape(node_name), zone_dn);
 
     // Check if the node already exists
     let exists = ldap
@@ -1383,7 +1408,7 @@ pub async fn create_ou(
     name: &str,
     description: &str,
 ) -> LdapResult<()> {
-    let ou_dn = format!("OU={},{}", name, parent_dn);
+    let ou_dn = format!("OU={},{}", dn_escape(name), parent_dn);
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
         (
             sv("objectClass"),
@@ -1410,7 +1435,7 @@ pub async fn rename_ou(
     ou_dn: &str,
     new_name: &str,
 ) -> LdapResult<()> {
-    let new_rdn = format!("OU={}", new_name);
+    let new_rdn = format!("OU={}", dn_escape(new_name));
     ldap.modifydn(ou_dn, &new_rdn, true, None)
         .await
         .map_err(|e| e.to_string())?
@@ -1787,7 +1812,7 @@ pub async fn delete_dns_record(
 ) -> LdapResult<()> {
     let raw_bytes =
         from_hex(raw_hex).ok_or_else(|| "Invalid record data".to_string())?;
-    let node_dn = format!("DC={},{}", node_name, zone_dn);
+    let node_dn = format!("DC={},{}", dn_escape(node_name), zone_dn);
 
     let mods: Vec<Mod<Vec<u8>>> =
         vec![Mod::Delete(sv("dnsRecord"), HashSet::from([raw_bytes]))];
@@ -1865,7 +1890,7 @@ pub async fn edit_dns_record(
     if new == old {
         return Ok(false);
     }
-    let node_dn = format!("DC={},{}", node_name, zone_dn);
+    let node_dn = format!("DC={},{}", dn_escape(node_name), zone_dn);
     let mods: Vec<Mod<Vec<u8>>> = vec![
         Mod::Delete(sv("dnsRecord"), HashSet::from([old])),
         Mod::Add(sv("dnsRecord"), HashSet::from([new])),
@@ -2335,7 +2360,7 @@ pub async fn create_dns_zone(
     let primary = dc_hostname(ldap).await?;
     let hostmaster = format!("hostmaster.{}", base_dn_to_domain(base_dn));
 
-    let zone_dn = format!("DC={},{}", zone, partition);
+    let zone_dn = format!("DC={},{}", dn_escape(zone), partition);
     let props: HashSet<Vec<u8>> = primary_zone_properties().into_iter().collect();
     let zone_attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
         (sv("objectClass"), HashSet::from([sv("top"), sv("dnsZone")])),
@@ -2674,6 +2699,38 @@ mod review_fix_tests {
         assert_eq!(ldap_escape("a(b)c"), "a\\28b\\29c");
         assert_eq!(ldap_escape("back\\slash"), "back\\5cslash");
         assert_eq!(ldap_escape("plain.name-01"), "plain.name-01");
+    }
+
+    #[test]
+    fn dn_special_characters_are_escaped() {
+        assert_eq!(dn_escape("Doe, John"), "Doe\\, John");
+        assert_eq!(dn_escape("Sales + Marketing"), "Sales \\+ Marketing");
+        assert_eq!(dn_escape(r#"a"b\c<d>e;f=g"#), r#"a\"b\\c\<d\>e\;f\=g"#);
+        assert_eq!(dn_escape("#1"), "\\#1");
+        assert_eq!(dn_escape("a#1"), "a#1");
+        assert_eq!(dn_escape(" pad "), "\\ pad\\ ");
+        assert_eq!(dn_escape("in side"), "in side");
+        assert_eq!(dn_escape("nul\0"), "nul\\00");
+        assert_eq!(dn_escape("Müller é"), "Müller é");
+        assert_eq!(dn_escape("_ldap._tcp"), "_ldap._tcp");
+        assert_eq!(dn_escape("@"), "@");
+        assert_eq!(dn_escape(""), "");
+    }
+
+    /// A name that looks like a DN must stay one part of the DN, not graft
+    /// itself onto another place in the tree.
+    #[test]
+    fn a_name_cannot_change_where_the_object_goes() {
+        let name = "x,CN=Users,DC=evil";
+        let dn = format!("CN={},CN=Users,DC=example,DC=com", dn_escape(name));
+        assert_eq!(dn, "CN=x\\,CN\\=Users\\,DC\\=evil,CN=Users,DC=example,DC=com");
+        // Exactly one unescaped comma per parent level: four parts in all.
+        let bytes = dn.as_bytes();
+        let parts = (0..bytes.len())
+            .filter(|&i| bytes[i] == b',' && (i == 0 || bytes[i - 1] != b'\\'))
+            .count()
+            + 1;
+        assert_eq!(parts, 4);
     }
 
     /// The bypass the review found: "*" passed a guard that compared strings,

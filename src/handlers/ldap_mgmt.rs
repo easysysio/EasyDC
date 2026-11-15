@@ -378,7 +378,7 @@ pub async fn ou_create(
         ldap::create_ou(&mut conn, &form.parent_dn, &form.name, &form.description).await
     }
     .await;
-    let target = format!("OU={},{}", form.name, form.parent_dn);
+    let target = format!("OU={},{}", ldap::dn_escape(&form.name), form.parent_dn);
     db::log_action(&state.db, &actor, "ou.create", &target, Some(id), &result).await;
 
     Redirect::to(&format!("/servers/{}/ous", id)).into_response()

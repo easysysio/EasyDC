@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- Names with a comma or another special character (`+ " \ < > ; =`, or a leading `#`) failed or were stored wrongly when creating a user, group or OU, renaming an OU, or adding, editing or deleting a DNS record. `Doe, John` works now.
+
 ## [0.3.6] - 2026-11-14
 
 ### Added
