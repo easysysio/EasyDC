@@ -7,6 +7,14 @@ in the [audit log](#audit-log) with who made it and whether it succeeded.
 
 - **Create** a user with a username, first and last name, email and initial password.
 - **Edit** names and email, **enable or disable** the account, or **delete** it.
+- **Profile**: job title, department, office, phone, mobile and manager, in both the
+  Add and Edit dialogs. The manager field suggests usernames as you type. Clearing a
+  field removes the value from the directory.
+- **Account expires** sets the last day the account can be used, for contractors and
+  other temporary accounts. Leave it blank for an account that never expires. The day
+  ends at midnight UTC. The list shows **Until *date*** on accounts with an end date,
+  and **Expired** once it has passed. An expired account cannot log in even though it
+  is still enabled; set a later date, or clear it, to let the user back in.
 - **Reset password** sets a new password, with *must change password at next logon*
   checked by default.
 - **Unlock** clears a lockout. Locked accounts carry a **Locked** badge in the list, with

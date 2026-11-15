@@ -7,7 +7,7 @@ use crate::models::Server;
 
 pub type LdapResult<T> = Result<T, String>;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct LdapUser {
     pub dn: String,
     pub username: String,
@@ -18,6 +18,17 @@ pub struct LdapUser {
     pub enabled: bool,
     pub locked: bool,
     pub bad_pwd_count: i64,
+    pub title: String,
+    pub department: String,
+    pub office: String,
+    pub phone: String,
+    pub mobile: String,
+    /// The manager's username, or their DN when it is not a user EasyDC lists
+    /// (a contact, say). Empty when none is set.
+    pub manager: String,
+    /// Last day the account can be used, `YYYY-MM-DD`; empty for never.
+    pub expires: String,
+    pub expired: bool,
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -173,6 +184,13 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 "userAccountControl",
                 "lockoutTime",
                 "badPwdCount",
+                "title",
+                "department",
+                "physicalDeliveryOfficeName",
+                "telephoneNumber",
+                "mobile",
+                "manager",
+                "accountExpires",
             ],
         )
         .await
@@ -180,24 +198,46 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
         .success()
         .map_err(|e| e.to_string())?;
 
+    let entries: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
+    // manager holds a DN; show the username when the manager is a listed user.
+    let usernames: std::collections::HashMap<String, String> = entries
+        .iter()
+        .map(|e| (e.dn.to_lowercase(), attr(e, "sAMAccountName")))
+        .collect();
+    let now = unix_to_filetime(crate::health::now_unix());
+
     let mut users: Vec<LdapUser> = entries
-        .into_iter()
+        .iter()
         .map(|e| {
-            let e = SearchEntry::construct(e);
-            let uac: i64 = attr(&e, "userAccountControl").parse().unwrap_or(514);
+            let uac: i64 = attr(e, "userAccountControl").parse().unwrap_or(514);
             // lockoutTime is a FILETIME; any non-zero value means the account
             // is currently locked out.
-            let lockout: i64 = attr(&e, "lockoutTime").parse().unwrap_or(0);
+            let lockout: i64 = attr(e, "lockoutTime").parse().unwrap_or(0);
+            let expires_at: i64 = attr(e, "accountExpires").parse().unwrap_or(0);
+            let manager_dn = attr(e, "manager");
+            let manager = usernames
+                .get(&manager_dn.to_lowercase())
+                .filter(|u| !u.is_empty())
+                .cloned()
+                .unwrap_or(manager_dn);
             LdapUser {
                 dn: e.dn.clone(),
-                username: attr(&e, "sAMAccountName"),
-                first_name: attr(&e, "givenName"),
-                last_name: attr(&e, "sn"),
-                display_name: attr(&e, "displayName"),
-                email: attr(&e, "mail"),
+                username: attr(e, "sAMAccountName"),
+                first_name: attr(e, "givenName"),
+                last_name: attr(e, "sn"),
+                display_name: attr(e, "displayName"),
+                email: attr(e, "mail"),
                 enabled: (uac & 2) == 0,
                 locked: lockout != 0,
-                bad_pwd_count: attr(&e, "badPwdCount").parse().unwrap_or(0),
+                bad_pwd_count: attr(e, "badPwdCount").parse().unwrap_or(0),
+                title: attr(e, "title"),
+                department: attr(e, "department"),
+                office: attr(e, "physicalDeliveryOfficeName"),
+                phone: attr(e, "telephoneNumber"),
+                mobile: attr(e, "mobile"),
+                manager,
+                expires: expiry_date(expires_at).unwrap_or_default(),
+                expired: expiry_date(expires_at).is_some() && expires_at <= now,
             }
         })
         .filter(|u| !u.username.is_empty())
@@ -205,6 +245,123 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
 
     users.sort_by_key(|a| a.username.to_lowercase());
     Ok(users)
+}
+
+// ── profile fields and account expiry ────────────────────────────────────────
+
+/// The optional fields the Add and Edit forms share. An empty value means
+/// "not set": nothing is written on create, and the attribute is cleared on edit.
+#[derive(Default)]
+pub struct UserProfile<'a> {
+    pub title: &'a str,
+    pub department: &'a str,
+    pub office: &'a str,
+    pub phone: &'a str,
+    pub mobile: &'a str,
+    /// A username, or a DN (kept as-is, for a manager that is not a user).
+    pub manager: &'a str,
+    /// Last day the account can be used, `YYYY-MM-DD`; empty for never.
+    pub expires: &'a str,
+}
+
+impl UserProfile<'_> {
+    /// (label, attribute, value, maximum length). The limits are Windows AD's
+    /// schema limits: Samba does not enforce them, but a Windows DC joined
+    /// later, or a Windows tool, would trip over longer values.
+    fn text_fields(&self) -> [(&'static str, &'static str, &str, usize); 5] {
+        [
+            ("Job title", "title", self.title, 128),
+            ("Department", "department", self.department, 64),
+            ("Office", "physicalDeliveryOfficeName", self.office, 128),
+            ("Phone", "telephoneNumber", self.phone, 64),
+            ("Mobile", "mobile", self.mobile, 64),
+        ]
+    }
+
+    pub(crate) fn check(&self) -> LdapResult<()> {
+        for (label, _, value, max) in self.text_fields() {
+            if value.chars().count() > max {
+                return Err(format!("{label} is longer than {max} characters"));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(format!("{label} contains a control character"));
+            }
+        }
+        expiry_filetime(self.expires)?;
+        Ok(())
+    }
+}
+
+/// accountExpires value meaning "never" — what Windows writes. Samba also
+/// treats 0 as never.
+const NEVER_EXPIRES: i64 = i64::MAX;
+const TICKS_PER_SECOND: i64 = 10_000_000;
+const FILETIME_UNIX_EPOCH: i64 = 11_644_473_600 * TICKS_PER_SECOND;
+
+fn unix_to_filetime(secs: i64) -> i64 {
+    secs * TICKS_PER_SECOND + FILETIME_UNIX_EPOCH
+}
+
+/// accountExpires for "the account works through this day": midnight UTC at
+/// the start of the next day. `Ok(None)` for an empty date (never expires).
+pub(crate) fn expiry_filetime(date: &str) -> LdapResult<Option<i64>> {
+    if date.is_empty() {
+        return Ok(None);
+    }
+    let bad = || format!("Account expiry '{date}' is not a date (YYYY-MM-DD)");
+    let b = date.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return Err(bad());
+    }
+    let num = |r: std::ops::Range<usize>| date[r].parse::<i64>().map_err(|_| bad());
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    if !(1970..=9999).contains(&y) {
+        return Err(bad());
+    }
+    let day = crate::health::days_from_civil(y, m, d);
+    // Rejects 2026-02-30 and the like, which days_from_civil would roll over.
+    if crate::health::civil_from_days(day) != (y, m, d) {
+        return Err(bad());
+    }
+    Ok(Some(unix_to_filetime((day + 1) * 86_400)))
+}
+
+/// The last day an account can be used, from its accountExpires; `None` when
+/// it never expires. The inverse of expiry_filetime, and for a value another
+/// tool wrote at some time of day, the day that moment falls on (UTC).
+pub(crate) fn expiry_date(filetime: i64) -> Option<String> {
+    if filetime <= 0 || filetime == NEVER_EXPIRES {
+        return None;
+    }
+    let last_moment = (filetime - 1 - FILETIME_UNIX_EPOCH).div_euclid(TICKS_PER_SECOND);
+    let (y, m, d) = crate::health::civil_from_days(last_moment.div_euclid(86_400));
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// Replace an attribute, or remove it when the value is empty: an empty value
+/// is not a valid LDAP string, and "remove" is what a blanked field means.
+fn set_or_clear(attr: &str, value: &str) -> Mod<Vec<u8>> {
+    let values = if value.is_empty() { HashSet::new() } else { HashSet::from([sv(value)]) };
+    Mod::Replace(sv(attr), values)
+}
+
+/// The manager's DN. A username is looked up; a DN (what the form shows for a
+/// manager that is not a user) is kept as it is — the DC checks that it exists.
+async fn manager_dn(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    manager: &str,
+) -> LdapResult<Option<String>> {
+    if manager.is_empty() {
+        return Ok(None);
+    }
+    if manager.contains('=') {
+        return Ok(Some(manager.to_string()));
+    }
+    find_user_dn(ldap, base_dn, manager)
+        .await
+        .map(Some)
+        .map_err(|_| format!("Manager '{manager}' not found"))
 }
 
 // ── create user ───────────────────────────────────────────────────────────────
@@ -215,6 +372,7 @@ pub struct NewUser<'a> {
     pub last_name: &'a str,
     pub email: &'a str,
     pub password: &'a str,
+    pub profile: UserProfile<'a>,
 }
 
 pub async fn create_user(
@@ -233,6 +391,12 @@ pub async fn create_user(
     let domain = base_dn_to_domain(base_dn);
     let upn = format!("{}@{}", u.username, domain);
     let user_dn = format!("CN={},CN=Users,{}", dn_escape(&cn), base_dn);
+
+    // Checked before anything is created, so a typo does not leave a
+    // half-made account behind.
+    u.profile.check()?;
+    let manager = manager_dn(ldap, base_dn, u.profile.manager).await?;
+    let expires = expiry_filetime(u.profile.expires)?;
 
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
         (
@@ -260,6 +424,17 @@ pub async fn create_user(
     }
     if !u.email.is_empty() {
         attrs.push((sv("mail"), HashSet::from([sv(u.email)])));
+    }
+    for (_, name, value, _) in u.profile.text_fields() {
+        if !value.is_empty() {
+            attrs.push((sv(name), HashSet::from([sv(value)])));
+        }
+    }
+    if let Some(dn) = &manager {
+        attrs.push((sv("manager"), HashSet::from([sv(dn)])));
+    }
+    if let Some(ft) = expires {
+        attrs.push((sv("accountExpires"), HashSet::from([sv(&ft.to_string())])));
     }
 
     ldap.add(&user_dn, attrs)
@@ -299,6 +474,7 @@ pub struct UserUpdate<'a> {
     pub last_name: &'a str,
     pub email: &'a str,
     pub password: &'a str,
+    pub profile: UserProfile<'a>,
 }
 
 pub async fn update_user(
@@ -307,17 +483,44 @@ pub async fn update_user(
     username: &str,
     u: &UserUpdate<'_>,
 ) -> LdapResult<()> {
-    let dn = find_user_dn(ldap, base_dn, username).await?;
+    u.profile.check()?;
+    let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["accountExpires"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let entry = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("User '{}' not found", username))?;
+    let dn = entry.dn.clone();
+    let current_expiry: i64 = attr(&entry, "accountExpires").parse().unwrap_or(0);
+    let manager = manager_dn(ldap, base_dn, u.profile.manager).await?;
+
     let display = format!("{} {}", u.first_name, u.last_name)
         .trim()
         .to_string();
 
     let mut mods: Vec<Mod<Vec<u8>>> = vec![
-        Mod::Replace(sv("givenName"), HashSet::from([sv(u.first_name)])),
-        Mod::Replace(sv("sn"), HashSet::from([sv(u.last_name)])),
-        Mod::Replace(sv("displayName"), HashSet::from([sv(&display)])),
-        Mod::Replace(sv("mail"), HashSet::from([sv(u.email)])),
+        set_or_clear("givenName", u.first_name),
+        set_or_clear("sn", u.last_name),
+        set_or_clear("displayName", &display),
+        set_or_clear("mail", u.email),
+        set_or_clear("manager", manager.as_deref().unwrap_or_default()),
     ];
+    for (_, name, value, _) in u.profile.text_fields() {
+        mods.push(set_or_clear(name, value));
+    }
+    // Only when the date changed: the form shows a date, and a time of day
+    // another tool set (samba-tool setexpiry --days) would otherwise be moved
+    // to midnight by saving an unrelated field.
+    if expiry_date(current_expiry).unwrap_or_default() != u.profile.expires {
+        let ft = expiry_filetime(u.profile.expires)?.unwrap_or(NEVER_EXPIRES);
+        mods.push(Mod::Replace(sv("accountExpires"), HashSet::from([sv(&ft.to_string())])));
+    }
 
     if !u.password.is_empty() {
         mods.push(Mod::Replace(
@@ -673,7 +876,7 @@ pub async fn list_group_members(
                     email: attr(&e, "mail"),
                     enabled: (uac & 2) == 0,
                     locked: false, // lock status not shown in member lists
-                    bad_pwd_count: 0,
+                    ..Default::default()
                 });
             }
         }
@@ -2980,5 +3183,76 @@ mod dns_record_tests {
         let new = edited_record(&rec, &shown, 900).unwrap();
         assert_eq!(new[24..], [1, 2, 3]);
         assert!(edited_record(&rec, "010204", 900).is_err());
+    }
+}
+
+#[cfg(test)]
+mod user_profile_tests {
+    use super::*;
+
+    #[test]
+    fn expiry_is_the_end_of_the_chosen_day() {
+        // 2027-01-01T00:00:00Z: the account works through all of 2026-12-31.
+        let ft = expiry_filetime("2026-12-31").unwrap().unwrap();
+        assert_eq!(ft, unix_to_filetime(1_798_761_600));
+        assert_eq!(expiry_date(ft).as_deref(), Some("2026-12-31"));
+    }
+
+    #[test]
+    fn expiry_round_trips_across_awkward_days() {
+        for d in ["1970-01-01", "2024-02-29", "2026-03-01", "2026-12-31", "9999-12-30"] {
+            let ft = expiry_filetime(d).unwrap().unwrap();
+            assert_eq!(expiry_date(ft).as_deref(), Some(d), "{d}");
+        }
+    }
+
+    #[test]
+    fn never_expires_in_both_spellings() {
+        assert_eq!(expiry_filetime("").unwrap(), None);
+        assert_eq!(expiry_date(0), None);
+        assert_eq!(expiry_date(NEVER_EXPIRES), None);
+    }
+
+    /// samba-tool user setexpiry --days writes a time of day, not midnight:
+    /// it shows as the day that moment falls on.
+    #[test]
+    fn a_time_of_day_shows_as_its_day() {
+        // 2026-11-20T14:30:00Z
+        let ft = unix_to_filetime(1_795_185_000);
+        assert_eq!(expiry_date(ft).as_deref(), Some("2026-11-20"));
+    }
+
+    #[test]
+    fn bad_dates_are_refused() {
+        for d in ["2026-02-30", "2026-13-01", "2026-00-10", "26-01-01", "2026/01/01",
+                  "2026-1-1", "1969-12-31", "abcd-ef-gh", "2026-01-01T00:00", "+026-01-01"] {
+            assert!(expiry_filetime(d).is_err(), "{d} should be refused");
+        }
+    }
+
+    #[test]
+    fn profile_limits_are_windows_schema_limits() {
+        let ok = UserProfile { title: &"t".repeat(128), department: &"d".repeat(64), ..Default::default() };
+        assert!(ok.check().is_ok());
+        let long = "d".repeat(65);
+        let err = UserProfile { department: &long, ..Default::default() }.check().unwrap_err();
+        assert!(err.contains("Department"), "{err}");
+        // Characters, not bytes: 64 Hebrew letters fit.
+        let hebrew = "ש".repeat(64);
+        assert!(UserProfile { department: &hebrew, ..Default::default() }.check().is_ok());
+        assert!(UserProfile { phone: "555\n1234", ..Default::default() }.check().is_err());
+        assert!(UserProfile { expires: "2026-02-30", ..Default::default() }.check().is_err());
+    }
+
+    #[test]
+    fn a_blank_field_clears_the_attribute() {
+        match set_or_clear("mobile", "") {
+            Mod::Replace(a, v) => assert!(a == b"mobile" && v.is_empty()),
+            _ => panic!("expected Replace"),
+        }
+        match set_or_clear("mobile", "555") {
+            Mod::Replace(_, v) => assert_eq!(v, HashSet::from([sv("555")])),
+            _ => panic!("expected Replace"),
+        }
     }
 }

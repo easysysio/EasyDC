@@ -49,7 +49,14 @@
                         <i class="bi bi-person-circle me-1 text-secondary"></i>
                         {{ user.username }}
                     </td>
-                    <td>{{ user.display_name }}</td>
+                    <td>
+                        {{ user.display_name }}
+                        {% if user.title or user.department %}
+                        <div class="small text-muted">
+                            {{ user.title }}{% if user.title and user.department %} · {% endif %}{{ user.department }}
+                        </div>
+                        {% endif %}
+                    </td>
                     <td class="text-muted small">{{ user.email }}</td>
                     <td>
                         {% if user.enabled %}
@@ -65,6 +72,17 @@
                         <span class="badge bg-warning-subtle text-warning border border-warning-subtle"
                             title="{{ user.bad_pwd_count }} bad password attempts">
                             <i class="bi bi-lock-fill me-1"></i>Locked
+                        </span>
+                        {% endif %}
+                        {% if user.expired %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle"
+                            title="The account could be used until the end of {{ user.expires }} (UTC)">
+                            <i class="bi bi-calendar-x me-1"></i>Expired
+                        </span>
+                        {% elif user.expires %}
+                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle"
+                            title="The account can be used until the end of this day (UTC)">
+                            <i class="bi bi-calendar-event me-1"></i>Until {{ user.expires }}
                         </span>
                         {% endif %}
                     </td>
@@ -131,8 +149,12 @@
 {% endif %}
 
 <!-- ── Add User Modal ────────────────────────────────────────────────────── -->
+<datalist id="userDirectory">
+    {% for u in users %}<option value="{{ u.username }}">{{ u.display_name }}</option>{% endfor %}
+</datalist>
+
 <div class="modal fade" id="addUserModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title"><i class="bi bi-person-plus me-1"></i> Add User</h5>
@@ -165,6 +187,45 @@
                         <input type="password" name="password" class="form-control" required>
                         <div class="form-text">Requires LDAPS for password operations</div>
                     </div>
+                    <h6 class="text-muted text-uppercase small mt-2 mb-3">Profile</h6>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Job Title</label>
+                            <input type="text" name="title" class="form-control" maxlength="128">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Department</label>
+                            <input type="text" name="department" class="form-control" maxlength="64">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Office</label>
+                            <input type="text" name="office" class="form-control" maxlength="128">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Manager</label>
+                            <input type="text" name="manager" class="form-control" list="userDirectory"
+                                placeholder="Username">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Phone</label>
+                            <input type="tel" name="phone" class="form-control" maxlength="64">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Mobile</label>
+                            <input type="tel" name="mobile" class="form-control" maxlength="64">
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <label class="form-label">Account Expires</label>
+                        <input type="date" name="expires" class="form-control w-auto">
+                        <div class="form-text">
+                            Leave blank for never. The account can be used until the end of this day (UTC).
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -179,7 +240,7 @@
 {% for user in users %}
 
 <div class="modal fade" id="editModal{{ loop.index }}" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
@@ -211,6 +272,51 @@
                         <label class="form-label">New Password</label>
                         <input type="password" name="password" class="form-control"
                             placeholder="Leave blank to keep current">
+                    </div>
+                    <h6 class="text-muted text-uppercase small mt-2 mb-3">Profile</h6>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Job Title</label>
+                            <input type="text" name="title" class="form-control" maxlength="128"
+                                value="{{ user.title }}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Department</label>
+                            <input type="text" name="department" class="form-control" maxlength="64"
+                                value="{{ user.department }}">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Office</label>
+                            <input type="text" name="office" class="form-control" maxlength="128"
+                                value="{{ user.office }}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Manager</label>
+                            <input type="text" name="manager" class="form-control" list="userDirectory"
+                                placeholder="Username" value="{{ user.manager }}">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Phone</label>
+                            <input type="tel" name="phone" class="form-control" maxlength="64"
+                                value="{{ user.phone }}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Mobile</label>
+                            <input type="tel" name="mobile" class="form-control" maxlength="64"
+                                value="{{ user.mobile }}">
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <label class="form-label">Account Expires</label>
+                        <input type="date" name="expires" class="form-control w-auto"
+                            value="{{ user.expires }}">
+                        <div class="form-text">
+                            Leave blank for never. The account can be used until the end of this day (UTC).
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">

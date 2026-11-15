@@ -1043,6 +1043,36 @@ pub async fn users(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
     Html(state.tera.render("users.html", &ctx).unwrap_or_default()).into_response()
 }
 
+// ── user profile fields ───────────────────────────────────────────────────────
+
+/// The optional fields the Add and Edit user forms share. Missing fields are
+/// empty, so a form posted by an older page still works.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct ProfileForm {
+    pub title: String,
+    pub department: String,
+    pub office: String,
+    pub phone: String,
+    pub mobile: String,
+    pub manager: String,
+    pub expires: String,
+}
+
+impl ProfileForm {
+    fn as_profile(&self) -> ldap::UserProfile<'_> {
+        ldap::UserProfile {
+            title: self.title.trim(),
+            department: self.department.trim(),
+            office: self.office.trim(),
+            phone: self.phone.trim(),
+            mobile: self.mobile.trim(),
+            manager: self.manager.trim(),
+            expires: self.expires.trim(),
+        }
+    }
+}
+
 // ── create user ───────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -1052,6 +1082,8 @@ pub struct CreateUserForm {
     pub last_name: String,
     pub email: String,
     pub password: String,
+    #[serde(flatten)]
+    pub profile: ProfileForm,
 }
 
 pub async fn create_user(
@@ -1076,6 +1108,7 @@ pub async fn create_user(
                 last_name: &form.last_name,
                 email: &form.email,
                 password: &form.password,
+                profile: form.profile.as_profile(),
             },
         )
         .await
@@ -1094,6 +1127,8 @@ pub struct UpdateUserForm {
     pub last_name: String,
     pub email: String,
     pub password: String,
+    #[serde(flatten)]
+    pub profile: ProfileForm,
 }
 
 pub async fn update_user(
@@ -1118,6 +1153,7 @@ pub async fn update_user(
                 last_name: &form.last_name,
                 email: &form.email,
                 password: &form.password,
+                profile: form.profile.as_profile(),
             },
         )
         .await
@@ -1380,5 +1416,103 @@ mod dns_zone_tests {
         assert!(!html.contains("<img src=x>"));
         assert!(!html.contains(r#""><img"#));
         assert!(!html.contains("onsubmit"));
+    }
+}
+
+#[cfg(test)]
+mod users_page_tests {
+    use super::{CreateUserForm, UpdateUserForm};
+    use crate::ldap::LdapUser;
+    use crate::models::Server;
+    use tera::{Context, Tera};
+
+    fn tera() -> Tera {
+        let mut t = Tera::new("templates/**/*.html").expect("templates parse");
+        t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
+            Ok(tera::Value::String("test".to_string()))
+        });
+        t
+    }
+
+    fn render(users: &[LdapUser]) -> String {
+        let mut c = Context::new();
+        c.insert(
+            "server",
+            &Server {
+                id: 1,
+                name: "DC1".to_string(),
+                ldap_url: "ldaps://dc1.example.com".to_string(),
+                bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
+                bind_password: "secret".to_string(),
+                skip_tls: true,
+            },
+        );
+        c.insert("users", users);
+        tera().render("users.html", &c).unwrap()
+    }
+
+    fn user(name: &str) -> LdapUser {
+        LdapUser {
+            dn: format!("CN={name},CN=Users,DC=example,DC=com"),
+            username: name.to_string(),
+            display_name: name.to_string(),
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn profile_and_expiry_are_shown_and_editable() {
+        let mut u = user("contractor");
+        u.title = "Consultant".into();
+        u.department = "IT".into();
+        u.manager = "boss".into();
+        u.expires = "2026-12-31".into();
+        let mut gone = user("former");
+        gone.expires = "2025-01-31".into();
+        gone.expired = true;
+        let html = render(&[u, gone, user("boss")]);
+
+        assert!(html.contains("Consultant · IT"));
+        assert!(html.contains("Until 2026-12-31"));
+        assert!(html.contains("Expired"));
+        assert!(html.contains(r#"name="expires" class="form-control w-auto"
+                            value="2026-12-31""#));
+        assert!(html.contains(r#"value="boss">"#), "manager prefilled");
+        // One shared list of usernames for the manager field, not one per user.
+        assert_eq!(html.matches(r#"<datalist id="userDirectory">"#).count(), 1);
+        assert!(html.contains(r#"<option value="boss">boss</option>"#));
+    }
+
+    #[test]
+    fn no_expiry_no_badge() {
+        let html = render(&[user("plain")]);
+        assert!(!html.contains("Until "));
+        assert!(!html.contains("bi-calendar-x"));
+    }
+
+    #[test]
+    fn hostile_profile_values_are_escaped() {
+        let mut u = user("victim");
+        let evil = r#""><img src=x onerror=alert(1)>"#;
+        u.title = evil.into();
+        u.manager = evil.into();
+        u.office = evil.into();
+        let html = render(&[u]);
+        assert!(!html.contains("<img src=x"));
+    }
+
+    /// A form posted by a page from before these fields existed still parses.
+    #[test]
+    fn old_forms_still_parse() {
+        let f: UpdateUserForm =
+            serde_urlencoded::from_str("first_name=A&last_name=B&email=&password=").unwrap();
+        assert_eq!(f.profile.expires, "");
+        let f: CreateUserForm = serde_urlencoded::from_str(
+            "username=u&first_name=&last_name=&email=&password=p&title=CTO&expires=2026-12-31",
+        )
+        .unwrap();
+        assert_eq!(f.profile.title, "CTO");
+        assert_eq!(f.profile.as_profile().expires, "2026-12-31");
     }
 }

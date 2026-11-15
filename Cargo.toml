@@ -26,6 +26,10 @@ uuid = { version = "1", features = ["v4"] }
 openssl = { version = "0.10", features = ["vendored"] }
 rust-embed = { version = "8", features = ["include-exclude"] }
 
+[dev-dependencies]
+# Already in the tree through axum; the tests parse forms with it directly.
+serde_urlencoded = "0.7"
+
 # ── packaging ─────────────────────────────────────────────────────────────────
 # .deb via `cargo deb` and .rpm via `cargo generate-rpm`, built by
 # .github/workflows/release.yml on every v* tag and published to
