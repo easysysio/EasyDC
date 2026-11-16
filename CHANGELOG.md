@@ -4,21 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
 ### Added
-- Replication page: for each DC, the partner it receives each partition from, the last successful sync, and the error in words when it fails. The health check uses the same data, on every DC, instead of only checking that partners exist.
-- Password policies for groups and users (Samba's PSOs): create, edit and delete them, apply them to users and global security groups, and check which policy governs a user. Needs domain functional level 2008 or higher.
-- Groups: change an existing group's scope (global, domain local, universal) and type (security, distribution), following Windows' rules.
-- Groups can contain other groups; nesting that would break Windows' rules or make a loop is refused. A computer can be added without its trailing `$`.
-- The group members page shows each member's kind and the groups this group belongs to. Groups inside a group used to be listed as if they were users, and built-in identities such as Authenticated Users were left out.
-- Users: an account expiry date, and job title, department, office, phone, mobile and manager. The list shows when an account expires, or that it has expired.
+- Replication page: for each DC, where each partition comes from, the last successful sync, and errors in words. The health check now uses it on every DC.
+- Password policies for groups and users (PSOs): create, edit, apply, and check which one governs a user. Needs domain level 2008 or higher.
+- Groups: change scope and type, and nest groups, following Windows' rules. The members page shows each member's kind and the groups this group belongs to.
+- Users: expiry date, job title, department, office, phone, mobile and manager.
 
 ### Fixed
-- Built-in groups such as Administrators showed type "Other"; they show "Builtin Local Security" now.
-- Saving a group that has no description failed, because EasyDC deleted a description that was not there. It is cleared safely now.
-- A failed group or user action (create, edit, delete, add or remove a member, reset a password, enable, unlock) only appeared in the audit log. The reason is shown on the page now.
-- A refused password was reported as "requires LDAPS" even when the password policy refused it. The message now says the password does not meet the account's policy.
-- Creating a user whose password was refused left a disabled account without a password behind. It is removed again.
-- Names with a comma or another special character (`+ " \ < > ; =`, or a leading `#`) failed or were stored wrongly when creating a user, group or OU, renaming an OU, or adding, editing or deleting a DNS record. `Doe, John` works now.
+- Names with a comma or another special character, such as `Doe, John`, failed or were stored wrongly for users, groups, OUs and DNS records.
+- Failed user and group actions only appeared in the audit log. They show on the page now.
+- A password refused by the policy was reported as "requires LDAPS".
+- Creating a user with a refused password left a disabled account behind.
+- Saving a group with no description failed.
+- Built-in groups such as Administrators showed type "Other".
 
 ## [0.3.6] - 2026-11-14
 
