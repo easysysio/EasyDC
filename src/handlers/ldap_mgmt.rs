@@ -1082,32 +1082,40 @@ pub async fn gpo_link_remove(
 
 // ── user management ───────────────────────────────────────────────────────────
 
-pub async fn users(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
-
+/// The users page, with `flash_error` when an action on it just failed.
+async fn render_users(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
     let mut ctx = Context::new();
-    ctx.insert("server", &server);
+    ctx.insert("server", server);
 
-    match ldap::open(&server).await {
-        Err(e) => {
-            ctx.insert("error", &e);
-            ctx.insert("users", &Vec::<ldap::LdapUser>::new());
-        }
-        Ok((mut conn, base_dn)) => match ldap::list_users(&mut conn, &base_dn).await {
-            Err(e) => {
-                ctx.insert("error", &e);
-                ctx.insert("users", &Vec::<ldap::LdapUser>::new());
-            }
-            Ok(user_list) => {
-                ctx.insert("users", &user_list);
-            }
-        },
+    let loaded = match ldap::open(server).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => ldap::list_users(&mut conn, &base_dn).await,
+    };
+    let (users, load_error) = match loaded {
+        Ok(u) => (u, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    ctx.insert("users", &users);
+    if let Some(e) = flash_error.or(load_error) {
+        ctx.insert("error", &e);
     }
 
     Html(state.tera.render("users.html", &ctx).unwrap_or_default()).into_response()
+}
+
+/// Back to the list on success; the list with the reason on failure.
+async fn after_user_action(state: &AppState, server: &Server, result: Result<(), String>) -> Response {
+    match result {
+        Ok(()) => redirect_users(server.id),
+        Err(e) => render_users(state, server, Some(e)).await,
+    }
+}
+
+pub async fn users(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_users(&state, &server, None).await,
+    }
 }
 
 // ── user profile fields ───────────────────────────────────────────────────────
@@ -1183,7 +1191,7 @@ pub async fn create_user(
     .await;
     db::log_action(&state.db, &actor, "user.create", &form.username, Some(id), &result).await;
 
-    redirect_users(id)
+    after_user_action(&state, &server, result).await
 }
 
 // ── update user ───────────────────────────────────────────────────────────────
@@ -1228,7 +1236,7 @@ pub async fn update_user(
     .await;
     db::log_action(&state.db, &actor, "user.update", &username, Some(id), &result).await;
 
-    redirect_users(id)
+    after_user_action(&state, &server, result).await
 }
 
 // ── delete user ───────────────────────────────────────────────────────────────
@@ -1250,7 +1258,7 @@ pub async fn delete_user(
     .await;
     db::log_action(&state.db, &actor, "user.delete", &username, Some(id), &result).await;
 
-    redirect_users(id)
+    after_user_action(&state, &server, result).await
 }
 
 // ── enable / disable user ─────────────────────────────────────────────────────
@@ -1280,7 +1288,7 @@ pub async fn toggle_user(
     let action = if enable { "user.enable" } else { "user.disable" };
     db::log_action(&state.db, &actor, action, &username, Some(id), &result).await;
 
-    redirect_users(id)
+    after_user_action(&state, &server, result).await
 }
 
 // ── reset password ─────────────────────────────────────────────────────────────
@@ -1314,7 +1322,7 @@ pub async fn reset_password(
     .await;
     db::log_action(&state.db, &actor, "user.reset_password", &username, Some(id), &result).await;
 
-    redirect_users(id)
+    after_user_action(&state, &server, result).await
 }
 
 // ── unlock account ─────────────────────────────────────────────────────────────
@@ -1336,7 +1344,7 @@ pub async fn unlock_user(
     .await;
     db::log_action(&state.db, &actor, "user.unlock", &username, Some(id), &result).await;
 
-    redirect_users(id)
+    after_user_action(&state, &server, result).await
 }
 
 #[cfg(test)]
@@ -1549,6 +1557,25 @@ mod users_page_tests {
         // One shared list of usernames for the manager field, not one per user.
         assert_eq!(html.matches(r#"<datalist id="userDirectory">"#).count(), 1);
         assert!(html.contains(r#"<option value="boss">boss</option>"#));
+    }
+
+    #[test]
+    fn a_failure_is_shown_above_the_list() {
+        let mut c = Context::new();
+        c.insert("server", &Server {
+            id: 1,
+            name: "DC1".to_string(),
+            ldap_url: "ldaps://dc1.example.com".to_string(),
+            bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
+            bind_password: "secret".to_string(),
+            skip_tls: true,
+        });
+        c.insert("users", &vec![user("someone")]);
+        c.insert("error", "The password was not changed: the password does not meet the password policy");
+        let html = tera().render("users.html", &c).unwrap();
+        assert!(html.contains("alert-danger"));
+        assert!(html.contains("does not meet the password policy"));
+        assert!(html.contains("someone"), "the list is still there");
     }
 
     #[test]

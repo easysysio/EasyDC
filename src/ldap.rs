@@ -448,11 +448,18 @@ pub async fn create_user(
         sv("unicodePwd"),
         HashSet::from([encode_password(u.password)]),
     )];
-    ldap.modify(&user_dn, pwd_mods)
-        .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| format!("Failed to set password (requires LDAPS): {}", e))?;
+    let res = ldap.modify(&user_dn, pwd_mods).await.map_err(|e| e.to_string())?;
+    if res.rc != 0 {
+        // The account exists now, disabled and without a password. Remove
+        // it, so a corrected retry does not hit "already exists".
+        let removed = ldap.delete(&user_dn).await.ok().and_then(|r| r.success().ok()).is_some();
+        let msg = password_error("The user was not created", res.rc, &res.text);
+        return Err(if removed {
+            msg
+        } else {
+            format!("{msg} A disabled account {} was left behind; delete it before trying again.", u.username)
+        });
+    }
 
     let enable_mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
         sv("userAccountControl"),
@@ -529,13 +536,14 @@ pub async fn update_user(
         ));
     }
 
-    ldap.modify(&dn, mods)
-        .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| format!("Failed to update user: {}", e))?;
-
-    Ok(())
+    let res = ldap.modify(&dn, mods).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(()),
+        rc if !u.password.is_empty() && is_password_refusal(rc, &res.text) => {
+            Err(password_error("Nothing was saved", rc, &res.text))
+        }
+        _ => Err(format!("Failed to update user: {}", res)),
+    }
 }
 
 // ── delete user ───────────────────────────────────────────────────────────────
@@ -620,12 +628,34 @@ pub async fn reset_password(
         Mod::Replace(sv("unicodePwd"), HashSet::from([encode_password(new_password)])),
         Mod::Replace(sv("pwdLastSet"), HashSet::from([sv(pwd_last_set)])),
     ];
-    ldap.modify(&dn, mods)
-        .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| format!("Failed to reset password (requires LDAPS): {}", e))?;
-    Ok(())
+    let res = ldap.modify(&dn, mods).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(()),
+        rc => Err(password_error("The password was not changed", rc, &res.text)),
+    }
+}
+
+/// Samba's replies to a password write that it refuses: 0000052D (Windows'
+/// ERROR_PASSWORD_RESTRICTION) when the password breaks the policy that
+/// governs the account, and confidentialityRequired (13) when the connection
+/// is not encrypted.
+fn is_password_refusal(rc: u32, text: &str) -> bool {
+    (rc == 19 && text.contains("0000052D")) || rc == 13
+}
+
+/// A password write's failure in words: which rule it broke, not just the
+/// LDAP code. `what` says what did not happen.
+pub(crate) fn password_error(what: &str, rc: u32, text: &str) -> String {
+    if rc == 19 && text.contains("0000052D") {
+        format!(
+            "{what}: the password does not meet the password policy for this account — too short, \
+             not complex enough, or used before. The Password Policy page shows which policy applies."
+        )
+    } else if rc == 13 {
+        format!("{what}: passwords can only be set over an encrypted connection. Add the server with an ldaps:// URL.")
+    } else {
+        format!("{what}: {} (rc={rc})", text.trim())
+    }
 }
 
 // ── unlock account ─────────────────────────────────────────────────────────────
@@ -3944,6 +3974,24 @@ mod user_profile_tests {
         assert!(UserProfile { department: &hebrew, ..Default::default() }.check().is_ok());
         assert!(UserProfile { phone: "555\n1234", ..Default::default() }.check().is_err());
         assert!(UserProfile { expires: "2026-02-30", ..Default::default() }.check().is_err());
+    }
+
+    /// How Samba's reply began when a PSO refused a short password in the
+    /// live test on a DC: rc=19 and "0000052D: Constraint violation".
+    #[test]
+    fn a_policy_refusal_is_explained() {
+        let samba = "0000052D: Constraint violation";
+        assert!(is_password_refusal(19, samba));
+        let msg = password_error("The password was not changed", 19, samba);
+        assert!(msg.starts_with("The password was not changed: the password does not meet"), "{msg}");
+        assert!(msg.contains("Password Policy page"));
+        assert!(!msg.contains("LDAPS"));
+
+        let msg = password_error("x", 13, "confidentiality required");
+        assert!(msg.contains("ldaps://"));
+        // Anything else is passed on as it came, with its code.
+        assert!(!is_password_refusal(19, "some other constraint"));
+        assert_eq!(password_error("x", 50, " no rights "), "x: no rights (rc=50)");
     }
 
     #[test]

@@ -14,7 +14,9 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Built-in groups such as Administrators showed type "Other"; they show "Builtin Local Security" now.
 - Saving a group that has no description failed, because EasyDC deleted a description that was not there. It is cleared safely now.
-- A failed group action (create, edit, delete, add or remove a member) only appeared in the audit log. The reason is shown on the page now.
+- A failed group or user action (create, edit, delete, add or remove a member, reset a password, enable, unlock) only appeared in the audit log. The reason is shown on the page now.
+- A refused password was reported as "requires LDAPS" even when the password policy refused it. The message now says the password does not meet the account's policy.
+- Creating a user whose password was refused left a disabled account without a password behind. It is removed again.
 - Names with a comma or another special character (`+ " \ < > ; =`, or a leading `#`) failed or were stored wrongly when creating a user, group or OU, renaming an OU, or adding, editing or deleting a DNS record. `Doe, John` works now.
 
 ## [0.3.6] - 2026-11-14
