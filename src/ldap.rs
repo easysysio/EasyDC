@@ -2687,6 +2687,364 @@ pub async fn set_password_policy(
     Ok(())
 }
 
+// ── fine-grained password policies (PSOs) ─────────────────────────────────────
+//
+// What `samba-tool domain passwordsettings pso` manages: msDS-PasswordSettings
+// objects in the Password Settings Container, each with the same settings as
+// the domain policy, a precedence, and the users and groups it applies to.
+// When several apply to a user, the lowest precedence number wins; a policy
+// on the user directly beats one through a group.
+
+const PSO_CONTAINER: &str = "CN=Password Settings Container,CN=System";
+
+/// PSOs need domain functional level 2008 (3) or higher.
+pub const PSO_MIN_DOMAIN_LEVEL: i64 = 3;
+
+#[derive(Debug, Serialize, Clone)]
+pub struct PsoTarget {
+    pub dn: String,
+    pub name: String,
+    /// user, group, or other (an object EasyDC could not read).
+    pub kind: &'static str,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct Pso {
+    pub dn: String,
+    pub name: String,
+    pub description: String,
+    pub precedence: i64,
+    pub policy: PasswordPolicy,
+    pub applies_to: Vec<PsoTarget>,
+}
+
+pub struct PsoSettings<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub precedence: i64,
+    pub policy: PasswordPolicy,
+}
+
+const PSO_ATTRS: [&str; 13] = [
+    "cn",
+    "description",
+    "msDS-PasswordSettingsPrecedence",
+    "msDS-PasswordReversibleEncryptionEnabled",
+    "msDS-PasswordHistoryLength",
+    "msDS-PasswordComplexityEnabled",
+    "msDS-MinimumPasswordLength",
+    "msDS-MinimumPasswordAge",
+    "msDS-MaximumPasswordAge",
+    "msDS-LockoutThreshold",
+    "msDS-LockoutObservationWindow",
+    "msDS-LockoutDuration",
+    "msDS-PSOAppliesTo",
+];
+
+/// The domain functional level from the rootDSE: 2 = 2003, 3 = 2008,
+/// 4 = 2008 R2, and so on.
+pub async fn domain_level(ldap: &mut ldap3::Ldap) -> LdapResult<i64> {
+    let (entries, _) = ldap
+        .search("", Scope::Base, "(objectClass=*)", vec!["domainFunctionality"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .and_then(|e| attr(&e, "domainFunctionality").parse().ok())
+        .ok_or_else(|| "Could not read the domain functional level".to_string())
+}
+
+fn pso_from_entry(e: &SearchEntry) -> Pso {
+    let num = |k: &str| attr(e, k).parse::<i64>().unwrap_or(0);
+    Pso {
+        dn: e.dn.clone(),
+        name: attr(e, "cn"),
+        description: attr(e, "description"),
+        precedence: num("msDS-PasswordSettingsPrecedence"),
+        policy: PasswordPolicy {
+            min_length: num("msDS-MinimumPasswordLength"),
+            complexity: attr(e, "msDS-PasswordComplexityEnabled").eq_ignore_ascii_case("TRUE"),
+            history: num("msDS-PasswordHistoryLength"),
+            max_age_days: interval_to_units(num("msDS-MaximumPasswordAge"), 86_400),
+            min_age_days: interval_to_units(num("msDS-MinimumPasswordAge"), 86_400),
+            lockout_threshold: num("msDS-LockoutThreshold"),
+            lockout_minutes: interval_to_units(num("msDS-LockoutDuration"), 60),
+            observation_minutes: interval_to_units(num("msDS-LockoutObservationWindow"), 60),
+            machine_account_quota: 0,
+        },
+        applies_to: e
+            .attrs
+            .get("msDS-PSOAppliesTo")
+            .map(|v| {
+                v.iter()
+                    .map(|dn| PsoTarget { dn: dn.clone(), name: first_rdn_value(dn), kind: "other" })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Every PSO, lowest precedence (the strongest) first, with the users and
+/// groups each applies to named.
+pub async fn list_psos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<Pso>> {
+    let container = format!("{PSO_CONTAINER},{base_dn}");
+    let (entries, _) = ldap
+        .search(&container, Scope::OneLevel, "(objectClass=msDS-PasswordSettings)", PSO_ATTRS.to_vec())
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let mut psos: Vec<Pso> = entries.into_iter().map(|e| pso_from_entry(&SearchEntry::construct(e))).collect();
+
+    for pso in &mut psos {
+        for t in &mut pso.applies_to {
+            let found = ldap
+                .search(&t.dn, Scope::Base, "(objectClass=*)", vec!["sAMAccountName", "objectClass"])
+                .await
+                .ok()
+                .and_then(|r| r.success().ok())
+                .and_then(|(es, _)| es.into_iter().next())
+                .map(SearchEntry::construct);
+            if let Some(e) = found {
+                let is_group = e
+                    .attrs
+                    .get("objectClass")
+                    .is_some_and(|v| v.iter().any(|c| c.eq_ignore_ascii_case("group")));
+                t.kind = if is_group { "group" } else { "user" };
+                let sam = attr(&e, "sAMAccountName");
+                if !sam.is_empty() {
+                    t.name = sam;
+                }
+            }
+        }
+        pso.applies_to.sort_by_key(|t| (t.kind != "group", t.name.to_lowercase()));
+    }
+    psos.sort_by_key(|p| (p.precedence, p.name.to_lowercase()));
+    Ok(psos)
+}
+
+pub(crate) fn validate_pso(s: &PsoSettings<'_>) -> LdapResult<()> {
+    if s.name.is_empty() {
+        return Err("A policy needs a name".to_string());
+    }
+    if s.name.chars().count() > 64 {
+        return Err("A policy name can be at most 64 characters".to_string());
+    }
+    if s.name.chars().any(char::is_control) {
+        return Err("The policy name contains a control character".to_string());
+    }
+    if s.precedence < 1 || s.precedence > i32::MAX as i64 {
+        return Err("Precedence must be 1 or higher (1 wins over every other policy)".to_string());
+    }
+    validate_password_policy(&s.policy)
+}
+
+/// The settings as attribute values. `current` is the stored object when
+/// editing, so an interval the form could not show exactly (12 hours, say)
+/// is kept as stored unless its field was changed — the same rule as the
+/// domain policy.
+fn pso_values(s: &PsoSettings<'_>, current: Option<&SearchEntry>) -> Vec<(&'static str, String)> {
+    let raw = |k: &str| current.map(|e| attr(e, k).parse::<i64>().unwrap_or(0));
+    let interval = |field: i64, attr: &str, unit: i64, zero_means: i64| match raw(attr) {
+        Some(stored) => resolve_interval(field, stored, unit, zero_means),
+        None if field <= 0 => zero_means,
+        None => units_to_interval(field, unit),
+    };
+    let p = &s.policy;
+    let tf = |b: bool| if b { "TRUE" } else { "FALSE" }.to_string();
+    vec![
+        ("msDS-PasswordSettingsPrecedence", s.precedence.to_string()),
+        ("msDS-PasswordHistoryLength", p.history.to_string()),
+        ("msDS-PasswordComplexityEnabled", tf(p.complexity)),
+        ("msDS-MinimumPasswordLength", p.min_length.to_string()),
+        ("msDS-MinimumPasswordAge", interval(p.min_age_days, "msDS-MinimumPasswordAge", 86_400, 0).to_string()),
+        ("msDS-MaximumPasswordAge", interval(p.max_age_days, "msDS-MaximumPasswordAge", 86_400, i64::MIN).to_string()),
+        ("msDS-LockoutThreshold", p.lockout_threshold.to_string()),
+        ("msDS-LockoutDuration", interval(p.lockout_minutes, "msDS-LockoutDuration", 60, i64::MIN).to_string()),
+        (
+            "msDS-LockoutObservationWindow",
+            interval(p.observation_minutes, "msDS-LockoutObservationWindow", 60, i64::MIN).to_string(),
+        ),
+    ]
+}
+
+async fn find_pso(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<SearchEntry> {
+    let container = format!("{PSO_CONTAINER},{base_dn}");
+    let filter = format!("(&(objectClass=msDS-PasswordSettings)(cn={}))", ldap_escape(name));
+    let (entries, _) = ldap
+        .search(&container, Scope::OneLevel, &filter, PSO_ATTRS.to_vec())
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("Password policy '{}' not found", name))
+}
+
+pub async fn create_pso(ldap: &mut ldap3::Ldap, base_dn: &str, s: &PsoSettings<'_>) -> LdapResult<()> {
+    validate_pso(s)?;
+    let dn = format!("CN={},{PSO_CONTAINER},{base_dn}", dn_escape(s.name));
+    let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
+        (sv("objectClass"), HashSet::from([sv("top"), sv("msDS-PasswordSettings")])),
+        (sv("cn"), HashSet::from([sv(s.name)])),
+        // Required by the schema; storing passwords reversibly is never wanted.
+        (sv("msDS-PasswordReversibleEncryptionEnabled"), HashSet::from([sv("FALSE")])),
+    ];
+    for (name, value) in pso_values(s, None) {
+        attrs.push((sv(name), HashSet::from([sv(&value)])));
+    }
+    if !s.description.is_empty() {
+        attrs.push((sv("description"), HashSet::from([sv(s.description)])));
+    }
+    let res = ldap.add(&dn, attrs).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(()),
+        68 => Err(format!("A password policy named '{}' already exists", s.name)),
+        _ => Err(format!("Failed to create password policy: {}", res)),
+    }
+}
+
+pub async fn update_pso(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    name: &str,
+    s: &PsoSettings<'_>,
+) -> LdapResult<()> {
+    validate_pso(s)?;
+    let current = find_pso(ldap, base_dn, name).await?;
+    let mut mods: Vec<Mod<Vec<u8>>> = pso_values(s, Some(&current))
+        .into_iter()
+        .map(|(attr, value)| Mod::Replace(sv(attr), HashSet::from([sv(&value)])))
+        .collect();
+    mods.push(set_or_clear("description", s.description));
+    ldap.modify(&current.dn, mods)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to update password policy: {}", e))?;
+    Ok(())
+}
+
+pub async fn delete_pso(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<()> {
+    let current = find_pso(ldap, base_dn, name).await?;
+    ldap.delete(&current.dn)
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| format!("Failed to delete password policy: {}", e))?;
+    Ok(())
+}
+
+/// Whether a policy may be applied to this object. Windows applies PSOs to
+/// users and to global security groups only; applied to anything else it is
+/// silently ignored, which is worse than a refusal.
+pub(crate) fn check_pso_target(name: &str, classes: &[String], group_type: i64) -> LdapResult<()> {
+    let has = |c: &str| classes.iter().any(|x| x.eq_ignore_ascii_case(c));
+    if has("computer") {
+        return Err(format!("{name} is a computer; password policies apply to users and groups"));
+    }
+    if has("group") {
+        if GroupScope::of(group_type) != Some(GroupScope::Global) || !is_security(group_type) {
+            return Err(format!(
+                "{name} is a {} group. Windows applies password policies only through global security groups.",
+                group_type_label(group_type).to_lowercase()
+            ));
+        }
+        return Ok(());
+    }
+    if has("user") {
+        return Ok(());
+    }
+    Err(format!("{name} is not a user or a group"))
+}
+
+pub async fn apply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, target: &str) -> LdapResult<()> {
+    let pso = find_pso(ldap, base_dn, pso_name).await?;
+    let filter = format!("(&(|(objectClass=user)(objectClass=group))(sAMAccountName={}))", ldap_escape(target));
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["objectClass", "groupType"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let e = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("No user or group is named '{}'", target))?;
+    let classes = e.attrs.get("objectClass").cloned().unwrap_or_default();
+    check_pso_target(target, &classes, attr(&e, "groupType").parse().unwrap_or(0))?;
+
+    let mods = vec![Mod::Add(sv("msDS-PSOAppliesTo"), HashSet::from([sv(&e.dn)]))];
+    let res = ldap.modify(&pso.dn, mods).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(()),
+        20 => Err(format!("{} already applies to {}", pso_name, target)),
+        _ => Err(format!("Failed to apply password policy: {}", res)),
+    }
+}
+
+pub async fn unapply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, target_dn: &str) -> LdapResult<()> {
+    let pso = find_pso(ldap, base_dn, pso_name).await?;
+    let mods = vec![Mod::Delete(sv("msDS-PSOAppliesTo"), HashSet::from([sv(target_dn)]))];
+    let res = ldap.modify(&pso.dn, mods).await.map_err(|e| e.to_string())?;
+    if res.rc == 0 {
+        return Ok(());
+    }
+    Err(if not_a_member(res.rc, &res.text) {
+        format!("{} does not apply to {}", pso_name, first_rdn_value(target_dn))
+    } else {
+        format!("Failed to remove: {}", res)
+    })
+}
+
+/// Users and global security groups, for the "Apply to" box's suggestions.
+pub async fn pso_candidates(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
+    let filter = format!(
+        "(|(&(objectCategory=person)(objectClass=user))(&(objectClass=group)(groupType={})))",
+        group_type_value(GroupScope::Global, true)
+    );
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = entries
+        .into_iter()
+        .map(|e| attr(&SearchEntry::construct(e), "sAMAccountName"))
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    Ok(names)
+}
+
+/// Which policy governs a user: the name of the PSO the DC computes for it
+/// (msDS-ResultantPSO), or None when the domain policy does.
+pub async fn resultant_pso(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) -> LdapResult<Option<String>> {
+    let filter = format!("(&(objectCategory=person)(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["msDS-ResultantPSO"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let e = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("User '{}' not found", username))?;
+    let dn = attr(&e, "msDS-ResultantPSO");
+    Ok((!dn.is_empty()).then(|| first_rdn_value(&dn)))
+}
+
 // ── zone create / delete ──────────────────────────────────────────────────────
 //
 // A zone is a dnsZone object holding dNSProperty settings, plus an "@" dnsNode
@@ -3767,5 +4125,118 @@ mod group_tests {
         let fsp = member_from_entry(&entry("CN=S-1-5-11,CN=ForeignSecurityPrincipals,DC=x", &[
             ("objectClass", &["top", "foreignSecurityPrincipal"]), ("cn", &["S-1-5-11"])]));
         assert_eq!((fsp.kind, fsp.name.as_str(), fsp.detail.as_str()), ("foreign", "Authenticated Users", "S-1-5-11"));
+    }
+}
+
+#[cfg(test)]
+mod pso_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn settings(policy: PasswordPolicy) -> PsoSettings<'static> {
+        PsoSettings { name: "Admins", description: "", precedence: 10, policy }
+    }
+
+    fn strict() -> PasswordPolicy {
+        PasswordPolicy {
+            min_length: 14,
+            complexity: true,
+            history: 24,
+            max_age_days: 90,
+            min_age_days: 1,
+            lockout_threshold: 5,
+            lockout_minutes: 30,
+            observation_minutes: 30,
+            machine_account_quota: 0,
+        }
+    }
+
+    fn values(v: &[(&'static str, String)]) -> HashMap<&'static str, String> {
+        v.iter().cloned().collect()
+    }
+
+    #[test]
+    fn new_policy_values() {
+        let v = values(&pso_values(&settings(strict()), None));
+        assert_eq!(v["msDS-PasswordSettingsPrecedence"], "10");
+        assert_eq!(v["msDS-PasswordComplexityEnabled"], "TRUE");
+        assert_eq!(v["msDS-MinimumPasswordLength"], "14");
+        assert_eq!(v["msDS-MaximumPasswordAge"], (-90i64 * 86_400 * 10_000_000).to_string());
+        assert_eq!(v["msDS-MinimumPasswordAge"], (-86_400i64 * 10_000_000).to_string());
+        assert_eq!(v["msDS-LockoutDuration"], (-30i64 * 60 * 10_000_000).to_string());
+        assert_eq!(v["msDS-LockoutObservationWindow"], (-30i64 * 60 * 10_000_000).to_string());
+    }
+
+    #[test]
+    fn zero_means_never_except_for_minimum_age() {
+        let p = PasswordPolicy { max_age_days: 0, min_age_days: 0, lockout_threshold: 0, lockout_minutes: 0,
+            observation_minutes: 0, ..strict() };
+        let v = values(&pso_values(&settings(p), None));
+        assert_eq!(v["msDS-MaximumPasswordAge"], i64::MIN.to_string());
+        assert_eq!(v["msDS-MinimumPasswordAge"], "0");
+        assert_eq!(v["msDS-LockoutDuration"], i64::MIN.to_string());
+    }
+
+    /// A 12-hour minimum age set elsewhere shows as 0 days; saving the form
+    /// unchanged must keep the 12 hours.
+    #[test]
+    fn edit_keeps_what_the_form_cannot_show() {
+        let twelve_hours = (-12i64 * 3600 * 10_000_000).to_string();
+        let current = SearchEntry {
+            dn: "CN=Admins".into(),
+            attrs: HashMap::from([("msDS-MinimumPasswordAge".to_string(), vec![twelve_hours.clone()])]),
+            bin_attrs: HashMap::new(),
+        };
+        let p = PasswordPolicy { min_age_days: 0, ..strict() };
+        let v = values(&pso_values(&settings(p), Some(&current)));
+        assert_eq!(v["msDS-MinimumPasswordAge"], twelve_hours);
+        // Changed on purpose: written.
+        let p = PasswordPolicy { min_age_days: 2, ..strict() };
+        let v = values(&pso_values(&settings(p), Some(&current)));
+        assert_eq!(v["msDS-MinimumPasswordAge"], (-2i64 * 86_400 * 10_000_000).to_string());
+    }
+
+    #[test]
+    fn stored_policy_reads_back() {
+        let mut attrs = HashMap::new();
+        for (k, v) in values(&pso_values(&settings(strict()), None)) {
+            attrs.insert(k.to_string(), vec![v]);
+        }
+        attrs.insert("cn".into(), vec!["Admins".into()]);
+        attrs.insert("msDS-PSOAppliesTo".into(), vec!["CN=Domain Admins,CN=Users,DC=x".into()]);
+        let pso = pso_from_entry(&SearchEntry { dn: "CN=Admins,…".into(), attrs, bin_attrs: HashMap::new() });
+        assert_eq!(pso.name, "Admins");
+        assert_eq!(pso.precedence, 10);
+        assert_eq!(pso.policy.min_length, strict().min_length);
+        assert_eq!(pso.policy.max_age_days, 90);
+        assert_eq!(pso.policy.lockout_minutes, 30);
+        assert!(pso.policy.complexity);
+        assert_eq!(pso.applies_to[0].name, "Domain Admins");
+    }
+
+    #[test]
+    fn bad_policies_are_refused() {
+        assert!(validate_pso(&settings(strict())).is_ok());
+        assert!(validate_pso(&PsoSettings { name: "", ..settings(strict()) }).is_err());
+        assert!(validate_pso(&PsoSettings { precedence: 0, ..settings(strict()) }).is_err());
+        assert!(validate_pso(&PsoSettings { name: &"x".repeat(65), ..settings(strict()) }).is_err());
+        // The domain policy's own rules apply too.
+        let p = PasswordPolicy { observation_minutes: 60, lockout_minutes: 30, ..strict() };
+        assert!(validate_pso(&settings(p)).is_err());
+    }
+
+    #[test]
+    fn only_users_and_global_security_groups() {
+        let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let user = c(&["top", "person", "organizationalPerson", "user"]);
+        let computer = c(&["top", "person", "organizationalPerson", "user", "computer"]);
+        let group = c(&["top", "group"]);
+        assert!(check_pso_target("yariv", &user, 0).is_ok());
+        assert!(check_pso_target("PC1$", &computer, 0).is_err());
+        assert!(check_pso_target("Team", &group, -2147483646).is_ok());
+        let err = check_pso_target("All", &group, -2147483640).unwrap_err();
+        assert!(err.contains("universal security") && err.contains("global security"), "{err}");
+        assert!(check_pso_target("List", &group, 2).is_err(), "global distribution");
+        assert!(check_pso_target("Administrators", &group, -2147483643).is_err(), "builtin");
     }
 }

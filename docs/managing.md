@@ -143,6 +143,28 @@ failed attempt is never forgotten. Combinations the directory would refuse — a
 than the maximum, an attempt window longer than the lockout duration — are rejected before
 anything is written, and the whole policy is recorded in the audit log as `policy.update`.
 
+### Policies for groups and users
+
+Below the domain policy, **Policies for groups and users** sets different rules for some
+accounts: longer passwords for administrators, no expiry for service accounts. These are
+Samba's *password settings objects* (PSOs), the same ones
+`samba-tool domain passwordsettings pso` manages.
+
+- **Add policy** starts from the domain policy's values; change what should differ. Each
+  policy has a **precedence**: when several apply to a user, the lowest number wins, and a
+  policy applied to the user directly beats one applied through a group.
+- **Apply** a policy to users or to **global security groups** — the only groups Windows
+  applies them through, so EasyDC refuses universal, domain local and distribution groups
+  rather than let the policy be silently ignored. Remove a user or group with its **×**.
+  A policy applied to nobody has no effect.
+- **Which policy applies to** answers for one user: the policy the DC computes for it, or
+  the domain policy.
+
+These policies need the domain functional level at Windows 2008 or higher (Samba 4.9 and
+newer on every DC). On an older domain the section explains how to raise it instead.
+Changes are recorded in the audit log as `pso.create`, `pso.update`, `pso.delete`,
+`pso.apply` and `pso.unapply`.
+
 ## EasyDC administrators
 
 **Settings** in the top bar manages the accounts that sign in to *EasyDC* — not domain

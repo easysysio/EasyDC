@@ -1,0 +1,52 @@
+{# The settings of a per-group password policy, shared by the Add and Edit
+   dialogs. Expects `f` (the values to show: a policy) and `fid` (a prefix
+   that keeps element ids unique on the page). #}
+<div class="row g-3">
+    <div class="col-sm-6">
+        <label class="form-label" for="{{ fid }}-min">Minimum length</label>
+        <input type="number" id="{{ fid }}-min" name="min_length" class="form-control" required
+            min="0" max="255" value="{{ f.min_length }}">
+    </div>
+    <div class="col-sm-6">
+        <label class="form-label" for="{{ fid }}-hist">Remember previous passwords</label>
+        <input type="number" id="{{ fid }}-hist" name="history" class="form-control" required
+            min="0" max="1024" value="{{ f.history }}">
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="complexity" value="1"
+                id="{{ fid }}-cx" {% if f.complexity %}checked{% endif %}>
+            <label class="form-check-label" for="{{ fid }}-cx">Require complexity</label>
+        </div>
+    </div>
+    <div class="col-sm-6">
+        <label class="form-label" for="{{ fid }}-max">Maximum age (days)</label>
+        <input type="number" id="{{ fid }}-max" name="max_age_days" class="form-control" required
+            min="0" value="{{ f.max_age_days }}">
+        <div class="form-text">0 = never expires.</div>
+    </div>
+    <div class="col-sm-6">
+        <label class="form-label" for="{{ fid }}-minage">Minimum age (days)</label>
+        <input type="number" id="{{ fid }}-minage" name="min_age_days" class="form-control" required
+            min="0" value="{{ f.min_age_days }}">
+        <div class="form-text">0 = change at any time.</div>
+    </div>
+    <div class="col-sm-4">
+        <label class="form-label" for="{{ fid }}-thr">Lock after bad attempts</label>
+        <input type="number" id="{{ fid }}-thr" name="lockout_threshold" class="form-control" required
+            min="0" max="999" value="{{ f.lockout_threshold }}">
+        <div class="form-text">0 = never lock.</div>
+    </div>
+    <div class="col-sm-4">
+        <label class="form-label" for="{{ fid }}-dur">Lockout (minutes)</label>
+        <input type="number" id="{{ fid }}-dur" name="lockout_minutes" class="form-control" required
+            min="0" value="{{ f.lockout_minutes }}">
+        <div class="form-text">0 = until unlocked.</div>
+    </div>
+    <div class="col-sm-4">
+        <label class="form-label" for="{{ fid }}-win">Attempt window (minutes)</label>
+        <input type="number" id="{{ fid }}-win" name="observation_minutes" class="form-control" required
+            min="0" value="{{ f.observation_minutes }}">
+        <div class="form-text">At most the lockout time.</div>
+    </div>
+</div>

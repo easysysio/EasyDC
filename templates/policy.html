@@ -131,6 +131,227 @@
         </a>
     </div>
 </form>
+
+<!-- ── Per-group policies (PSOs) ────────────────────────────────────────── -->
+<div class="d-flex justify-content-between align-items-end mt-5 mb-3">
+    <div>
+        <h5 class="mb-0"><i class="bi bi-people me-2 text-primary"></i>Policies for groups and users</h5>
+        <small class="text-muted">
+            Stricter or looser rules for some accounts — admins, service accounts — instead of the
+            domain policy above.
+        </small>
+    </div>
+    {% if pso_supported %}
+    <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addPsoModal">
+        <i class="bi bi-plus-circle me-1"></i> Add policy
+    </button>
+    {% endif %}
+</div>
+
+{% if not pso_supported %}
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-1"></i>
+    Policies for groups need the domain functional level to be Windows 2008 or higher{% if domain_level %}
+    (this domain is at level {{ domain_level }}){% endif %}. Raise it with
+    <code>samba-tool domain level raise --domain-level=2008_R2</code> once every DC runs Samba 4.9 or newer.
+</div>
+{% else %}
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body py-2">
+        <form method="get" action="/servers/{{ server.id }}/policy" class="row g-2 align-items-center">
+            <div class="col-auto small text-muted">Which policy applies to</div>
+            <div class="col-auto">
+                <input type="text" name="check" class="form-control form-control-sm" list="psoCandidates"
+                    placeholder="username" value="{{ check_user | default(value="") }}" required>
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-outline-secondary btn-sm">Check</button>
+            </div>
+            {% if check_user %}
+            <div class="col-auto small">
+                {% if check_error %}
+                <span class="text-danger">{{ check_error }}</span>
+                {% elif check_result %}
+                <i class="bi bi-arrow-right me-1"></i><strong>{{ check_user }}</strong> follows
+                <strong>{{ check_result }}</strong>.
+                {% else %}
+                <i class="bi bi-arrow-right me-1"></i><strong>{{ check_user }}</strong> follows the domain policy.
+                {% endif %}
+            </div>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+<datalist id="psoCandidates">
+    {% for c in candidates %}<option value="{{ c }}">{% endfor %}
+</datalist>
+
+{% for pso in psos %}
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-white d-flex align-items-center">
+        <strong>{{ pso.name }}</strong>
+        <span class="badge bg-light text-dark border ms-2" title="Lower wins when several apply">
+            precedence {{ pso.precedence }}
+        </span>
+        {% if pso.description %}<span class="text-muted small ms-2">{{ pso.description }}</span>{% endif %}
+        <div class="ms-auto btn-group btn-group-sm">
+            <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal"
+                data-bs-target="#editPso{{ loop.index }}" title="Edit">
+                <i class="bi bi-pencil"></i>
+            </button>
+            <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal"
+                data-bs-target="#deletePso{{ loop.index }}" title="Delete">
+                <i class="bi bi-trash"></i>
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="small mb-3">
+            {% set p = pso.policy %}
+            At least <strong>{{ p.min_length }}</strong> characters{% if p.complexity %}, complex{% endif %} ·
+            remembers <strong>{{ p.history }}</strong> ·
+            {% if p.max_age_days > 0 %}expires after <strong>{{ p.max_age_days }}</strong> days{% else %}never expires{% endif %} ·
+            {% if p.lockout_threshold > 0 %}
+            locks after <strong>{{ p.lockout_threshold }}</strong> bad attempts
+            {% if p.lockout_minutes > 0 %}for {{ p.lockout_minutes }} min{% else %}until unlocked{% endif %}
+            {% else %}no lockout{% endif %}
+        </div>
+        <div class="small text-muted mb-1">Applies to</div>
+        <div class="d-flex flex-wrap gap-1 mb-2">
+            {% for t in pso.applies_to %}
+            <form method="post" action="/servers/{{ server.id }}/policy/pso/{{ pso.name | urlencode_strict }}/unapply"
+                class="d-inline">
+                <input type="hidden" name="target_dn" value="{{ t.dn }}">
+                <span class="badge bg-light text-dark border d-inline-flex align-items-center">
+                    {% if t.kind == "group" %}<i class="bi bi-people-fill me-1 text-success"></i>{% else %}<i class="bi bi-person-circle me-1 text-secondary"></i>{% endif %}
+                    {{ t.name }}
+                    <button type="submit" class="btn-close ms-2" style="font-size:.55rem"
+                        title="Stop applying {{ pso.name }} to {{ t.name }}"></button>
+                </span>
+            </form>
+            {% else %}
+            <span class="text-muted small">nobody yet — this policy has no effect until it is applied</span>
+            {% endfor %}
+        </div>
+        <form method="post" action="/servers/{{ server.id }}/policy/pso/{{ pso.name | urlencode_strict }}/apply"
+            class="row g-2">
+            <div class="col-auto">
+                <input type="text" name="target" class="form-control form-control-sm" list="psoCandidates"
+                    placeholder="User or global group" required autocomplete="off">
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-outline-primary btn-sm">Apply</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="editPso{{ loop.index }}" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Edit — {{ pso.name }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="/servers/{{ server.id }}/policy/pso/{{ pso.name | urlencode_strict }}/edit">
+                <div class="modal-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-3">
+                            <label class="form-label" for="pso{{ loop.index }}-prec">Precedence</label>
+                            <input type="number" id="pso{{ loop.index }}-prec" name="precedence" class="form-control"
+                                required min="1" value="{{ pso.precedence }}">
+                        </div>
+                        <div class="col-sm-9">
+                            <label class="form-label" for="pso{{ loop.index }}-desc">Description</label>
+                            <input type="text" id="pso{{ loop.index }}-desc" name="description" class="form-control"
+                                value="{{ pso.description }}">
+                        </div>
+                    </div>
+                    {% set f = pso.policy %}{% set fid = "pso" ~ loop.index %}
+                    {% include "pso_fields.html" %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deletePso{{ loop.index }}" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-trash me-1"></i> Delete Policy</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Delete <strong>{{ pso.name }}</strong>? Its {{ pso.applies_to | length }} users and groups
+                go back to the domain policy, or to another policy that applies to them.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <form method="post" action="/servers/{{ server.id }}/policy/pso/{{ pso.name | urlencode_strict }}/delete"
+                    class="d-inline">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="text-center py-4 text-muted small">
+    No policies for groups yet: every account follows the domain policy above.
+</div>
+{% endfor %}
+
+<div class="small text-muted">
+    When several policies apply to a user, the lowest precedence number wins, and one applied to the
+    user directly beats one applied through a group. Windows applies them only through
+    <strong>global security</strong> groups, so EasyDC only offers those.
+</div>
+
+<div class="modal fade" id="addPsoModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-circle me-1"></i> Add Password Policy</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" action="/servers/{{ server.id }}/policy/pso">
+                <div class="modal-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-5">
+                            <label class="form-label" for="new-name">Name <span class="text-danger">*</span></label>
+                            <input type="text" id="new-name" name="name" class="form-control" required maxlength="64"
+                                placeholder="e.g. Admins">
+                        </div>
+                        <div class="col-sm-3">
+                            <label class="form-label" for="new-prec">Precedence</label>
+                            <input type="number" id="new-prec" name="precedence" class="form-control" required
+                                min="1" value="10">
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label" for="new-desc">Description</label>
+                            <input type="text" id="new-desc" name="description" class="form-control">
+                        </div>
+                    </div>
+                    <div class="form-text mb-3">Starts from the domain policy's values; change what should differ.</div>
+                    {% set f = policy %}{% set fid = "new" %}
+                    {% include "pso_fields.html" %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Policy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endif %}
 
 {% endblock %}

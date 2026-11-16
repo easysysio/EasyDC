@@ -6,6 +6,7 @@ use axum::{
 use serde::Deserialize;
 use tera::Context;
 
+use super::path_segment;
 use crate::{auth::CurrentUser, db, ldap, models::Server, AppState};
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -24,20 +25,6 @@ fn redirect_home() -> Response {
 
 fn redirect_users(id: i64) -> Response {
     Redirect::to(&format!("/servers/{}/users", id)).into_response()
-}
-
-/// A name as one URL path segment: `Sales/EMEA` must not become two segments,
-/// nor `a?b` a query.
-fn path_segment(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{:02X}", b));
-        }
-    }
-    out
 }
 
 fn group_page(id: i64, name: &str) -> String {
