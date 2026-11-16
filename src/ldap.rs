@@ -110,8 +110,22 @@ pub(crate) fn attr(e: &SearchEntry, key: &str) -> String {
 // ── connection ────────────────────────────────────────────────────────────────
 
 pub async fn connect_and_bind(server: &Server) -> LdapResult<ldap3::Ldap> {
-    let settings = LdapConnSettings::new().set_no_tls_verify(server.skip_tls);
-    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &server.ldap_url)
+    connect_url(server, &server.ldap_url, None).await
+}
+
+/// Bind to `url` with the server's account and TLS setting: how EasyDC reaches
+/// the domain's other DCs. A timeout keeps an unreachable DC from stalling a
+/// page.
+pub async fn connect_url(
+    server: &Server,
+    url: &str,
+    timeout: Option<std::time::Duration>,
+) -> LdapResult<ldap3::Ldap> {
+    let mut settings = LdapConnSettings::new().set_no_tls_verify(server.skip_tls);
+    if let Some(t) = timeout {
+        settings = settings.set_conn_timeout(t);
+    }
+    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, url)
         .await
         .map_err(|e| format!("Connection failed: {}", e))?;
     ldap3::drive!(conn);
@@ -1428,7 +1442,7 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-fn from_hex(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn from_hex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Replication page: for each DC, the partner it receives each partition from, the last successful sync, and the error in words when it fails. The health check uses the same data, on every DC, instead of only checking that partners exist.
 - Password policies for groups and users (Samba's PSOs): create, edit and delete them, apply them to users and global security groups, and check which policy governs a user. Needs domain functional level 2008 or higher.
 - Groups: change an existing group's scope (global, domain local, universal) and type (security, distribution), following Windows' rules.
 - Groups can contain other groups; nesting that would break Windows' rules or make a loop is refused. A computer can be added without its trailing `$`.

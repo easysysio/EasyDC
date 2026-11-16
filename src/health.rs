@@ -219,7 +219,7 @@ pub(crate) fn filetime_to_unix(ft: i64) -> i64 {
 }
 
 /// objectGUID is stored little-endian in its first three fields.
-fn format_guid(b: &[u8]) -> String {
+pub(crate) fn format_guid(b: &[u8]) -> String {
     if b.len() != 16 {
         return String::new();
     }
@@ -277,7 +277,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// object sits at `CN=NTDS Settings,CN=<server>,CN=Servers,CN=<site>,CN=Sites,…`,
 /// so the server and site names come straight out of the DN, and the matching
 /// server object carries the DNS host name.
-async fn load_dcs(conn: &mut ldap3::Ldap, config_dn: &str) -> LdapResult<Vec<DcInfo>> {
+pub(crate) async fn load_dcs(conn: &mut ldap3::Ldap, config_dn: &str) -> LdapResult<Vec<DcInfo>> {
     let sites_dn = format!("CN=Sites,{}", config_dn);
     let ntds = search(
         conn,
@@ -411,15 +411,6 @@ pub(crate) fn attr_ci(e: &SearchEntry, key: &str) -> String {
 pub(crate) fn attrs_ci(e: &SearchEntry, key: &str) -> Vec<String> {
     let k = key.to_lowercase();
     e.attrs
-        .iter()
-        .find(|(name, _)| name.to_lowercase() == k)
-        .map(|(_, v)| v.clone())
-        .unwrap_or_default()
-}
-
-fn bin_ci(e: &SearchEntry, key: &str) -> Vec<Vec<u8>> {
-    let k = key.to_lowercase();
-    e.bin_attrs
         .iter()
         .find(|(name, _)| name.to_lowercase() == k)
         .map(|(_, v)| v.clone())
@@ -715,54 +706,65 @@ async fn check_dns_records(ctx: &Ctx) -> CheckResult {
 
 // ── replication ───────────────────────────────────────────────────────────────
 
-/// Presence-only for now. `repsFrom` is an NDR-encoded blob whose full decode
-/// is a separate piece of work (the same class of problem as the `dnsRecord`
-/// parsing in `ldap.rs`); until that lands, this reports whether replication is
-/// configured at all, which still catches the common "second DC joined but
-/// never replicated" case.
-async fn check_replication(conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
+/// Every DC's inbound links, decoded from repsFrom (see replication.rs): a
+/// failing or stale link fails the check, and the Replication page has the
+/// detail.
+async fn check_replication(server: &Server, conn: &mut ldap3::Ldap, ctx: &Ctx) -> CheckResult {
     let c = CheckResult::new("replication", "Replication", "Replication partners");
 
     if ctx.dcs.len() < 2 {
         return c.skipped("Single domain controller — nothing to replicate with");
     }
 
-    let partitions = [
-        ("Domain", ctx.base_dn.clone()),
-        ("Configuration", ctx.config_dn.clone()),
-        ("Schema", format!("CN=Schema,{}", ctx.config_dn)),
-    ];
-
+    let report = crate::replication::collect(server, conn, &ctx.base_dn, &ctx.config_dn, &ctx.dcs).await;
     let mut c = c;
-    let mut unconfigured = Vec::new();
-
-    for (label, dn) in &partitions {
-        match read_one(conn, dn, vec!["repsFrom"]).await {
-            Ok(e) => {
-                let n = bin_ci(&e, "repsFrom").len().max(attrs_ci(&e, "repsFrom").len());
-                if n == 0 {
-                    unconfigured.push(label.to_string());
-                    c = c.line(format!("{}: no inbound replication partners", label));
-                } else {
-                    c = c.line(format!("{}: {}", label, plural(n, "inbound partner", "inbound partners")));
-                }
-            }
-            Err(e) => {
-                c = c.line(format!("{}: could not read repsFrom ({})", label, e));
-            }
+    let mut unhealthy = 0;
+    for dc in &report.dcs {
+        if let Some(e) = &dc.error {
+            c = c.line(format!("{}: could not be read ({})", dc.name, e));
+            continue;
+        }
+        if dc.links.is_empty() {
+            c = c.line(format!("{}: no inbound replication partners", dc.name));
+            continue;
+        }
+        for l in dc.links.iter().filter(|l| l.status != "ok") {
+            unhealthy += 1;
+            c = c.line(format!("{} ← {} ({}): {}", dc.name, l.source, l.partition, l.note));
         }
     }
+    let silent: Vec<&str> =
+        report.dcs.iter().filter(|d| d.error.is_none() && d.links.is_empty()).map(|d| d.name.as_str()).collect();
 
-    c = c.line("Note: partner health and last-success times are not yet decoded — run `samba-tool drs showrepl` for those.");
-
-    if unconfigured.is_empty() {
-        c.set(PASS, "All three partitions have inbound replication partners")
-    } else {
+    if report.fail > 0 || !silent.is_empty() {
         c.set(
             FAIL,
-            format!("No inbound replication for: {}", unconfigured.join(", ")),
+            if silent.is_empty() {
+                format!("{} failing", plural(report.fail, "replication link", "replication links"))
+            } else {
+                format!("No inbound replication on {}", silent.join(", "))
+            },
         )
-        .fix("Check `samba-tool drs showrepl` on each DC. A partition with no partners will silently diverge.")
+        .fix("Open the Replication page for each link's error. `samba-tool drs showrepl` on the DC shows the same; a DC that stops replicating silently drifts apart from the others.")
+    } else if report.warn > 0 || report.unreachable > 0 {
+        c.set(
+            WARN,
+            if report.unreachable > 0 {
+                format!("{} could not be read", plural(report.unreachable, "DC", "DCs"))
+            } else {
+                format!("{} to look at", plural(unhealthy, "replication link", "replication links"))
+            },
+        )
+        .fix("The Replication page shows each DC's partners and when they last succeeded.")
+    } else {
+        c.set(
+            PASS,
+            format!(
+                "{} healthy across {}",
+                plural(report.ok, "replication link", "replication links"),
+                plural(report.dcs.len(), "DC", "DCs")
+            ),
+        )
     }
 }
 
@@ -1225,7 +1227,7 @@ pub async fn run(server: &Server) -> LdapResult<HealthReport> {
         check_clock_skew(&mut conn).await,
         check_dc_inventory(&ctx).await,
         check_fsmo(&mut conn, &ctx).await,
-        check_replication(&mut conn, &ctx).await,
+        check_replication(server, &mut conn, &ctx).await,
         check_dns_records(&ctx).await,
         check_functional_levels(&mut conn).await,
         check_ldaps(server).await,

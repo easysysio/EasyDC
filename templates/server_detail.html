@@ -104,6 +104,18 @@
     </div>
 
     <div class="col">
+        <a href="/servers/{{ server.id }}/replication" class="text-decoration-none">
+            <div class="card h-100 shadow-sm hover-card">
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-arrow-left-right fs-1 text-info"></i>
+                    <h5 class="card-title mt-3">Replication</h5>
+                    <p class="card-text text-muted small">Each DC's partners, last successful sync and errors</p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    <div class="col">
         <a href="/servers/{{ server.id }}/ous" class="text-decoration-none">
             <div class="card h-100 shadow-sm hover-card">
                 <div class="card-body text-center py-5">

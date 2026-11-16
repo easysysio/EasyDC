@@ -16,7 +16,7 @@ the report runs it again.
 | **Domain** | Domain controllers | Only one DC (no redundancy), or a DC with no `dNSHostName` |
 | **Domain** | FSMO role holders | Any of the five roles has no owner, or points at a DC object that no longer exists |
 | **Domain** | Functional levels | Domain or forest below 2008 R2 |
-| **Replication** | Replication partners | A partition (domain, configuration, schema) has no inbound partner. Skipped with a single DC |
+| **Replication** | Replication partners | On every DC: a link with failed attempts or no success for a day fails, one quiet for over an hour or with automatic replication disabled warns, a DC with no inbound partners fails, and a DC EasyDC cannot reach warns. Skipped with a single DC |
 | **DNS** | Service location records | A required record is missing: the `_ldap`, `_kerberos`, `_kpasswd` and `_gc` SRV records, their `_msdcs` forms, each DC's host record, or its `<GUID>._msdcs` CNAME |
 | **Security** | LDAPS | Port 636 unreachable, or the certificate expires within **30 days** (warn) or has expired (fail) |
 | **Security** | Password and lockout policy | No minimum length (fail), or weaker than Samba's defaults — complexity off, no lockout, no expiry, no history (warn) |
@@ -47,8 +47,9 @@ over LDAP:
 - SYSVOL contents, replication and ACLs
 - `net ads testjoin` and service status
 
-Replication is reported as **partner presence only**. For last-success times and failure
-counts, run `samba-tool drs showrepl` on the DC.
+Directory replication is covered, on every DC — the **Replication** page has the detail.
+SYSVOL replication (the Group Policy files) is not: Samba does not replicate SYSVOL itself,
+so it depends on whatever you set up for it (rsync, for example).
 
 ## Fixing what it finds
 

@@ -189,7 +189,7 @@ Get started
 <h3 class="ed-check-title">Replication</h3>
 </div>
 <ul class="ed-check-list">
-<li>Inbound partners on the domain, configuration and schema partitions</li>
+<li>Every DC's inbound partners, last success and errors</li>
 </ul>
 </div>
 <div class="es-card ed-check">

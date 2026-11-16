@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Replication - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">Replication</li>
+    </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div class="d-flex align-items-center">
+        <i class="bi bi-arrow-left-right fs-2 text-info me-3"></i>
+        <div>
+            <h4 class="mb-0">Replication</h4>
+            <small class="text-muted">What each domain controller receives, from whom, and when it last worked</small>
+        </div>
+    </div>
+    <a href="/servers/{{ server.id }}/replication" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+    </a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">
+    <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
+</div>
+{% endif %}
+
+{% if report %}
+{% if report.dcs | length < 2 %}
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-1"></i>
+    This domain has a single domain controller, so there is nothing to replicate with. A second DC,
+    joined with <code>samba-tool domain join</code>, removes the single point of failure.
+</div>
+{% else %}
+
+<div class="d-flex flex-wrap gap-2 mb-4">
+    {% if report.fail == 0 and report.warn == 0 and report.unreachable == 0 %}
+    <span class="badge bg-success-subtle text-success border border-success-subtle fs-6">
+        <i class="bi bi-check-circle me-1"></i>All {{ report.ok }} links healthy
+    </span>
+    {% else %}
+    {% if report.fail > 0 %}
+    <span class="badge bg-danger-subtle text-danger border border-danger-subtle fs-6">
+        <i class="bi bi-x-circle me-1"></i>{{ report.fail }} failing
+    </span>
+    {% endif %}
+    {% if report.warn > 0 %}
+    <span class="badge bg-warning-subtle text-warning border border-warning-subtle fs-6">
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ report.warn }} to look at
+    </span>
+    {% endif %}
+    {% if report.unreachable > 0 %}
+    <span class="badge bg-danger-subtle text-danger border border-danger-subtle fs-6">
+        <i class="bi bi-plug me-1"></i>{{ report.unreachable }} DC{% if report.unreachable > 1 %}s{% endif %} not reachable
+    </span>
+    {% endif %}
+    <span class="badge bg-success-subtle text-success border border-success-subtle fs-6">
+        {{ report.ok }} healthy
+    </span>
+    {% endif %}
+</div>
+
+{% for dc in report.dcs %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-white d-flex align-items-center">
+        <i class="bi bi-hdd-network me-2 text-secondary"></i>
+        <strong>{{ dc.name }}</strong>
+        <span class="text-muted small ms-2">{{ dc.host }} · site {{ dc.site }}</span>
+        {% if dc.configured %}
+        <span class="badge bg-light text-dark border ms-2" title="The DC this server entry connects to">connected</span>
+        {% endif %}
+        <span class="ms-auto small text-muted">receives from</span>
+    </div>
+    {% if dc.error %}
+    <div class="card-body">
+        <div class="text-danger small">
+            <i class="bi bi-plug me-1"></i>Could not read this DC: {{ dc.error }}
+        </div>
+        <div class="text-muted small mt-1">
+            EasyDC reaches the other DCs by their DNS names with this server's account and TLS setting.
+            If the DC is running, check that this machine can resolve and reach it.
+        </div>
+    </div>
+    {% elif dc.links | length == 0 %}
+    <div class="card-body text-danger small">
+        <i class="bi bi-x-circle me-1"></i>No inbound replication partners: this DC receives no changes from
+        any other, so it will drift apart. Check <code>samba-tool drs showrepl</code> on it.
+    </div>
+    {% else %}
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-3">Partition</th>
+                    <th>From</th>
+                    <th>Last success</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in dc.links %}
+                <tr>
+                    <td class="ps-3">{{ l.partition }}</td>
+                    <td>{{ l.source }}</td>
+                    <td title="{{ l.last_success }}">
+                        {% if l.ago %}{{ l.ago }}<span class="text-muted small ms-1">({{ l.last_success }})</span>{% else %}{{ l.last_success }}{% endif %}
+                    </td>
+                    <td>
+                        {% if l.status == "ok" %}
+                        <span class="badge bg-success-subtle text-success border border-success-subtle">
+                            <i class="bi bi-check-circle me-1"></i>OK
+                        </span>
+                        {% elif l.status == "warn" %}
+                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">
+                            <i class="bi bi-exclamation-triangle me-1"></i>Check
+                        </span>
+                        {% else %}
+                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
+                            <i class="bi bi-x-circle me-1"></i>Failing
+                        </span>
+                        {% endif %}
+                        {% if l.note %}<div class="small text-muted mt-1">{{ l.note }}</div>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+
+<div class="small text-muted">
+    Read from each DC's <code>repsFrom</code> records over LDAP: the same data
+    <code>samba-tool drs showrepl</code> shows. Samba replicates every 5 minutes even when nothing
+    changed, so a last success more than an hour old is flagged. To force a sync now, run
+    <code>samba-tool drs replicate &lt;to-DC&gt; &lt;from-DC&gt; &lt;partition DN&gt;</code>.
+</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

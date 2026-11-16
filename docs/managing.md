@@ -117,6 +117,25 @@ disabled), delete them, and **link or unlink** them to OUs.
 Browse the OU tree, **create**, **rename** and **delete** OUs, and **move** users,
 groups and computers from one OU to another.
 
+## Replication
+
+**Replication** shows, for each domain controller, which DC it receives each partition from
+(domain, configuration, schema and the two DNS partitions), when that last worked, and the
+error if it failed — what `samba-tool drs showrepl` shows, read over LDAP.
+
+- **OK**: the last attempt succeeded. Samba replicates every 5 minutes even when nothing
+  changed, so the last success is normally minutes old.
+- **Check**: no success for over an hour, the last attempt reported an error, or
+  automatic replication is disabled for that link.
+- **Failing**: failed attempts in a row, with the error in words (*the RPC server is
+  unavailable*, *DNS lookup failure*…), or no success for over a day.
+- A DC with **no inbound partners** receives nothing from the others and drifts apart.
+
+EasyDC reads each DC's own records, so it connects to every DC by its DNS name with the
+server's account and TLS setting. A DC it cannot reach is shown as such, with the reason,
+and does not hold up the rest of the page. To force a sync, run
+`samba-tool drs replicate <to-DC> <from-DC> <partition DN>` on a DC.
+
 ## Password policy
 
 **Password Policy** on a server edits the domain-wide settings that

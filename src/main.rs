@@ -6,6 +6,7 @@ mod health;
 mod ldap;
 mod models;
 mod remediate;
+mod replication;
 
 use std::sync::Arc;
 
@@ -99,6 +100,7 @@ async fn main() {
         .route("/servers/:id/delete", post(handlers::servers::delete_server))
         .route("/servers/:id/health", get(handlers::health::health_check))
         .route("/servers/:id/health/fix", post(handlers::health::health_fix))
+        .route("/servers/:id/replication", get(handlers::replication::replication))
         .route("/servers/:id/policy", get(handlers::policy::policy).post(handlers::policy::update_policy))
         .route("/servers/:id/policy/pso", post(handlers::policy::pso_create))
         .route("/servers/:id/policy/pso/:name/edit", post(handlers::policy::pso_update))
