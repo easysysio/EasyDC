@@ -26,8 +26,24 @@ in the [audit log](#audit-log) with who made it and whether it succeeded.
 
 ## Groups
 
-Create **security** or **distribution** groups, edit and delete them, and manage
-membership: open a group to see its members, add users, and remove them.
+Create **security** or **distribution** groups with a **global**, **domain local** or
+**universal** scope, edit and delete them, and manage membership.
+
+- **Members**: open a group to see everyone in it — users, computers, other groups, and
+  the built-in identities Samba puts in its own groups, such as *Authenticated Users*.
+  The page also lists the groups this group is a member of.
+- **Add** a user, computer or group by name; the box suggests names as you type. A
+  computer can be given with or without its trailing `$`.
+- **Groups inside groups** follow Windows' rules: a global group can only contain global
+  groups, a universal group global and universal ones, and a domain local group any of
+  them. A group cannot contain itself, and EasyDC refuses a nesting that would make a
+  loop (A inside B inside A).
+- **Change scope or type** in the Edit dialog. As in Windows, global and domain local
+  change only through universal, and a change that would break one of the group's
+  memberships is refused with the reason. Built-in groups (Administrators, Domain Admins
+  and the like) keep their scope and type.
+
+When an action is refused, the reason is shown on the page and recorded in the audit log.
 
 ## Computers
 

@@ -26,34 +26,53 @@ fn redirect_users(id: i64) -> Response {
     Redirect::to(&format!("/servers/{}/users", id)).into_response()
 }
 
+/// A name as one URL path segment: `Sales/EMEA` must not become two segments,
+/// nor `a?b` a query.
+fn path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+fn group_page(id: i64, name: &str) -> String {
+    format!("/servers/{}/groups/{}/members", id, path_segment(name))
+}
+
 // ── group list ────────────────────────────────────────────────────────────────
 
-pub async fn groups(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
-
+/// The groups page, with `flash_error` when an action on it just failed: the
+/// reason belongs on the page, not only in the audit log.
+async fn render_groups(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
     let mut ctx = Context::new();
-    ctx.insert("server", &server);
+    ctx.insert("server", server);
 
-    match ldap::open(&server).await {
-        Err(e) => {
-            ctx.insert("error", &e);
-            ctx.insert("groups", &Vec::<ldap::LdapGroup>::new());
-        }
-        Ok((mut conn, base_dn)) => match ldap::list_groups(&mut conn, &base_dn).await {
-            Err(e) => {
-                ctx.insert("error", &e);
-                ctx.insert("groups", &Vec::<ldap::LdapGroup>::new());
-            }
-            Ok(group_list) => {
-                ctx.insert("groups", &group_list);
-            }
-        },
+    let loaded = match ldap::open(server).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => ldap::list_groups(&mut conn, &base_dn).await,
+    };
+    let (groups, load_error) = match loaded {
+        Ok(g) => (g, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    ctx.insert("groups", &groups);
+    if let Some(e) = flash_error.or(load_error) {
+        ctx.insert("error", &e);
     }
 
     Html(state.tera.render("groups.html", &ctx).unwrap_or_default()).into_response()
+}
+
+pub async fn groups(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_groups(&state, &server, None).await,
+    }
 }
 
 // ── create group ──────────────────────────────────────────────────────────────
@@ -82,8 +101,8 @@ pub async fn create_group(
             &mut conn,
             &base_dn,
             &ldap::NewGroup {
-                name: &form.name,
-                description: &form.description,
+                name: form.name.trim(),
+                description: form.description.trim(),
                 group_type: form.group_type,
             },
         )
@@ -92,7 +111,10 @@ pub async fn create_group(
     .await;
     db::log_action(&state.db, &actor, "group.create", &form.name, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/groups", id)).into_response()
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/groups", id)).into_response(),
+        Err(e) => render_groups(&state, &server, Some(e)).await,
+    }
 }
 
 // ── update group ──────────────────────────────────────────────────────────────
@@ -100,6 +122,13 @@ pub async fn create_group(
 #[derive(Deserialize)]
 pub struct UpdateGroupForm {
     pub description: String,
+    /// global, domain_local or universal. Absent on a built-in group's form,
+    /// and on a page from before scopes were editable: the scope stays.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// security or distribution.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 pub async fn update_group(
@@ -114,21 +143,36 @@ pub async fn update_group(
     };
 
     let result: Result<(), String> = async {
+        let scope = match form.scope.as_deref() {
+            None | Some("") => None,
+            Some(s) => Some(ldap::GroupScope::parse(s).ok_or_else(|| format!("Unknown group scope '{s}'"))?),
+        };
+        let security = match form.kind.as_deref() {
+            None | Some("") => None,
+            Some("security") => Some(true),
+            Some("distribution") => Some(false),
+            Some(k) => return Err(format!("Unknown group type '{k}'")),
+        };
         let (mut conn, base_dn) = ldap::open(&server).await?;
         ldap::update_group(
             &mut conn,
             &base_dn,
             &name,
-            &ldap::GroupUpdate {
-                description: &form.description,
-            },
+            &ldap::GroupUpdate { description: form.description.trim(), scope, security },
         )
         .await
     }
     .await;
-    db::log_action(&state.db, &actor, "group.update", &name, Some(id), &result).await;
+    let target = match (&form.scope, &form.kind) {
+        (Some(s), Some(k)) if !s.is_empty() => format!("{name} ({s} {k})"),
+        _ => name.clone(),
+    };
+    db::log_action(&state.db, &actor, "group.update", &target, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/groups", id)).into_response()
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/groups", id)).into_response(),
+        Err(e) => render_groups(&state, &server, Some(e)).await,
+    }
 }
 
 // ── delete group ──────────────────────────────────────────────────────────────
@@ -150,48 +194,71 @@ pub async fn delete_group(
     .await;
     db::log_action(&state.db, &actor, "group.delete", &name, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/groups", id)).into_response()
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/groups", id)).into_response(),
+        Err(e) => render_groups(&state, &server, Some(e)).await,
+    }
 }
 
 // ── group members page ────────────────────────────────────────────────────────
+
+async fn render_group(
+    state: &AppState,
+    server: &Server,
+    name: &str,
+    flash_error: Option<String>,
+) -> Response {
+    let mut ctx = Context::new();
+    ctx.insert("server", server);
+    ctx.insert("group_name", name);
+
+    let loaded = match ldap::open(server).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => match ldap::group_detail(&mut conn, &base_dn, name).await {
+            Err(e) => Err(e),
+            // Suggestions only: the page works without them.
+            Ok(d) => Ok((d, ldap::member_candidates(&mut conn, &base_dn).await.unwrap_or_default())),
+        },
+    };
+    let load_error = match loaded {
+        Ok((detail, candidates)) => {
+            ctx.insert("group", &detail.group);
+            ctx.insert("members", &detail.members);
+            ctx.insert("member_of", &detail.member_of);
+            ctx.insert("candidates", &candidates);
+            None
+        }
+        Err(e) => {
+            ctx.insert("members", &Vec::<ldap::GroupMember>::new());
+            ctx.insert("member_of", &Vec::<ldap::LdapGroup>::new());
+            ctx.insert("candidates", &Vec::<String>::new());
+            Some(e)
+        }
+    };
+    if let Some(e) = flash_error.or(load_error) {
+        ctx.insert("error", &e);
+    }
+
+    Html(state.tera.render("group_members.html", &ctx).unwrap_or_default()).into_response()
+}
 
 pub async fn group_members(
     State(state): State<AppState>,
     Path((id, name)): Path<(i64, String)>,
 ) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
-
-    let mut ctx = Context::new();
-    ctx.insert("server", &server);
-    ctx.insert("group_name", &name);
-
-    match ldap::open(&server).await {
-        Err(e) => {
-            ctx.insert("error", &e);
-            ctx.insert("members", &Vec::<ldap::LdapUser>::new());
-        }
-        Ok((mut conn, base_dn)) => match ldap::list_group_members(&mut conn, &base_dn, &name).await {
-            Err(e) => {
-                ctx.insert("error", &e);
-                ctx.insert("members", &Vec::<ldap::LdapUser>::new());
-            }
-            Ok(members) => {
-                ctx.insert("members", &members);
-            }
-        },
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_group(&state, &server, &name, None).await,
     }
-
-    Html(state.tera.render("group_members.html", &ctx).unwrap_or_default()).into_response()
 }
 
 // ── add / remove member ───────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct AddMemberForm {
-    pub username: String,
+    /// A username, computer name or group name.
+    #[serde(alias = "username")]
+    pub member: String,
 }
 
 pub async fn add_member(
@@ -204,22 +271,32 @@ pub async fn add_member(
         None => return redirect_home(),
         Some(s) => s,
     };
+    let member = form.member.trim();
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        ldap::add_group_member(&mut conn, &base_dn, &group_name, &form.username).await
+        ldap::add_group_member(&mut conn, &base_dn, &group_name, member).await
     }
     .await;
-    let target = format!("{} → {}", form.username, group_name);
+    let target = format!("{} → {}", member, group_name);
     db::log_action(&state.db, &actor, "group.add_member", &target, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/groups/{}/members", id, group_name)).into_response()
+    match result {
+        Ok(()) => Redirect::to(&group_page(id, &group_name)).into_response(),
+        Err(e) => render_group(&state, &server, &group_name, Some(e)).await,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RemoveMemberForm {
+    pub member_dn: String,
 }
 
 pub async fn remove_member(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
-    Path((id, group_name, username)): Path<(i64, String, String)>,
+    Path((id, group_name)): Path<(i64, String)>,
+    Form(form): Form<RemoveMemberForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -228,13 +305,16 @@ pub async fn remove_member(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        ldap::remove_group_member(&mut conn, &base_dn, &group_name, &username).await
+        ldap::remove_group_member(&mut conn, &base_dn, &group_name, &form.member_dn).await
     }
     .await;
-    let target = format!("{} ✕ {}", username, group_name);
+    let target = format!("{} ✕ {}", form.member_dn, group_name);
     db::log_action(&state.db, &actor, "group.remove_member", &target, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/groups/{}/members", id, group_name)).into_response()
+    match result {
+        Ok(()) => Redirect::to(&group_page(id, &group_name)).into_response(),
+        Err(e) => render_group(&state, &server, &group_name, Some(e)).await,
+    }
 }
 
 pub async fn computers(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
@@ -1514,5 +1594,137 @@ mod users_page_tests {
         .unwrap();
         assert_eq!(f.profile.title, "CTO");
         assert_eq!(f.profile.as_profile().expires, "2026-12-31");
+    }
+}
+
+#[cfg(test)]
+mod groups_page_tests {
+    use super::{path_segment, AddMemberForm, UpdateGroupForm};
+    use crate::ldap::{GroupMember, LdapGroup};
+    use crate::models::Server;
+    use tera::{Context, Tera};
+
+    fn tera() -> Tera {
+        let mut t = Tera::new("templates/**/*.html").expect("templates parse");
+        t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
+            Ok(tera::Value::String("test".to_string()))
+        });
+        t
+    }
+
+    fn server() -> Server {
+        Server {
+            id: 1,
+            name: "DC1".to_string(),
+            ldap_url: "ldaps://dc1.example.com".to_string(),
+            bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
+            bind_password: "secret".to_string(),
+            skip_tls: true,
+        }
+    }
+
+    fn group(name: &str, gt: i64, system: bool) -> LdapGroup {
+        LdapGroup {
+            dn: format!("CN={name},CN=Users,DC=example,DC=com"),
+            name: name.to_string(),
+            description: String::new(),
+            group_type: gt,
+            group_type_label: String::new(),
+            scope: crate::ldap::GroupScope::of(gt),
+            security: gt < 0,
+            system,
+            member_count: 0,
+        }
+    }
+
+    #[test]
+    fn names_stay_one_path_segment() {
+        assert_eq!(path_segment("Domain Admins"), "Domain%20Admins");
+        assert_eq!(path_segment("Sales/EMEA?x#y"), "Sales%2FEMEA%3Fx%23y");
+        assert_eq!(path_segment("a-b_c.d~e"), "a-b_c.d~e");
+        assert_eq!(path_segment("ש"), "%D7%A9");
+    }
+
+    #[test]
+    fn edit_dialog_offers_scope_only_for_ordinary_groups() {
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("groups", &vec![group("Team", -2147483646, false), group("Domain Admins", -2147483646, true)]);
+        let html = tera().render("groups.html", &c).unwrap();
+        assert_eq!(html.matches(r#"<select name="scope""#).count(), 1);
+        assert!(html.contains(r#"<option value="global" selected>"#));
+        assert!(html.contains("a built-in group"));
+        assert!(html.contains("/groups/Domain%20Admins/edit"));
+    }
+
+    fn member(name: &str, kind: &'static str, enabled: Option<bool>) -> GroupMember {
+        GroupMember {
+            dn: format!("CN={name},CN=Users,DC=example,DC=com"),
+            name: name.to_string(),
+            display_name: String::new(),
+            kind,
+            detail: String::new(),
+            group: (kind == "group").then(|| name.to_string()),
+            enabled,
+        }
+    }
+
+    fn members_page(members: Vec<GroupMember>, member_of: Vec<LdapGroup>, error: Option<&str>) -> String {
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("group_name", "Administrators");
+        c.insert("group", &group("Administrators", -2147483643, true));
+        c.insert("members", &members);
+        c.insert("member_of", &member_of);
+        c.insert("candidates", &vec!["yariv".to_string(), "Domain Admins".to_string()]);
+        if let Some(e) = error {
+            c.insert("error", e);
+        }
+        tera().render("group_members.html", &c).unwrap()
+    }
+
+    #[test]
+    fn members_of_every_kind_are_listed_and_removable_by_dn() {
+        let html = members_page(
+            vec![member("Domain Admins", "group", None), member("yariv", "user", Some(true)),
+                 member("PC1$", "computer", Some(false)), member("Authenticated Users", "foreign", None)],
+            vec![group("Parent Group", -2147483640, false)],
+            None,
+        );
+        assert!(html.contains("/groups/Domain%20Admins/members\">Domain Admins</a>"), "nested group links");
+        assert!(html.contains("bi-pc-display"));
+        assert!(html.contains("Built-in identity"));
+        assert_eq!(html.matches(r#"name="member_dn""#).count(), 4);
+        assert!(html.contains(r#"value="CN=yariv,CN=Users,DC=example,DC=com""#));
+        assert!(html.contains("/groups/Parent%20Group/members"), "member of");
+        assert!(html.contains(r#"<option value="Domain Admins">"#));
+        assert!(!html.contains("no other group"));
+    }
+
+    #[test]
+    fn a_refusal_is_shown_on_the_page() {
+        let html = members_page(vec![], vec![], Some("Team is a global group and cannot contain All, a universal group"));
+        assert!(html.contains("cannot contain All"));
+        assert!(html.contains("no other group"));
+        assert!(!html.contains("No members in this group"), "an error, not an empty group");
+    }
+
+    #[test]
+    fn hostile_member_names_are_escaped() {
+        let mut m = member("x", "user", Some(true));
+        m.name = r#""><img src=x onerror=alert(1)>"#.into();
+        m.dn = r#"CN=\"><img src=x>,DC=x"#.into();
+        let html = members_page(vec![m], vec![], None);
+        assert!(!html.contains("<img src=x"));
+    }
+
+    #[test]
+    fn forms_parse_old_and_new() {
+        let f: UpdateGroupForm = serde_urlencoded::from_str("description=x").unwrap();
+        assert!(f.scope.is_none() && f.kind.is_none());
+        let f: UpdateGroupForm = serde_urlencoded::from_str("description=&scope=universal&kind=security").unwrap();
+        assert_eq!(f.scope.as_deref(), Some("universal"));
+        let f: AddMemberForm = serde_urlencoded::from_str("username=yariv").unwrap();
+        assert_eq!(f.member, "yariv");
     }
 }

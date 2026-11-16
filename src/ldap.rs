@@ -651,6 +651,103 @@ pub async fn unlock_user(
 // Groups
 // ═══════════════════════════════════════════════════════════════════════════
 
+// groupType bits (MS-ADTS 2.2.12). Stored as a signed 32-bit integer, so a
+// security group's value is negative.
+const GT_BUILTIN: u32 = 0x1;
+const GT_GLOBAL: u32 = 0x2;
+const GT_DOMAIN_LOCAL: u32 = 0x4;
+const GT_UNIVERSAL: u32 = 0x8;
+const GT_SECURITY: u32 = 0x8000_0000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupScope {
+    Global,
+    DomainLocal,
+    Universal,
+    /// The groups under CN=Builtin (Administrators, Users…): domain local in
+    /// behaviour, fixed in type.
+    Builtin,
+}
+
+impl GroupScope {
+    pub fn of(group_type: i64) -> Option<Self> {
+        let b = group_type as u32;
+        if b & GT_BUILTIN != 0 {
+            Some(Self::Builtin)
+        } else if b & GT_GLOBAL != 0 {
+            Some(Self::Global)
+        } else if b & GT_DOMAIN_LOCAL != 0 {
+            Some(Self::DomainLocal)
+        } else if b & GT_UNIVERSAL != 0 {
+            Some(Self::Universal)
+        } else {
+            None
+        }
+    }
+
+    /// The scopes a form may ask for. Builtin is not one: no group becomes one.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "global" => Some(Self::Global),
+            "domain_local" => Some(Self::DomainLocal),
+            "universal" => Some(Self::Universal),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::DomainLocal => "domain local",
+            Self::Universal => "universal",
+            Self::Builtin => "builtin local",
+        }
+    }
+
+    fn bit(self) -> u32 {
+        match self {
+            Self::Global => GT_GLOBAL,
+            Self::DomainLocal => GT_DOMAIN_LOCAL,
+            Self::Universal => GT_UNIVERSAL,
+            Self::Builtin => GT_BUILTIN | GT_DOMAIN_LOCAL,
+        }
+    }
+
+    /// AD's nesting rules, within one domain: a global group holds only global
+    /// groups, a universal one global and universal groups, and a domain local
+    /// one any of them. Samba does not enforce these, but Windows clients and
+    /// tools assume them, so EasyDC does.
+    fn may_contain(self, child: GroupScope) -> bool {
+        match self {
+            Self::Global => child == Self::Global,
+            Self::Universal => matches!(child, Self::Global | Self::Universal),
+            Self::DomainLocal | Self::Builtin => true,
+        }
+    }
+}
+
+pub fn group_type_value(scope: GroupScope, security: bool) -> i64 {
+    let sec = if security { GT_SECURITY } else { 0 };
+    ((scope.bit() | sec) as i32) as i64
+}
+
+fn is_security(group_type: i64) -> bool {
+    group_type as u32 & GT_SECURITY != 0
+}
+
+fn group_type_label(t: i64) -> String {
+    match GroupScope::of(t) {
+        None => "Other".to_string(),
+        Some(s) => {
+            let mut label = s.label().to_string();
+            label[..1].make_ascii_uppercase();
+            let label = label.replace("local", "Local");
+            format!("{label} {}", if is_security(t) { "Security" } else { "Distribution" })
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct LdapGroup {
     pub dn: String,
@@ -658,77 +755,82 @@ pub struct LdapGroup {
     pub description: String,
     pub group_type: i64,
     pub group_type_label: String,
+    pub scope: Option<GroupScope>,
+    pub security: bool,
+    /// A built-in or critical system group: its scope and type stay as they are.
+    pub system: bool,
     pub member_count: usize,
 }
 
-fn group_type_label(t: i64) -> &'static str {
-    match t {
-        -2147483646 => "Global Security",
-        -2147483644 => "Domain Local Security",
-        -2147483640 => "Universal Security",
-        2 => "Global Distribution",
-        4 => "Domain Local Distribution",
-        8 => "Universal Distribution",
-        _ => "Other",
+impl LdapGroup {
+    fn from_entry(e: &SearchEntry) -> Self {
+        let gt: i64 = attr(e, "groupType").parse().unwrap_or(0);
+        let scope = GroupScope::of(gt);
+        LdapGroup {
+            dn: e.dn.clone(),
+            name: attr(e, "sAMAccountName"),
+            description: attr(e, "description"),
+            group_type: gt,
+            group_type_label: group_type_label(gt),
+            scope,
+            security: is_security(gt),
+            system: scope == Some(GroupScope::Builtin)
+                || attr(e, "isCriticalSystemObject").eq_ignore_ascii_case("TRUE"),
+            member_count: e.attrs.get("member").map(|v| v.len()).unwrap_or(0),
+        }
     }
 }
 
-async fn find_group_dn(
+const GROUP_ATTRS: [&str; 5] =
+    ["sAMAccountName", "description", "groupType", "isCriticalSystemObject", "member"];
+
+async fn search_groups(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
-    name: &str,
-) -> LdapResult<String> {
-    let filter = format!("(&(objectClass=group)(sAMAccountName={}))", ldap_escape(name));
+    filter: &str,
+) -> LdapResult<Vec<LdapGroup>> {
     let (entries, _) = ldap
-        .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
+        .search(base_dn, Scope::Subtree, &format!("(&(objectClass=group){filter})"), GROUP_ATTRS.to_vec())
         .await
         .map_err(|e| e.to_string())?
         .success()
         .map_err(|e| e.to_string())?;
+    let mut groups: Vec<LdapGroup> = entries
+        .into_iter()
+        .map(|e| LdapGroup::from_entry(&SearchEntry::construct(e)))
+        .filter(|g| !g.name.is_empty())
+        .collect();
+    groups.sort_by_key(|a| a.name.to_lowercase());
+    Ok(groups)
+}
 
-    entries
+async fn find_group(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<LdapGroup> {
+    let filter = format!("(sAMAccountName={})", ldap_escape(name));
+    search_groups(ldap, base_dn, &filter)
+        .await?
         .into_iter()
         .next()
-        .map(|e| SearchEntry::construct(e).dn)
         .ok_or_else(|| format!("Group '{}' not found", name))
+}
+
+async fn find_group_dn(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<String> {
+    Ok(find_group(ldap, base_dn, name).await?.dn)
+}
+
+/// Groups that have `dn` as a direct member.
+async fn parent_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapResult<Vec<LdapGroup>> {
+    search_groups(ldap, base_dn, &format!("(member={})", ldap_escape(dn))).await
+}
+
+/// Groups that are direct members of the group `dn`.
+async fn child_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapResult<Vec<LdapGroup>> {
+    search_groups(ldap, base_dn, &format!("(memberOf={})", ldap_escape(dn))).await
 }
 
 // ── list groups ───────────────────────────────────────────────────────────────
 
 pub async fn list_groups(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapGroup>> {
-    let (entries, _) = ldap
-        .search(
-            base_dn,
-            Scope::Subtree,
-            "(objectClass=group)",
-            vec!["sAMAccountName", "description", "groupType", "member"],
-        )
-        .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| e.to_string())?;
-
-    let mut groups: Vec<LdapGroup> = entries
-        .into_iter()
-        .map(|e| {
-            let e = SearchEntry::construct(e);
-            let name = attr(&e, "sAMAccountName");
-            let gt: i64 = attr(&e, "groupType").parse().unwrap_or(0);
-            let member_count = e.attrs.get("member").map(|v| v.len()).unwrap_or(0);
-            LdapGroup {
-                dn: e.dn.clone(),
-                name,
-                description: attr(&e, "description"),
-                group_type: gt,
-                group_type_label: group_type_label(gt).to_string(),
-                member_count,
-            }
-        })
-        .filter(|g| !g.name.is_empty())
-        .collect();
-
-    groups.sort_by_key(|a| a.name.to_lowercase());
-    Ok(groups)
+    search_groups(ldap, base_dn, "").await
 }
 
 // ── create group ──────────────────────────────────────────────────────────────
@@ -739,11 +841,22 @@ pub struct NewGroup<'a> {
     pub group_type: i64,
 }
 
+/// One of the six types the Add form offers, and nothing else: a made-up
+/// value (a builtin bit, two scopes at once) would make a group no tool
+/// expects.
+fn check_new_group_type(t: i64) -> LdapResult<()> {
+    match GroupScope::of(t) {
+        Some(s) if s != GroupScope::Builtin && group_type_value(s, is_security(t)) == t => Ok(()),
+        _ => Err(format!("Group type {t} is not one EasyDC creates")),
+    }
+}
+
 pub async fn create_group(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     g: &NewGroup<'_>,
 ) -> LdapResult<()> {
+    check_new_group_type(g.group_type)?;
     let group_dn = format!("CN={},CN=Users,{}", dn_escape(g.name), base_dn);
     let gt = g.group_type.to_string();
 
@@ -770,6 +883,64 @@ pub async fn create_group(
 
 pub struct GroupUpdate<'a> {
     pub description: &'a str,
+    /// None leaves the scope as it is (a form from before scopes were editable).
+    pub scope: Option<GroupScope>,
+    pub security: Option<bool>,
+}
+
+/// Whether `group` may change to `scope`, given the groups it is in and the
+/// groups in it. These are AD's rules: global and domain local only change
+/// through universal, and no membership may break the nesting rules after
+/// the change.
+pub(crate) fn check_scope_change(
+    group: &LdapGroup,
+    scope: GroupScope,
+    security: bool,
+    parents: &[LdapGroup],
+    children: &[LdapGroup],
+) -> LdapResult<()> {
+    let Some(old) = group.scope else {
+        return Err(format!("{} has a group type EasyDC does not know, so it is left as it is", group.name));
+    };
+    if old == scope && group.security == security {
+        return Ok(());
+    }
+    if group.system {
+        return Err(format!("{} is a built-in group: its scope and type cannot be changed", group.name));
+    }
+    if old == scope {
+        return Ok(()); // security ↔ distribution only
+    }
+    if matches!(
+        (old, scope),
+        (GroupScope::Global, GroupScope::DomainLocal) | (GroupScope::DomainLocal, GroupScope::Global)
+    ) {
+        return Err(format!(
+            "A {} group cannot become {} directly. Change {} to universal first, then to {}.",
+            old.label(), scope.label(), group.name, scope.label()
+        ));
+    }
+    for p in parents {
+        if let Some(ps) = p.scope
+            && !ps.may_contain(scope)
+        {
+            return Err(format!(
+                "{} is a member of {}, a {} group, which cannot contain a {} group. Remove it from {} first.",
+                group.name, p.name, ps.label(), scope.label(), p.name
+            ));
+        }
+    }
+    for c in children {
+        if let Some(cs) = c.scope
+            && !scope.may_contain(cs)
+        {
+            return Err(format!(
+                "{} has {} as a member, a {} group, which a {} group cannot contain. Remove {} first.",
+                group.name, c.name, cs.label(), scope.label(), c.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub async fn update_group(
@@ -778,18 +949,25 @@ pub async fn update_group(
     name: &str,
     g: &GroupUpdate<'_>,
 ) -> LdapResult<()> {
-    let dn = find_group_dn(ldap, base_dn, name).await?;
+    let group = find_group(ldap, base_dn, name).await?;
 
-    let mods: Vec<Mod<Vec<u8>>> = if g.description.is_empty() {
-        vec![Mod::Delete(sv("description"), HashSet::new())]
-    } else {
-        vec![Mod::Replace(
-            sv("description"),
-            HashSet::from([sv(g.description)]),
-        )]
-    };
+    // Replace with no value, not Delete: Delete fails when the group has no
+    // description to begin with.
+    let mut mods: Vec<Mod<Vec<u8>>> = vec![set_or_clear("description", g.description)];
 
-    ldap.modify(&dn, mods)
+    let scope = g.scope.or(group.scope);
+    let security = g.security.unwrap_or(group.security);
+    if let Some(scope) = scope
+        && (Some(scope) != group.scope || security != group.security)
+    {
+        let parents = parent_groups(ldap, base_dn, &group.dn).await?;
+        let children = child_groups(ldap, base_dn, &group.dn).await?;
+        check_scope_change(&group, scope, security, &parents, &children)?;
+        let gt = group_type_value(scope, security).to_string();
+        mods.push(Mod::Replace(sv("groupType"), HashSet::from([sv(&gt)])));
+    }
+
+    ldap.modify(&group.dn, mods)
         .await
         .map_err(|e| e.to_string())?
         .success()
@@ -816,20 +994,115 @@ pub async fn delete_group(
 
 // ── group members ─────────────────────────────────────────────────────────────
 
-pub async fn list_group_members(
-    ldap: &mut ldap3::Ldap,
-    base_dn: &str,
-    group_name: &str,
-) -> LdapResult<Vec<LdapUser>> {
-    let group_dn = find_group_dn(ldap, base_dn, group_name).await?;
+#[derive(Debug, Serialize, Clone)]
+pub struct GroupMember {
+    pub dn: String,
+    pub name: String,
+    pub display_name: String,
+    /// user, computer, group, contact, foreign or other.
+    pub kind: &'static str,
+    /// Email for a user, type for a group.
+    pub detail: String,
+    /// For a group member: its name, to link to its own members page.
+    pub group: Option<String>,
+    pub enabled: Option<bool>,
+}
 
+#[derive(Debug, Serialize)]
+pub struct GroupDetail {
+    pub group: LdapGroup,
+    pub members: Vec<GroupMember>,
+    pub member_of: Vec<LdapGroup>,
+}
+
+/// The value of a DN's first part, unescaped enough to read: `CN=Doe\, John,…`
+/// gives `Doe, John`.
+fn first_rdn_value(dn: &str) -> String {
+    let mut out = String::new();
+    let mut chars = dn.chars();
+    let mut escaped = false;
+    let mut in_value = false;
+    for c in chars.by_ref() {
+        if escaped {
+            out.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if !in_value {
+            in_value = c == '=';
+        } else if c == ',' {
+            break;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Names for the well-known SIDs Samba puts into builtin groups, which show
+/// up as foreign security principals named by SID.
+fn well_known_sid(sid: &str) -> Option<&'static str> {
+    Some(match sid {
+        "S-1-1-0" => "Everyone",
+        "S-1-5-4" => "Interactive",
+        "S-1-5-9" => "Enterprise Domain Controllers",
+        "S-1-5-11" => "Authenticated Users",
+        "S-1-5-17" => "IUSR",
+        "S-1-5-20" => "Network Service",
+        _ => return None,
+    })
+}
+
+fn member_from_entry(e: &SearchEntry) -> GroupMember {
+    let classes: Vec<String> = e
+        .attrs
+        .get("objectClass")
+        .map(|v| v.iter().map(|c| c.to_ascii_lowercase()).collect())
+        .unwrap_or_default();
+    let has = |c: &str| classes.iter().any(|x| x == c);
+    let sam = attr(e, "sAMAccountName");
+    let cn = attr(e, "cn");
+    let uac: Option<i64> = attr(e, "userAccountControl").parse().ok();
+    let (kind, detail, group) = if has("computer") {
+        ("computer", String::new(), None)
+    } else if has("group") {
+        let gt: i64 = attr(e, "groupType").parse().unwrap_or(0);
+        ("group", group_type_label(gt), Some(sam.clone()))
+    } else if has("user") {
+        ("user", attr(e, "mail"), None)
+    } else if has("contact") {
+        ("contact", attr(e, "mail"), None)
+    } else if has("foreignsecurityprincipal") {
+        ("foreign", cn.clone(), None)
+    } else {
+        ("other", String::new(), None)
+    };
+    let name = match kind {
+        "foreign" => well_known_sid(&cn).map(str::to_string).unwrap_or_else(|| cn.clone()),
+        _ if !sam.is_empty() => sam,
+        _ => cn,
+    };
+    GroupMember {
+        dn: e.dn.clone(),
+        name,
+        display_name: attr(e, "displayName"),
+        kind,
+        detail,
+        group,
+        enabled: if matches!(kind, "user" | "computer") { uac.map(|u| u & 2 == 0) } else { None },
+    }
+}
+
+/// A group with its members — every kind, not only users — and the groups it
+/// is a member of.
+pub async fn group_detail(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<GroupDetail> {
+    let group = find_group(ldap, base_dn, name).await?;
     let (entries, _) = ldap
-        .search(&group_dn, Scope::Base, "(objectClass=group)", vec!["member"])
+        .search(&group.dn, Scope::Base, "(objectClass=group)", vec!["member"])
         .await
         .map_err(|e| e.to_string())?
         .success()
         .map_err(|e| e.to_string())?;
-
     let member_dns: Vec<String> = entries
         .into_iter()
         .next()
@@ -837,97 +1110,158 @@ pub async fn list_group_members(
         .and_then(|e| e.attrs.get("member").cloned())
         .unwrap_or_default();
 
-    if member_dns.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut members = Vec::new();
-    for dn in &member_dns {
-        let (mes, _) = ldap
+    // One search for all members, instead of one per member.
+    let mut found: std::collections::HashMap<String, GroupMember> = std::collections::HashMap::new();
+    if !member_dns.is_empty() {
+        let (entries, _) = ldap
             .search(
-                dn,
-                Scope::Base,
-                "(objectClass=*)",
-                vec![
-                    "sAMAccountName",
-                    "givenName",
-                    "sn",
-                    "displayName",
-                    "mail",
-                    "userAccountControl",
-                ],
+                base_dn,
+                Scope::Subtree,
+                &format!("(memberOf={})", ldap_escape(&group.dn)),
+                vec!["objectClass", "sAMAccountName", "cn", "displayName", "mail", "userAccountControl", "groupType"],
             )
             .await
             .map_err(|e| e.to_string())?
             .success()
             .map_err(|e| e.to_string())?;
-
-        if let Some(entry) = mes.into_iter().next() {
-            let e = SearchEntry::construct(entry);
-            let username = attr(&e, "sAMAccountName");
-            if !username.is_empty() {
-                let uac: i64 = attr(&e, "userAccountControl").parse().unwrap_or(514);
-                members.push(LdapUser {
-                    dn: e.dn.clone(),
-                    username,
-                    first_name: attr(&e, "givenName"),
-                    last_name: attr(&e, "sn"),
-                    display_name: attr(&e, "displayName"),
-                    email: attr(&e, "mail"),
-                    enabled: (uac & 2) == 0,
-                    locked: false, // lock status not shown in member lists
-                    ..Default::default()
-                });
-            }
+        for e in entries {
+            let m = member_from_entry(&SearchEntry::construct(e));
+            found.insert(m.dn.to_lowercase(), m);
         }
     }
+    // A member the search did not return (outside this partition) still shows.
+    let mut members: Vec<GroupMember> = member_dns
+        .iter()
+        .map(|dn| {
+            found.remove(&dn.to_lowercase()).unwrap_or_else(|| GroupMember {
+                dn: dn.clone(),
+                name: first_rdn_value(dn),
+                display_name: String::new(),
+                kind: "other",
+                detail: String::new(),
+                group: None,
+                enabled: None,
+            })
+        })
+        .collect();
+    members.sort_by_key(|m| (m.kind != "group", m.name.to_lowercase()));
 
-    members.sort_by_key(|a| a.username.to_lowercase());
-    Ok(members)
+    let member_of = parent_groups(ldap, base_dn, &group.dn).await?;
+    Ok(GroupDetail { group, members, member_of })
 }
 
+/// Everything that can be added to a group, for the Add box's suggestions.
+pub async fn member_candidates(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, "(|(objectClass=user)(objectClass=group))", vec!["sAMAccountName"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = entries
+        .into_iter()
+        .map(|e| attr(&SearchEntry::construct(e), "sAMAccountName"))
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    Ok(names)
+}
+
+/// Whether `child` may be added to `parent`, by the nesting rules. A group of
+/// unknown type is left to the DC.
+pub(crate) fn check_nesting(parent: &LdapGroup, child: &LdapGroup) -> LdapResult<()> {
+    if parent.dn.eq_ignore_ascii_case(&child.dn) {
+        return Err(format!("{} cannot be a member of itself", parent.name));
+    }
+    if let (Some(ps), Some(cs)) = (parent.scope, child.scope)
+        && !ps.may_contain(cs)
+    {
+        return Err(format!(
+            "{} is a {} group and cannot contain {}, a {} group",
+            parent.name, ps.label(), child.name, cs.label()
+        ));
+    }
+    Ok(())
+}
+
+/// Add a user, computer or group to a group, by its sAMAccountName. A
+/// computer can be given without its trailing `$`.
 pub async fn add_group_member(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     group_name: &str,
-    username: &str,
+    member: &str,
 ) -> LdapResult<()> {
-    let group_dn = find_group_dn(ldap, base_dn, group_name).await?;
-    let user_dn = find_user_dn(ldap, base_dn, username).await?;
+    let target = find_group(ldap, base_dn, group_name).await?;
 
-    let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Add(
-        sv("member"),
-        HashSet::from([sv(&user_dn)]),
-    )];
-    ldap.modify(&group_dn, mods)
+    let filter = format!(
+        "(&(|(objectClass=user)(objectClass=group))(|(sAMAccountName={0})(sAMAccountName={0}$)))",
+        ldap_escape(member)
+    );
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["objectClass", "sAMAccountName", "groupType", "isCriticalSystemObject"])
         .await
         .map_err(|e| e.to_string())?
         .success()
-        .map_err(|e| format!("Failed to add member: {}", e))?;
+        .map_err(|e| e.to_string())?;
+    let mut entries: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
+    // "name" itself before "name$".
+    entries.sort_by_key(|e| !attr(e, "sAMAccountName").eq_ignore_ascii_case(member));
+    let entry = entries
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("No user, computer or group is named '{}'", member))?;
 
-    Ok(())
+    let is_group = entry
+        .attrs
+        .get("objectClass")
+        .is_some_and(|v| v.iter().any(|c| c.eq_ignore_ascii_case("group")));
+    if is_group {
+        let child = LdapGroup::from_entry(&entry);
+        check_nesting(&target, &child)?;
+        // AD allows loops (A in B in A), but they make membership confusing
+        // and some tools walk them forever. In-chain matching finds a target
+        // that is already inside the child at any depth.
+        let loop_filter = format!("(member:1.2.840.113556.1.4.1941:={})", ldap_escape(&target.dn));
+        let (inside, _) = ldap
+            .search(&child.dn, Scope::Base, &loop_filter, vec!["dn"])
+            .await
+            .map_err(|e| e.to_string())?
+            .success()
+            .map_err(|e| e.to_string())?;
+        if !inside.is_empty() {
+            return Err(format!(
+                "{} is already inside {}, directly or through other groups; adding {} to it would make a loop",
+                target.name, child.name, child.name
+            ));
+        }
+    }
+
+    let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Add(sv("member"), HashSet::from([sv(&entry.dn)]))];
+    let res = ldap.modify(&target.dn, mods).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(()),
+        20 | 68 => Err(format!("{} is already a member of {}", attr(&entry, "sAMAccountName"), target.name)),
+        _ => Err(format!("Failed to add member: {}", res)),
+    }
 }
 
+/// Remove a member by DN: members without a username (contacts, foreign
+/// principals) can be removed too.
 pub async fn remove_group_member(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     group_name: &str,
-    username: &str,
+    member_dn: &str,
 ) -> LdapResult<()> {
     let group_dn = find_group_dn(ldap, base_dn, group_name).await?;
-    let user_dn = find_user_dn(ldap, base_dn, username).await?;
-
-    let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Delete(
-        sv("member"),
-        HashSet::from([sv(&user_dn)]),
-    )];
-    ldap.modify(&group_dn, mods)
-        .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| format!("Failed to remove member: {}", e))?;
-
-    Ok(())
+    let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Delete(sv("member"), HashSet::from([sv(member_dn)]))];
+    let res = ldap.modify(&group_dn, mods).await.map_err(|e| e.to_string())?;
+    match res.rc {
+        0 => Ok(()),
+        16 => Err(format!("{} is not a member of {}", first_rdn_value(member_dn), group_name)),
+        _ => Err(format!("Failed to remove member: {}", res)),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3254,5 +3588,166 @@ mod user_profile_tests {
             Mod::Replace(_, v) => assert_eq!(v, HashSet::from([sv("555")])),
             _ => panic!("expected Replace"),
         }
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn entry(dn: &str, attrs: &[(&str, &[&str])]) -> SearchEntry {
+        SearchEntry {
+            dn: dn.to_string(),
+            attrs: attrs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.iter().map(|s| s.to_string()).collect()))
+                .collect::<HashMap<_, _>>(),
+            bin_attrs: HashMap::new(),
+        }
+    }
+
+    fn group(name: &str, scope: GroupScope, system: bool) -> LdapGroup {
+        let gt = group_type_value(scope, true);
+        let critical = if system { "TRUE" } else { "FALSE" };
+        LdapGroup::from_entry(&entry(
+            &format!("CN={name},CN=Users,DC=example,DC=com"),
+            &[("sAMAccountName", &[name]), ("groupType", &[&gt.to_string()]), ("isCriticalSystemObject", &[critical])],
+        ))
+    }
+    use GroupScope::*;
+
+    /// The values found on a real Samba DC, and the six the Add form sends.
+    #[test]
+    fn group_types_decode() {
+        assert_eq!(group_type_label(-2147483643), "Builtin Local Security");
+        assert_eq!(group_type_label(-2147483646), "Global Security");
+        assert_eq!(group_type_label(-2147483644), "Domain Local Security");
+        assert_eq!(group_type_label(-2147483640), "Universal Security");
+        assert_eq!(group_type_label(2), "Global Distribution");
+        assert_eq!(group_type_label(4), "Domain Local Distribution");
+        assert_eq!(group_type_label(8), "Universal Distribution");
+        assert_eq!(group_type_label(0), "Other");
+        for (scope, sec, value) in [
+            (Global, true, -2147483646), (DomainLocal, true, -2147483644), (Universal, true, -2147483640),
+            (Global, false, 2), (DomainLocal, false, 4), (Universal, false, 8),
+        ] {
+            assert_eq!(group_type_value(scope, sec), value);
+            assert_eq!(GroupScope::of(value), Some(scope));
+            assert!(check_new_group_type(value).is_ok());
+        }
+        assert_eq!(GroupScope::of(-2147483643), Some(Builtin));
+    }
+
+    #[test]
+    fn made_up_group_types_are_refused() {
+        for t in [-2147483643, 0, 6, 1, 16, -2147483648, 0x7fff_ffff] {
+            assert!(check_new_group_type(t).is_err(), "{t}");
+        }
+    }
+
+    #[test]
+    fn builtin_groups_are_system_groups() {
+        let e = entry("CN=Administrators,CN=Builtin,DC=example,DC=com",
+            &[("sAMAccountName", &["Administrators"]), ("groupType", &["-2147483643"])]);
+        let g = LdapGroup::from_entry(&e);
+        assert!(g.system);
+        assert_eq!(g.scope, Some(Builtin));
+    }
+
+    #[test]
+    fn scope_changes_follow_ad_rules() {
+        let none: [LdapGroup; 0] = [];
+        let g = group("Team", Global, false);
+        assert!(check_scope_change(&g, Universal, true, &none, &none).is_ok());
+        assert!(check_scope_change(&g, Global, false, &none, &none).is_ok(), "security → distribution");
+        let err = check_scope_change(&g, DomainLocal, true, &none, &none).unwrap_err();
+        assert!(err.contains("universal first"), "{err}");
+
+        let dl = group("Printers", DomainLocal, false);
+        assert!(check_scope_change(&dl, Global, true, &none, &none).is_err());
+        assert!(check_scope_change(&dl, Universal, true, &none, &none).is_ok());
+
+        let u = group("All", Universal, false);
+        assert!(check_scope_change(&u, Global, true, &none, &none).is_ok());
+        assert!(check_scope_change(&u, DomainLocal, true, &none, &none).is_ok());
+    }
+
+    #[test]
+    fn scope_changes_that_break_memberships_are_refused() {
+        let none: [LdapGroup; 0] = [];
+        // Global → universal while inside a global group.
+        let g = group("Team", Global, false);
+        let err = check_scope_change(&g, Universal, true, &[group("Dept", Global, false)], &none).unwrap_err();
+        assert!(err.contains("member of Dept"), "{err}");
+        // …fine when the parent is universal or domain local.
+        assert!(check_scope_change(&g, Universal, true, &[group("U", Universal, false)], &none).is_ok());
+
+        // Domain local → universal while holding a domain local group.
+        let dl = group("Printers", DomainLocal, false);
+        let err = check_scope_change(&dl, Universal, true, &none, &[group("Scanners", DomainLocal, false)]).unwrap_err();
+        assert!(err.contains("Scanners"), "{err}");
+
+        // Universal → global while holding a universal group.
+        let u = group("All", Universal, false);
+        assert!(check_scope_change(&u, Global, true, &none, &[group("U2", Universal, false)]).is_err());
+        assert!(check_scope_change(&u, Global, true, &none, &[group("G", Global, false)]).is_ok());
+        // Universal → domain local while inside a universal group.
+        assert!(check_scope_change(&u, DomainLocal, true, &[group("U3", Universal, false)], &none).is_err());
+    }
+
+    #[test]
+    fn system_groups_keep_their_type() {
+        let none: [LdapGroup; 0] = [];
+        let da = group("Domain Admins", Global, true);
+        assert!(check_scope_change(&da, Universal, true, &none, &none).is_err());
+        assert!(check_scope_change(&da, Global, false, &none, &none).is_err());
+        assert!(check_scope_change(&da, Global, true, &none, &none).is_ok(), "no change is fine");
+    }
+
+    #[test]
+    fn nesting_rules() {
+        let g = group("G", Global, false);
+        let u = group("U", Universal, false);
+        let dl = group("DL", DomainLocal, false);
+        assert!(check_nesting(&g, &group("G2", Global, false)).is_ok());
+        assert!(check_nesting(&g, &u).is_err());
+        assert!(check_nesting(&g, &dl).is_err());
+        assert!(check_nesting(&u, &g).is_ok());
+        assert!(check_nesting(&u, &u.clone()).is_err(), "itself");
+        assert!(check_nesting(&u, &dl).is_err());
+        assert!(check_nesting(&dl, &g).is_ok());
+        assert!(check_nesting(&dl, &u).is_ok());
+        assert!(check_nesting(&dl, &group("DL2", DomainLocal, false)).is_ok());
+        assert!(check_nesting(&group("Administrators", Builtin, true), &group("Domain Admins", Global, true)).is_ok());
+    }
+
+    #[test]
+    fn rdn_values_are_unescaped_for_display() {
+        assert_eq!(first_rdn_value("CN=Doe\\, John,CN=Users,DC=x"), "Doe, John");
+        assert_eq!(first_rdn_value("CN=S-1-5-11,CN=ForeignSecurityPrincipals,DC=x"), "S-1-5-11");
+        assert_eq!(first_rdn_value("OU=a\\+b"), "a+b");
+    }
+
+    #[test]
+    fn members_of_every_kind() {
+        let user = member_from_entry(&entry("CN=yariv,CN=Users,DC=x", &[
+            ("objectClass", &["top", "person", "organizationalPerson", "user"]),
+            ("sAMAccountName", &["yariv"]), ("mail", &["y@x"]), ("userAccountControl", &["512"])]));
+        assert_eq!((user.kind, user.detail.as_str(), user.enabled), ("user", "y@x", Some(true)));
+
+        let pc = member_from_entry(&entry("CN=PC1,CN=Computers,DC=x", &[
+            ("objectClass", &["top", "person", "organizationalPerson", "user", "computer"]),
+            ("sAMAccountName", &["PC1$"]), ("userAccountControl", &["4098"])]));
+        assert_eq!((pc.kind, pc.enabled), ("computer", Some(false)));
+
+        let grp = member_from_entry(&entry("CN=Domain Admins,CN=Users,DC=x", &[
+            ("objectClass", &["top", "group"]), ("sAMAccountName", &["Domain Admins"]), ("groupType", &["-2147483646"])]));
+        assert_eq!((grp.kind, grp.detail.as_str(), grp.group.as_deref(), grp.enabled),
+            ("group", "Global Security", Some("Domain Admins"), None));
+
+        let fsp = member_from_entry(&entry("CN=S-1-5-11,CN=ForeignSecurityPrincipals,DC=x", &[
+            ("objectClass", &["top", "foreignSecurityPrincipal"]), ("cn", &["S-1-5-11"])]));
+        assert_eq!((fsp.kind, fsp.name.as_str(), fsp.detail.as_str()), ("foreign", "Authenticated Users", "S-1-5-11"));
     }
 }

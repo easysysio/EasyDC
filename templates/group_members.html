@@ -16,7 +16,9 @@
         <h4 class="mb-0">
             <i class="bi bi-people-fill me-2 text-success"></i>{{ group_name }}
         </h4>
-        <small class="text-muted">Group Members</small>
+        <small class="text-muted">
+            {% if group %}{{ group.group_type_label }} group{% else %}Group members{% endif %}
+        </small>
     </div>
     <a href="/servers/{{ server.id }}/groups" class="btn btn-outline-secondary btn-sm">
         <i class="bi bi-arrow-left me-1"></i> Back to Groups
@@ -29,17 +31,34 @@
 </div>
 {% endif %}
 
+{% if group %}
+<!-- Member of -->
+<div class="mb-4 small">
+    <span class="text-muted me-1">Member of:</span>
+    {% for p in member_of %}
+    <a href="/servers/{{ server.id }}/groups/{{ p.name | urlencode_strict }}/members"
+        class="badge bg-light text-dark border text-decoration-none me-1">
+        <i class="bi bi-people-fill me-1 text-secondary"></i>{{ p.name }}
+    </a>
+    {% else %}
+    <span class="text-muted">no other group</span>
+    {% endfor %}
+</div>
+
 <!-- Add Member Form -->
 <div class="card shadow-sm mb-4">
     <div class="card-body">
         <h6 class="card-title mb-3"><i class="bi bi-person-plus me-1"></i> Add Member</h6>
         <form method="post"
-            action="/servers/{{ server.id }}/groups/{{ group_name }}/members/add"
+            action="/servers/{{ server.id }}/groups/{{ group_name | urlencode_strict }}/members/add"
             class="row g-2 align-items-end">
             <div class="col">
-                <label class="form-label small text-muted mb-1">Username (sAMAccountName)</label>
-                <input type="text" name="username" class="form-control" required
-                    placeholder="Enter username to add">
+                <label class="form-label small text-muted mb-1">User, computer or group</label>
+                <input type="text" name="member" class="form-control" required list="memberCandidates"
+                    autocomplete="off" placeholder="Start typing a name">
+                <datalist id="memberCandidates">
+                    {% for c in candidates %}<option value="{{ c }}">{% endfor %}
+                </datalist>
             </div>
             <div class="col-auto">
                 <button type="submit" class="btn btn-primary">
@@ -49,15 +68,16 @@
         </form>
     </div>
 </div>
+{% endif %}
 
 <!-- Members Table -->
 {% if members | length == 0 and not error %}
 <div class="text-center py-5 text-muted">
     <i class="bi bi-people fs-1"></i>
     <p class="mt-3 fs-5">No members in this group</p>
-    <p class="small">Use the form above to add domain users to <strong>{{ group_name }}</strong>.</p>
+    <p class="small">Use the form above to add users, computers or groups to <strong>{{ group_name }}</strong>.</p>
 </div>
-{% else %}
+{% elif members | length > 0 %}
 <div class="card shadow-sm">
     <div class="card-header d-flex align-items-center">
         <span class="fw-medium">Current Members</span>
@@ -67,9 +87,9 @@
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
-                    <th>Username</th>
-                    <th>Display Name</th>
-                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Kind</th>
+                    <th>Details</th>
                     <th>Status</th>
                     <th class="text-end">Actions</th>
                 </tr>
@@ -78,17 +98,30 @@
                 {% for member in members %}
                 <tr>
                     <td class="fw-medium">
-                        <i class="bi bi-person-circle me-1 text-secondary"></i>
-                        {{ member.username }}
+                        {% if member.kind == "group" %}
+                        <i class="bi bi-people-fill me-1 text-success"></i>
+                        <a href="/servers/{{ server.id }}/groups/{{ member.group | urlencode_strict }}/members">{{ member.name }}</a>
+                        {% elif member.kind == "computer" %}
+                        <i class="bi bi-pc-display me-1 text-secondary"></i>{{ member.name }}
+                        {% elif member.kind == "user" %}
+                        <i class="bi bi-person-circle me-1 text-secondary"></i>{{ member.name }}
+                        {% else %}
+                        <i class="bi bi-person-badge me-1 text-secondary"></i>{{ member.name }}
+                        {% endif %}
+                        {% if member.display_name %}
+                        <div class="small text-muted fw-normal">{{ member.display_name }}</div>
+                        {% endif %}
                     </td>
-                    <td>{{ member.display_name }}</td>
-                    <td class="text-muted small">{{ member.email }}</td>
+                    <td class="small">
+                        {% if member.kind == "foreign" %}Built-in identity{% else %}{{ member.kind | capitalize }}{% endif %}
+                    </td>
+                    <td class="text-muted small">{{ member.detail }}</td>
                     <td>
-                        {% if member.enabled %}
+                        {% if member.enabled == true %}
                         <span class="badge bg-success-subtle text-success border border-success-subtle">
                             <i class="bi bi-check-circle me-1"></i>Enabled
                         </span>
-                        {% else %}
+                        {% elif member.enabled == false %}
                         <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
                             <i class="bi bi-x-circle me-1"></i>Disabled
                         </span>
@@ -122,14 +155,15 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                Remove <strong>{{ member.username }}</strong> from <strong>{{ group_name }}</strong>?
+                Remove <strong>{{ member.name }}</strong> from <strong>{{ group_name }}</strong>?
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm"
                     data-bs-dismiss="modal">Cancel</button>
                 <form method="post"
-                    action="/servers/{{ server.id }}/groups/{{ group_name }}/members/{{ member.username }}/remove"
+                    action="/servers/{{ server.id }}/groups/{{ group_name | urlencode_strict }}/members/remove"
                     class="d-inline">
+                    <input type="hidden" name="member_dn" value="{{ member.dn }}">
                     <button type="submit" class="btn btn-danger btn-sm">Remove</button>
                 </form>
             </div>

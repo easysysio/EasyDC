@@ -113,7 +113,7 @@ async fn main() {
         .route("/servers/:id/groups/:name/delete", post(handlers::ldap_mgmt::delete_group))
         .route("/servers/:id/groups/:name/members", get(handlers::ldap_mgmt::group_members))
         .route("/servers/:id/groups/:name/members/add", post(handlers::ldap_mgmt::add_member))
-        .route("/servers/:id/groups/:name/members/:username/remove", post(handlers::ldap_mgmt::remove_member))
+        .route("/servers/:id/groups/:name/members/remove", post(handlers::ldap_mgmt::remove_member))
         .route("/servers/:id/ous", get(handlers::ldap_mgmt::ous))
         .route("/servers/:id/ous/new", post(handlers::ldap_mgmt::ou_create))
         .route("/servers/:id/ous/rename", post(handlers::ldap_mgmt::ou_rename))

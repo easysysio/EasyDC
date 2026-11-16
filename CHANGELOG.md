@@ -5,9 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Groups: change an existing group's scope (global, domain local, universal) and type (security, distribution), following Windows' rules.
+- Groups can contain other groups; nesting that would break Windows' rules or make a loop is refused. A computer can be added without its trailing `$`.
+- The group members page shows each member's kind and the groups this group belongs to. Groups inside a group used to be listed as if they were users, and built-in identities such as Authenticated Users were left out.
 - Users: an account expiry date, and job title, department, office, phone, mobile and manager. The list shows when an account expires, or that it has expired.
 
 ### Fixed
+- Built-in groups such as Administrators showed type "Other"; they show "Builtin Local Security" now.
+- A failed group action (create, edit, delete, add or remove a member) only appeared in the audit log. The reason is shown on the page now.
 - Names with a comma or another special character (`+ " \ < > ; =`, or a leading `#`) failed or were stored wrongly when creating a user, group or OU, renaming an OU, or adding, editing or deleting a DNS record. `Doe, John` works now.
 
 ## [0.3.6] - 2026-11-14

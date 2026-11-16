@@ -51,7 +51,7 @@
                     </td>
                     <td class="text-muted small">{{ group.description }}</td>
                     <td>
-                        {% if "Security" in group.group_type_label %}
+                        {% if group.security %}
                         <span class="badge bg-primary-subtle text-primary border border-primary-subtle">
                             {{ group.group_type_label }}
                         </span>
@@ -62,14 +62,14 @@
                         {% endif %}
                     </td>
                     <td>
-                        <a href="/servers/{{ server.id }}/groups/{{ group.name }}/members"
+                        <a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members"
                             class="badge bg-light text-dark border text-decoration-none">
                             <i class="bi bi-people me-1"></i>{{ group.member_count }}
                         </a>
                     </td>
                     <td class="text-end">
                         <div class="btn-group btn-group-sm">
-                            <a href="/servers/{{ server.id }}/groups/{{ group.name }}/members"
+                            <a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members"
                                 class="btn btn-outline-primary btn-sm" title="Manage members">
                                 <i class="bi bi-person-lines-fill"></i>
                             </a>
@@ -148,7 +148,7 @@
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" action="/servers/{{ server.id }}/groups/{{ group.name }}/edit">
+            <form method="post" action="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/edit">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Group Name</label>
@@ -160,6 +160,35 @@
                         <input type="text" name="description" class="form-control"
                             value="{{ group.description }}">
                     </div>
+                    {% if group.system or not group.scope %}
+                    <div class="mb-1 text-muted small">
+                        <i class="bi bi-lock me-1"></i>
+                        {{ group.group_type_label }}{% if group.system %}: a built-in group, so its scope and type stay as they are{% endif %}.
+                    </div>
+                    {% else %}
+                    <div class="row">
+                        <div class="col mb-3">
+                            <label class="form-label">Scope</label>
+                            <select name="scope" class="form-select">
+                                <option value="global" {% if group.scope == "global" %}selected{% endif %}>Global</option>
+                                <option value="domain_local" {% if group.scope == "domain_local" %}selected{% endif %}>Domain Local</option>
+                                <option value="universal" {% if group.scope == "universal" %}selected{% endif %}>Universal</option>
+                            </select>
+                        </div>
+                        <div class="col mb-3">
+                            <label class="form-label">Type</label>
+                            <select name="kind" class="form-select">
+                                <option value="security" {% if group.security %}selected{% endif %}>Security</option>
+                                <option value="distribution" {% if not group.security %}selected{% endif %}>Distribution</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-text">
+                        Global and domain local change only through universal. A change that would
+                        break this group's memberships is refused, with the reason.
+                        Distribution groups are for email lists and do not grant access.
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -186,7 +215,7 @@
                 <button type="button" class="btn btn-secondary btn-sm"
                     data-bs-dismiss="modal">Cancel</button>
                 <form method="post"
-                    action="/servers/{{ server.id }}/groups/{{ group.name }}/delete"
+                    action="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/delete"
                     class="d-inline">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
