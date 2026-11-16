@@ -1257,11 +1257,21 @@ pub async fn remove_group_member(
     let group_dn = find_group_dn(ldap, base_dn, group_name).await?;
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Delete(sv("member"), HashSet::from([sv(member_dn)]))];
     let res = ldap.modify(&group_dn, mods).await.map_err(|e| e.to_string())?;
-    match res.rc {
-        0 => Ok(()),
-        16 => Err(format!("{} is not a member of {}", first_rdn_value(member_dn), group_name)),
-        _ => Err(format!("Failed to remove member: {}", res)),
+    if res.rc == 0 {
+        return Ok(());
     }
+    Err(if not_a_member(res.rc, &res.text) {
+        format!("{} is not a member of {}", first_rdn_value(member_dn), group_name)
+    } else {
+        format!("Failed to remove member: {}", res)
+    })
+}
+
+/// Removing a value that is not there: LDAP says noSuchAttribute (16), but
+/// Samba answers unwillingToPerform (53) with "Attribute member already
+/// deleted" (seen on a 4.x DC).
+fn not_a_member(rc: u32, text: &str) -> bool {
+    rc == 16 || (rc == 53 && text.contains("already deleted"))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3720,6 +3730,14 @@ mod group_tests {
         assert!(check_nesting(&dl, &u).is_ok());
         assert!(check_nesting(&dl, &group("DL2", DomainLocal, false)).is_ok());
         assert!(check_nesting(&group("Administrators", Builtin, true), &group("Domain Admins", Global, true)).is_ok());
+    }
+
+    #[test]
+    fn removing_a_non_member_is_recognised() {
+        assert!(not_a_member(16, ""));
+        assert!(not_a_member(53, "Attribute member already deleted for target GUID fc44a04b-…"));
+        assert!(!not_a_member(53, "something else"));
+        assert!(!not_a_member(50, "already deleted"));
     }
 
     #[test]
