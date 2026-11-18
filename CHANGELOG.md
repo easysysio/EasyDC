@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Dropped `chrono` and `chrono-tz`, which are unmaintained (RUSTSEC-2026-0543, -0555, -0559). They came with template features EasyDC does not use.
+
 ## [0.4.0] - 2026-11-16
 
 ### Added
