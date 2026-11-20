@@ -309,16 +309,24 @@ async fn find_user_dn(
 
 /// A user's DN, and whether it is the account EasyDC signs in to the DC with
 /// (`bind`, as the server entry gives it: a DN, `user@domain` or `DOMAIN\\user`).
+/// A user about to be changed: everything a change needs, read in one request.
+pub struct UserForChange {
+    pub dn: String,
+    /// Whether it is the account EasyDC signs in with.
+    pub is_bind: bool,
+    pub uac: i64,
+}
+
 pub async fn find_user_for_change(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     username: &str,
     bind: &str,
-) -> LdapResult<(String, bool)> {
+) -> LdapResult<UserForChange> {
     let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
     let (entries, _) = ldap
         .with_timeout(OP_TIMEOUT)
-        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "userPrincipalName"])
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "userPrincipalName", "userAccountControl"])
         .await
         .map_err(ldap_err)?
         .success()
@@ -329,7 +337,10 @@ pub async fn find_user_for_change(
         .map(SearchEntry::construct)
         .ok_or_else(|| format!("User '{}' not found", username))?;
     let is_bind = is_bind_account(bind, &e.dn, &attr(&e, "userPrincipalName"), &attr(&e, "sAMAccountName"));
-    Ok((e.dn, is_bind))
+    let uac = attr(&e, "userAccountControl")
+        .parse::<i64>()
+        .map_err(|_| format!("Could not read userAccountControl of {}", e.dn))?;
+    Ok(UserForChange { dn: e.dn, is_bind, uac })
 }
 
 pub(crate) fn is_bind_account(bind: &str, dn: &str, upn: &str, sam: &str) -> bool {
@@ -895,23 +906,22 @@ async fn read_uac(ldap: &mut ldap3::Ldap, dn: &str) -> LdapResult<i64> {
         .ok_or_else(|| format!("Could not read userAccountControl of {}", dn))
 }
 
-pub async fn set_user_enabled(
-    ldap: &mut ldap3::Ldap,
-    base_dn: &str,
-    username: &str,
-    enable: bool,
-) -> LdapResult<()> {
-    let dn = find_user_dn(ldap, base_dn, username).await?;
-    let uac = with_account_disabled(read_uac(ldap, &dn).await?, !enable);
+/// Enable or disable a user found with [`find_user_for_change`]. A user
+/// already that way is left alone: the DC is not asked to write anything.
+pub async fn set_user_enabled(ldap: &mut ldap3::Ldap, user: &UserForChange, enable: bool) -> LdapResult<()> {
+    let uac = with_account_disabled(user.uac, !enable);
+    if uac == user.uac {
+        return Ok(());
+    }
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
         sv("userAccountControl"),
         HashSet::from([sv(&uac.to_string())]),
     )];
-    ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to change account state: {}", e))?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&user.dn, mods).await.map_err(ldap_err)?;
+    if res.rc != 0 {
+        let what = format!("{} was not {}", first_rdn_value(&user.dn), if enable { "enabled" } else { "disabled" });
+        return Err(refused(&what, "the user", &res));
+    }
     Ok(())
 }
 

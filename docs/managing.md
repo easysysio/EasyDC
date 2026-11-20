@@ -21,6 +21,11 @@ appears to **enable**, **disable**, **move** them to another OU or container, or
 **add them to a group**. If some of them fail, the page says which and why; the others
 are done. Each user's change is a separate line in the audit log.
 
+More than 100 users are sent to the DC 100 at a time, with a progress bar; keep the page
+open until it finishes. A DC makes about 25 to 30 changes a second, so 2,000 users take
+about a minute and a half. Users that are already as asked (enabling an enabled user)
+take no time.
+
 - **Move**, in a user's **⋯** menu with *Reset password* and *Delete*, moves one user to
   another OU or container. The user keeps their name, groups and settings.
 - EasyDC will not disable, delete or move the account it signs in to the DC with, since

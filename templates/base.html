@@ -172,9 +172,9 @@
             waiting.splice(0).forEach(f => f());
         });
 
-        // Remember where each list was when a form leaves the page.
-        document.addEventListener('submit', function (e) {
-            if (e.defaultPrevented) return;
+        // Remember where each list was, for the next page load: when a form
+        // leaves the page, or when a script is about to reload it.
+        function remember() {
             const state = {};
             Object.values(tables).forEach(function (t) {
                 state[t.key] = { page: t.page, q: t.search ? t.search.value : '' };
@@ -182,10 +182,14 @@
             try {
                 sessionStorage.setItem('easydc.lists', JSON.stringify({ at: Date.now(), tables: state }));
             } catch (err) { /* ignore */ }
+        }
+        document.addEventListener('submit', function (e) {
+            if (!e.defaultPrevented) remember();
         });
 
         return {
             get: key => tables[key],
+            remember: remember,
             ready: function (f) {
                 if (document.readyState === 'loading') waiting.push(f); else f();
             },

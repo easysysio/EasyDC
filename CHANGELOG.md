@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 - A group's members page is half the size for large groups.
 
 ### Fixed
+- A bulk action on more than about 1,300 users ran longer than a reverse proxy waits (60 seconds for Nginx), so the browser showed an error while the work went on unseen. A big selection is now sent 100 users at a time, with a progress bar, and each user takes a quarter less time.
 - A DC that stopped answering left the page loading forever. EasyDC now waits up to 10 seconds to connect and 30 seconds for each answer, then says the DC did not answer and that a change may still be made once it is free.
 - The Users page came out blank when the DC could not be reached, instead of saying why.
 - A failed change on the Computers or GPO pages was only recorded in the audit log; the page now shows the reason, in plain words instead of the DC's error codes.

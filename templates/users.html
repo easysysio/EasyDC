@@ -26,6 +26,7 @@
     <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
 </div>
 {% endif %}
+<div id="bulkNote"></div>
 
 <div class="row g-4">
     {% include "ou_tree.html" %}
@@ -284,6 +285,21 @@
     </div>
 </div>
 
+<!-- A big selection is sent in parts; this shows how far it has got. -->
+<div class="modal fade" id="bulkProgress" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body">
+                <p class="fw-medium mb-2 js-doing"></p>
+                <div class="progress mb-2" role="progressbar" aria-label="Progress">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+                </div>
+                <p class="small text-muted mb-0"><span class="js-progress">Starting…</span>. Keep this page open until it finishes.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ── Edit, Reset password and Delete: one of each, filled from the row ── -->
 <div id="userActions" data-base="/servers/{{ server.id }}/users/" data-qs="{{ view_qs }}">
 <div class="modal fade" id="editUserModal" tabindex="-1">
@@ -460,6 +476,25 @@ userActions.querySelectorAll('.modal').forEach(function (modal) {
     });
 });
 
+// What a bulk action sent in parts did, carried over its reload.
+(function () {
+    let saved = null;
+    try {
+        saved = JSON.parse(sessionStorage.getItem('easydc.bulkNote') || 'null');
+        sessionStorage.removeItem('easydc.bulkNote');
+    } catch (e) { /* storage blocked */ }
+    if (!saved || Date.now() - saved.at > 60000) return;
+    const place = document.getElementById('bulkNote');
+    saved.notes.forEach(function (note) {
+        const div = document.createElement('div');
+        div.className = 'alert ' + (note.ok ? 'alert-success' : 'alert-danger');
+        const icon = document.createElement('i');
+        icon.className = 'bi me-1 ' + (note.ok ? 'bi-check-circle' : 'bi-exclamation-triangle');
+        div.append(icon, ' ', note.text);
+        place.appendChild(div);
+    });
+})();
+
 // Select users, then act on all of them at once. Selected users stay
 // selected from page to page; the search unselects the ones it hides, so
 // an action only ever touches users that match what is on screen.
@@ -509,10 +544,71 @@ EasyTable.ready(function () {
     });
 
     function submitBulk(action, users, target) {
+        if (users.length > PART) return sendInParts(action, users, target || '');
         bulkForm.elements.action.value = action;
         bulkForm.elements.users.value = users.join('\n');
         bulkForm.elements.target.value = target || '';
         bulkForm.requestSubmit();
+    }
+
+    // The DC makes about 30 changes a second, so a big selection goes in
+    // parts of a few seconds each: no request runs long enough for a proxy
+    // in front of EasyDC to give up on it, and the dialog shows progress.
+    const PART = 100;
+    const LISTED = 20; // as many failures as the page lists after a bulk action
+    const doing = { enable: 'Enabling', disable: 'Disabling', move: 'Moving', add_to_group: 'Adding' };
+    // Not bulkForm.action: the form has a field named "action", which hides it.
+    const bulkUrl = bulkForm.getAttribute('action');
+    async function sendInParts(action, users, target) {
+        document.querySelectorAll('.modal.show').forEach(m => bootstrap.Modal.getInstance(m).hide());
+        const dialog = document.getElementById('bulkProgress');
+        const bar = dialog.querySelector('.progress-bar');
+        const progress = dialog.querySelector('.js-progress');
+        dialog.querySelector('.js-doing').textContent = doing[action] + ' ' + countText(users.length) + '…';
+        bootstrap.Modal.getOrCreateInstance(dialog).show();
+        const leaving = e => { e.preventDefault(); e.returnValue = ''; };
+        window.addEventListener('beforeunload', leaving);
+
+        let sent = 0, failed = [], outcome = null, stopped = null;
+        while (sent < users.length && !stopped) {
+            const part = users.slice(sent, sent + PART);
+            const body = new URLSearchParams({ action: action, users: part.join('\n'), target: target, part: '1' });
+            try {
+                const answer = await (await fetch(bulkUrl, { method: 'POST', body: body })).json();
+                if (answer.error) {
+                    stopped = answer.error;
+                } else {
+                    outcome = answer;
+                    failed = failed.concat(answer.failed);
+                    sent += part.length;
+                }
+            } catch (e) {
+                // Not an answer from the bulk action: the network, or a sign-in page.
+                stopped = 'EasyDC did not answer as expected.';
+            }
+            bar.style.width = (100 * sent / users.length) + '%';
+            progress.textContent = sent.toLocaleString() + ' of ' + users.length.toLocaleString() + ' done';
+        }
+        window.removeEventListener('beforeunload', leaving);
+
+        const notes = [];
+        if (outcome) {
+            const done = sent - failed.length;
+            if (failed.length === 0) {
+                notes.push({ ok: true, text: outcome.verb + ' ' + countText(done) + outcome.place + '.' });
+            } else {
+                let listed = failed.slice(0, LISTED).join('; ');
+                if (failed.length > LISTED) listed += '; and ' + (failed.length - LISTED).toLocaleString() + ' more, listed in the Audit Log';
+                notes.push({ text: outcome.verb + ' ' + done.toLocaleString() + ' of ' + countText(sent) + outcome.place + '. Not done: ' + listed });
+            }
+        }
+        if (stopped) {
+            notes.push({ text: 'Stopped after ' + sent.toLocaleString() + ' of ' + countText(users.length) + ': ' + stopped +
+                ' The other ' + (users.length - sent).toLocaleString() + ' were not changed.' });
+        }
+        try { sessionStorage.setItem('easydc.bulkNote', JSON.stringify({ at: Date.now(), notes: notes })); } catch (e) { /* ignore */ }
+        EasyTable.remember();
+        location.href = bulkUrl.replace('/users/bulk', '/users');
     }
     document.querySelectorAll('.js-bulk').forEach(function (button) {
         button.addEventListener('click', function () {

@@ -1604,8 +1604,8 @@ pub async fn delete_user(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        let (_, is_bind) = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
-        refuse_bind_account(is_bind, &username, "deleting")?;
+        let user = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
+        refuse_bind_account(user.is_bind, &username, "deleting")?;
         ldap::delete_user(&mut conn, &base_dn, &username).await
     }
     .await;
@@ -1636,11 +1636,11 @@ pub async fn toggle_user(
     let enable = form.enable == "true";
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        let user = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
         if !enable {
-            let (_, is_bind) = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
-            refuse_bind_account(is_bind, &username, "disabling")?;
+            refuse_bind_account(user.is_bind, &username, "disabling")?;
         }
-        ldap::set_user_enabled(&mut conn, &base_dn, &username, enable).await
+        ldap::set_user_enabled(&mut conn, &user, enable).await
     }
     .await;
     let action = if enable { "user.enable" } else { "user.disable" };
@@ -1708,6 +1708,9 @@ pub struct BulkUsersForm {
     /// The OU or container DN to move to, or the group to add to.
     #[serde(default)]
     pub target: String,
+    /// "1" when the browser sends a big selection in parts.
+    #[serde(default)]
+    pub part: String,
 }
 
 /// Each selected name once, in the order given.
@@ -1721,12 +1724,36 @@ fn selected_names(users: &str) -> Vec<&str> {
 }
 
 /// One sentence for a bulk action that did not fully work.
+/// The page lists this many; the Audit Log has them all. (The Users page
+/// script lists the same number when it sends a selection in parts.)
+const FAILURES_LISTED: usize = 20;
+
 fn bulk_summary(verb: &str, place: &str, total: usize, failed: &[String]) -> String {
     let done = total - failed.len();
     let users = if total == 1 { "user" } else { "users" };
-    format!("{verb} {done} of {total} {users}{place}. Not done: {}", failed.join("; "))
+    let mut listed = failed.iter().take(FAILURES_LISTED).cloned().collect::<Vec<_>>().join("; ");
+    if failed.len() > FAILURES_LISTED {
+        listed += &format!("; and {} more, listed in the Audit Log", failed.len() - FAILURES_LISTED);
+    }
+    format!("{verb} {done} of {total} {users}{place}. Not done: {listed}")
 }
 
+/// What a bulk action did: one sentence's worth, for the page or the browser.
+#[derive(Serialize)]
+struct BulkOutcome {
+    /// "Disabled", "Moved", …
+    verb: &'static str,
+    /// " to Sales" for a move or a group; empty otherwise.
+    place: String,
+    total: usize,
+    /// "name (reason)" for each user it was not done for.
+    failed: Vec<String>,
+}
+
+/// A big selection comes from the browser in parts, so that no one request
+/// runs long enough for a proxy in front of EasyDC to give up on it: the DC
+/// writes about 30 changes a second, however they are sent. A part (`part=1`)
+/// is answered with the outcome as JSON instead of a page.
 pub async fn bulk_users(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
@@ -1738,69 +1765,77 @@ pub async fn bulk_users(
         None => return redirect_home(),
         Some(s) => s,
     };
+    let outcome = run_bulk(&state, &actor, &server, &form).await;
+    if form.part == "1" {
+        return match outcome {
+            Ok(o) => axum::Json(o).into_response(),
+            Err(e) => axum::Json(serde_json::json!({ "error": e })).into_response(),
+        };
+    }
+    let result = outcome.and_then(|o| {
+        if o.failed.is_empty() { Ok(()) } else { Err(bulk_summary(o.verb, &o.place, o.total, &o.failed)) }
+    });
+    after_user_action(&state, &server, &view, result).await
+}
+
+async fn run_bulk(state: &AppState, actor: &str, server: &Server, form: &BulkUsersForm) -> Result<BulkOutcome, String> {
     let names = selected_names(&form.users);
     let target = form.target.trim();
     let action = form.action.as_str();
-
-    let result: Result<(), String> = async {
-        let (verb, audit) = match action {
-            "enable" => ("Enabled", "user.enable"),
-            "disable" => ("Disabled", "user.disable"),
-            "move" => ("Moved", "user.move"),
-            "add_to_group" => ("Added", "group.add_member"),
-            other => return Err(format!("Unknown action '{other}'")),
-        };
-        if names.is_empty() {
-            return Err("No users were selected".to_string());
-        }
-        let (mut conn, base_dn) = ldap::open(&server).await?;
-        // Checked once, not once per user: the group is looked up here and
-        // reused for every user.
-        let mut group = None;
-        let place = match action {
-            "move" => {
-                if target.is_empty() {
-                    return Err("Pick an OU or container to move to".to_string());
-                }
-                let container = ldap::container_name(&mut conn, &base_dn, target).await?;
-                format!(" to {container}")
-            }
-            "add_to_group" => {
-                if target.is_empty() {
-                    return Err("Enter the group to add to".to_string());
-                }
-                let found = ldap::find_group(&mut conn, &base_dn, target).await?;
-                let place = format!(" to {}", found.name);
-                group = Some(found);
-                place
-            }
-            _ => String::new(),
-        };
-
-        let results = match &group {
-            Some(group) => add_users_to_group(&mut conn, &base_dn, group, &names).await?,
-            None => {
-                let mut results = Vec::with_capacity(names.len());
-                for name in &names {
-                    results.push(bulk_one(&mut conn, &base_dn, &server.bind_dn, action, name, target).await);
-                }
-                results
-            }
-        };
-
-        let mut failed = Vec::new();
-        for (name, r) in names.iter().zip(results) {
-            let logged = if target.is_empty() { name.to_string() } else { format!("{name} → {target}") };
-            db::log_action(&state.db, &actor, audit, &logged, Some(id), &r).await;
-            if let Err(e) = r {
-                failed.push(format!("{name} ({e})"));
-            }
-        }
-        if failed.is_empty() { Ok(()) } else { Err(bulk_summary(verb, &place, names.len(), &failed)) }
+    let (verb, audit) = match action {
+        "enable" => ("Enabled", "user.enable"),
+        "disable" => ("Disabled", "user.disable"),
+        "move" => ("Moved", "user.move"),
+        "add_to_group" => ("Added", "group.add_member"),
+        other => return Err(format!("Unknown action '{other}'")),
+    };
+    if names.is_empty() {
+        return Err("No users were selected".to_string());
     }
-    .await;
+    let (mut conn, base_dn) = ldap::open(server).await?;
+    // Checked once, not once per user: the group is looked up here and
+    // reused for every user.
+    let mut group = None;
+    let place = match action {
+        "move" => {
+            if target.is_empty() {
+                return Err("Pick an OU or container to move to".to_string());
+            }
+            let container = ldap::container_name(&mut conn, &base_dn, target).await?;
+            format!(" to {container}")
+        }
+        "add_to_group" => {
+            if target.is_empty() {
+                return Err("Enter the group to add to".to_string());
+            }
+            let found = ldap::find_group(&mut conn, &base_dn, target).await?;
+            let place = format!(" to {}", found.name);
+            group = Some(found);
+            place
+        }
+        _ => String::new(),
+    };
 
-    after_user_action(&state, &server, &view, result).await
+    let results = match &group {
+        Some(group) => add_users_to_group(&mut conn, &base_dn, group, &names).await?,
+        None => {
+            let mut results = Vec::with_capacity(names.len());
+            for name in &names {
+                results.push(bulk_one(&mut conn, &base_dn, &server.bind_dn, action, name, target).await);
+            }
+            results
+        }
+    };
+
+    let mut failed = Vec::new();
+    for (name, r) in names.iter().zip(results) {
+        let logged = if target.is_empty() { name.to_string() } else { format!("{name} → {target}") };
+        db::log_action(&state.db, actor, audit, &logged, Some(server.id), &r).await;
+        if let Err(e) = r {
+            failed.push(format!("{name} ({e})"));
+        }
+    }
+    Ok(BulkOutcome { verb, place, total: names.len(), failed })
 }
 
 async fn bulk_one(
@@ -1811,17 +1846,17 @@ async fn bulk_one(
     name: &str,
     target: &str,
 ) -> Result<(), String> {
-    let (dn, is_bind) = ldap::find_user_for_change(conn, base_dn, name, bind).await?;
+    let user = ldap::find_user_for_change(conn, base_dn, name, bind).await?;
     match action {
-        "enable" => ldap::set_user_enabled(conn, base_dn, name, true).await,
+        "enable" => ldap::set_user_enabled(conn, &user, true).await,
         "disable" => {
-            refuse_bind_account(is_bind, name, "disabling")?;
-            ldap::set_user_enabled(conn, base_dn, name, false).await
+            refuse_bind_account(user.is_bind, name, "disabling")?;
+            ldap::set_user_enabled(conn, &user, false).await
         }
         "move" => {
             // A bind account given as a DN stops working when the DN changes.
-            refuse_bind_account(bind.trim().eq_ignore_ascii_case(&dn), name, "moving")?;
-            ldap::move_entry(conn, base_dn, &dn, target).await
+            refuse_bind_account(bind.trim().eq_ignore_ascii_case(&user.dn), name, "moving")?;
+            ldap::move_entry(conn, base_dn, &user.dn, target).await
         }
         other => Err(format!("Unknown action '{other}'")),
     }
@@ -1842,8 +1877,8 @@ async fn add_users_to_group(
     for (i, name) in names.iter().enumerate() {
         match ldap::find_user_for_change(conn, base_dn, name, "").await {
             Err(e) => results[i] = Err(e),
-            Ok((dn, _)) if present.contains(&dn.to_lowercase()) => {}
-            Ok((dn, _)) => todo.push((i, dn)),
+            Ok(user) if present.contains(&user.dn.to_lowercase()) => {}
+            Ok(user) => todo.push((i, user.dn)),
         }
     }
     let dns: Vec<String> = todo.iter().map(|(_, dn)| dn.clone()).collect();
@@ -2201,6 +2236,27 @@ mod users_page_tests {
             super::bulk_summary("Disabled", "", 1, &["admin (no)".into()]),
             "Disabled 0 of 1 user. Not done: admin (no)"
         );
+    }
+
+    #[test]
+    fn a_long_list_of_failures_is_cut_short() {
+        let failed: Vec<String> = (1..=25).map(|i| format!("u{i} (no)")).collect();
+        let e = super::bulk_summary("Disabled", "", 100, &failed);
+        assert!(e.starts_with("Disabled 75 of 100 users. Not done: u1 (no); "), "{e}");
+        assert!(e.contains("u20 (no)") && !e.contains("u21 (no)"), "{e}");
+        assert!(e.ends_with("; and 5 more, listed in the Audit Log"), "{e}");
+    }
+
+    /// The Users page script reads these names when it sends a selection in parts.
+    #[test]
+    fn a_part_is_answered_with_what_the_page_reads() {
+        let o = super::BulkOutcome { verb: "Moved", place: " to Sales".into(), total: 100, failed: vec!["bob (x)".into()] };
+        let v = serde_json::to_value(&o).unwrap();
+        assert_eq!(v, serde_json::json!({ "verb": "Moved", "place": " to Sales", "total": 100, "failed": ["bob (x)"] }));
+        let page = std::fs::read_to_string("templates/users.html").unwrap();
+        for read in ["answer.error", "answer.failed", "outcome.verb", "outcome.place", "part: '1'"] {
+            assert!(page.contains(read), "users.html no longer reads {read}");
+        }
     }
 
     #[test]
