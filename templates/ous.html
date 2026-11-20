@@ -34,6 +34,10 @@
     <p class="mt-3 fs-5">No Organizational Units found</p>
 </div>
 {% else %}
+<div class="d-flex mb-3">
+    <input type="search" id="listSearch" class="form-control form-control-sm ms-auto" style="max-width: 16rem;"
+        placeholder="Search name, description, DN…" aria-label="Search OUs">
+</div>
 <div class="card shadow-sm">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -47,7 +51,7 @@
             </thead>
             <tbody>
                 {% for ou in ou_nodes %}
-                <tr>
+                <tr class="js-search-row" data-search="{{ ou.name }} {{ ou.description }} {{ ou.dn }}">
                     <td>
                         <span style="padding-left: {{ ou.depth }}rem;">
                             <i class="bi bi-folder2 text-warning me-1"></i>
@@ -72,6 +76,9 @@
                     </td>
                 </tr>
                 {% endfor %}
+                <tr id="noSearchMatch" class="d-none">
+                    <td colspan="4" class="text-center text-muted py-4">No OU matches the search.</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -199,5 +206,25 @@
     </div>
 </div>
 {% endfor %}
+
+<script>
+// Narrow the list as you type; every word must appear somewhere in the row.
+const listSearch = document.getElementById('listSearch');
+if (listSearch) {
+    const rows = Array.from(document.querySelectorAll('.js-search-row'));
+    const none = document.getElementById('noSearchMatch');
+    listSearch.addEventListener('input', function () {
+        const words = this.value.toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        rows.forEach(function (row) {
+            const text = row.dataset.search.toLowerCase();
+            const hit = words.every(w => text.includes(w));
+            row.classList.toggle('d-none', !hit);
+            if (hit) shown++;
+        });
+        none.classList.toggle('d-none', shown > 0);
+    });
+}
+</script>
 
 {% endblock %}

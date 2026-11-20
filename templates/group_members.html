@@ -82,6 +82,8 @@
     <div class="card-header d-flex align-items-center">
         <span class="fw-medium">Current Members</span>
         <span class="badge bg-secondary ms-2">{{ members | length }}</span>
+        <input type="search" id="listSearch" class="form-control form-control-sm ms-auto" style="max-width: 16rem;"
+            placeholder="Search members…" aria-label="Search members">
     </div>
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -96,7 +98,8 @@
             </thead>
             <tbody>
                 {% for member in members %}
-                <tr>
+                <tr class="js-search-row"
+                    data-search="{{ member.name }} {{ member.display_name }} {% if member.kind == "foreign" %}built-in identity{% else %}{{ member.kind }}{% endif %} {{ member.detail }}">
                     <td class="fw-medium">
                         {% if member.kind == "group" %}
                         <i class="bi bi-people-fill me-1 text-success"></i>
@@ -137,6 +140,9 @@
                     </td>
                 </tr>
                 {% endfor %}
+                <tr id="noSearchMatch" class="d-none">
+                    <td colspan="5" class="text-center text-muted py-4">No member matches the search.</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -171,5 +177,25 @@
     </div>
 </div>
 {% endfor %}
+
+<script>
+// Narrow the list as you type; every word must appear somewhere in the row.
+const listSearch = document.getElementById('listSearch');
+if (listSearch) {
+    const rows = Array.from(document.querySelectorAll('.js-search-row'));
+    const none = document.getElementById('noSearchMatch');
+    listSearch.addEventListener('input', function () {
+        const words = this.value.toLowerCase().split(/\s+/).filter(Boolean);
+        let shown = 0;
+        rows.forEach(function (row) {
+            const text = row.dataset.search.toLowerCase();
+            const hit = words.every(w => text.includes(w));
+            row.classList.toggle('d-none', !hit);
+            if (hit) shown++;
+        });
+        none.classList.toggle('d-none', shown > 0);
+    });
+}
+</script>
 
 {% endblock %}

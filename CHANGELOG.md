@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 - Users: browse by OU or container, with or without the OUs below, and create a user in the OU you are looking at.
 - Users: filter by status (enabled, disabled, locked, expired), and search by name, description or email.
 - Users: Description, in the Add and Edit dialogs and as a column in the list.
-- DNS: find a zone by name, and a record by name, value or type.
+- A search box on every list: groups and their members, computers, DNS zones and records, GPOs and OUs. Inside a DNS zone you can also show a single record type.
 
 ### Fixed
 - The OU list put an OU whose name contains a comma at the wrong depth.

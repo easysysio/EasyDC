@@ -58,6 +58,13 @@ Create **security** or **distribution** groups with a **global**, **domain local
 
 When an action is refused, the reason is shown on the page and recorded in the audit log.
 
+## Search
+
+Every list (users, groups and a group's members, computers, DNS zones and records,
+Group Policy Objects and OUs) has a search box that narrows it as you type. It
+looks in the columns shown, such as name, description, type, hostname or GUID; with
+several words, a row must contain all of them.
+
 ## Computers
 
 List the computer accounts in the domain, **enable or disable** them, and **delete**
