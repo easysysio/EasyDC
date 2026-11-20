@@ -8,11 +8,7 @@ Three roles:
 - **Editor**: adds, edits and deletes users, groups, computers and DNS records. Cannot
   touch OUs or GPOs, and cannot add EasyDC accounts.
 - **Admin**: everything, including EasyDC accounts, password policies (domain and per
-  group) and the health check's fixes.
-
-To decide:
-
-- Creating or deleting DNS zones: editor or admin only?
+  group), the health check's fixes, and creating or deleting DNS zones.
 
 Every refused action needs a clear message on the page and a line in the audit log.
 
