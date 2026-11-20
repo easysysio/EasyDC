@@ -321,8 +321,7 @@ mod tests {
 
     #[test]
     fn every_page_links_to_settings() {
-        let mut c = Context::new();
-        c.insert("entries", &Vec::<tera::Value>::new());
+        let c = super::super::servers::tests_support::empty_audit_context();
         let html = tera().render("audit.html", &c).expect("renders");
         assert!(html.contains("href=\"/settings\""));
     }

@@ -82,7 +82,7 @@ When an action is refused, the reason is shown on the page and recorded in the a
 ## Search and pages
 
 Every list (users, groups and a group's members, computers, DNS zones and records,
-Group Policy Objects, OUs and the audit log) has a search box that narrows it as you
+Group Policy Objects and OUs) has a search box that narrows it as you
 type. It looks in the columns shown, such as name, description, type, hostname or GUID;
 with several words, a row must contain all of them.
 
@@ -254,8 +254,11 @@ remove each other at the same moment.
 
 ## Audit log
 
-The **Audit Log** in the top bar shows the **500 most recent actions** across all
-servers, newest first, with a filter box for narrowing by actor, action or target.
+The **Audit Log** in the top bar shows every action across all servers, newest first,
+100 to a page. The search looks through the whole log, not just the latest entries, so
+one bulk action on 2,000 users does not hide what came before it: type words from the
+actor, action, target, server or error and press Enter; an entry must contain all of
+them. **Failures only** shows just the changes that did not work.
 
 Each entry records the time, the EasyDC user who acted, the action (for example
 `user.reset_password`, `dns.zone_create` or `settings.admin_create`), its target, the server, and **success** or

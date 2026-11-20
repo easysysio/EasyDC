@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- The Audit Log searches and pages through the whole log, with a Failures only switch. It used to show only the latest 500 entries, so one big bulk action hid everything before it.
 - A group's members page is half the size for large groups.
 
 ### Fixed

@@ -130,22 +130,48 @@ pub async fn log_action(
     .await;
 }
 
-/// Fetch the most recent audit entries (newest first), capped at `limit`.
-pub async fn recent_audit(
+/// One page of the audit log, newest first, and how many entries match in
+/// all. Every word of `search` must appear somewhere in the entry: its actor,
+/// action, target, reason or server. The whole log is searched, not just a
+/// recent part of it, so one big bulk action does not hide everything older.
+pub async fn search_audit(
     pool: &SqlitePool,
+    search: &str,
+    failures_only: bool,
     limit: i64,
-) -> Result<Vec<crate::models::AuditEntry>, sqlx::Error> {
-    sqlx::query_as::<_, crate::models::AuditEntry>(
+    offset: i64,
+) -> Result<(Vec<crate::models::AuditEntry>, i64), sqlx::Error> {
+    let words: Vec<String> = search.split_whitespace().map(str::to_lowercase).collect();
+    let mut filter = String::from(" WHERE 1 = 1");
+    if failures_only {
+        filter.push_str(" AND a.result = 'failure'");
+    }
+    for _ in &words {
+        filter.push_str(
+            " AND instr(lower(a.actor || ' ' || a.action || ' ' || a.target || ' ' || \
+             coalesce(a.detail, '') || ' ' || coalesce(s.name, '')), ?) > 0",
+        );
+    }
+    let from = " FROM audit_log a LEFT JOIN servers s ON s.id = a.server_id";
+
+    let count_sql = format!("SELECT COUNT(*){from}{filter}");
+    let mut count = sqlx::query_scalar::<_, i64>(&count_sql);
+    for w in &words {
+        count = count.bind(w);
+    }
+    let total = count.fetch_one(pool).await?;
+
+    let page_sql = format!(
         "SELECT a.id, a.ts, a.actor, a.action, a.target, a.server_id,
-                s.name AS server_name, a.result, a.detail
-         FROM audit_log a
-         LEFT JOIN servers s ON s.id = a.server_id
-         ORDER BY a.id DESC
-         LIMIT ?",
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await
+                s.name AS server_name, a.result, a.detail{from}{filter}
+         ORDER BY a.id DESC LIMIT ? OFFSET ?"
+    );
+    let mut page = sqlx::query_as::<_, crate::models::AuditEntry>(&page_sql);
+    for w in &words {
+        page = page.bind(w);
+    }
+    let entries = page.bind(limit).bind(offset).fetch_all(pool).await?;
+    Ok((entries, total))
 }
 
 // ── session ↔ user lookup ──────────────────────────────────────────────────────
@@ -301,6 +327,35 @@ mod tests {
             .unwrap();
         init_tables(&pool).await.unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn the_audit_log_is_searched_whole_and_paged() {
+        let pool = pool().await;
+        log_action(&pool, "alice", "group.create", "Finance", None, &Ok(())).await;
+        for i in 0..250 {
+            log_action(&pool, "bob", "user.disable", &format!("test{i:04}"), None, &Ok(())).await;
+        }
+        log_action(&pool, "bob", "user.disable", "Administrator", None, &Err("It is EasyDC's own account".into())).await;
+
+        let (page, total) = search_audit(&pool, "", false, 100, 0).await.unwrap();
+        assert_eq!((page.len(), total), (100, 252));
+        assert_eq!(page[0].target, "Administrator", "newest first");
+
+        // Behind 251 newer entries, and still found.
+        let (found, total) = search_audit(&pool, "GROUP.create fin", false, 100, 0).await.unwrap();
+        assert_eq!((found.len(), total), (1, 1));
+        assert_eq!(found[0].actor, "alice");
+
+        let (failed, total) = search_audit(&pool, "", true, 100, 0).await.unwrap();
+        assert_eq!((failed[0].target.as_str(), total), ("Administrator", 1));
+        assert_eq!(search_audit(&pool, "own account", false, 100, 0).await.unwrap().1, 1, "the reason is searched");
+
+        let (last, _) = search_audit(&pool, "", false, 100, 200).await.unwrap();
+        assert_eq!(last.len(), 52);
+        assert_eq!(last.last().unwrap().target, "Finance");
+        // A % or _ is an ordinary character, not a wildcard.
+        assert_eq!(search_audit(&pool, "%", false, 100, 0).await.unwrap().1, 0);
     }
 
     async fn add(pool: &SqlitePool, name: &str) {
