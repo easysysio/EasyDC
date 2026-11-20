@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-20
+
 ### Added
 - Every list (users, groups, members, computers, DNS zones and records, GPOs, OUs, audit log) shows a page at a time, with 25, 50, 100 or 250 rows per page. The search still covers the whole list, and after an action you are back on the same page.
 - Users: after ticking a whole page, **Select all** picks every user that matches the search and filter.
