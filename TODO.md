@@ -1,5 +1,7 @@
 # TODO
 
+Everything below is planned for **0.5.0**.
+
 ## Roles for EasyDC accounts
 
 Three roles:
