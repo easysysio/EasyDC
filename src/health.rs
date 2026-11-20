@@ -149,11 +149,12 @@ pub(crate) async fn search(
     attrs: Vec<&str>,
 ) -> LdapResult<Vec<SearchEntry>> {
     let (entries, _) = conn
+        .with_timeout(crate::ldap::OP_TIMEOUT)
         .search(base, scope, filter, attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(crate::ldap::ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::ldap::ldap_err)?;
     Ok(entries.into_iter().map(SearchEntry::construct).collect())
 }
 

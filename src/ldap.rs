@@ -169,6 +169,33 @@ pub(crate) fn attr(e: &SearchEntry, key: &str) -> String {
 
 // ── connection ────────────────────────────────────────────────────────────────
 
+/// How long EasyDC waits for the DC to answer one request. A DC busy with a
+/// long change, such as deleting an OU with thousands of users, holds every
+/// other change until it is done; without a limit the page would load
+/// forever.
+pub(crate) const OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long EasyDC waits to connect to a DC.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// An LDAP error in words. A timeout says what it means for the person
+/// waiting: the change may still be made once the DC gets to it.
+pub(crate) fn ldap_err(e: ldap3::LdapError) -> String {
+    match e {
+        ldap3::LdapError::Timeout { .. } => timed_out(),
+        other => other.to_string(),
+    }
+}
+
+pub(crate) fn timed_out() -> String {
+    format!(
+        "The domain controller did not answer within {} seconds, so EasyDC stopped waiting. \
+         It may be busy with a large change, such as deleting or importing many objects. \
+         If you were making a change, it may still be made once the DC is free: check again in a few minutes.",
+        OP_TIMEOUT.as_secs()
+    )
+}
+
 pub async fn connect_and_bind(server: &Server) -> LdapResult<ldap3::Ldap> {
     connect_url(server, &server.ldap_url, None).await
 }
@@ -181,17 +208,18 @@ pub async fn connect_url(
     url: &str,
     timeout: Option<std::time::Duration>,
 ) -> LdapResult<ldap3::Ldap> {
-    let mut settings = LdapConnSettings::new().set_no_tls_verify(server.skip_tls);
-    if let Some(t) = timeout {
-        settings = settings.set_conn_timeout(t);
-    }
-    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, url)
-        .await
-        .map_err(|e| format!("Connection failed: {}", e))?;
+    let wait = timeout.unwrap_or(CONNECT_TIMEOUT);
+    let settings = LdapConnSettings::new().set_no_tls_verify(server.skip_tls).set_conn_timeout(wait);
+    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, url).await.map_err(|e| match e {
+        ldap3::LdapError::Timeout { .. } => {
+            format!("Connection failed: the domain controller did not answer within {} seconds", wait.as_secs())
+        }
+        other => format!("Connection failed: {}", other),
+    })?;
     ldap3::drive!(conn);
-    ldap.simple_bind(&server.bind_dn, &server.bind_password)
+    ldap.with_timeout(OP_TIMEOUT).simple_bind(&server.bind_dn, &server.bind_password)
         .await
-        .map_err(|e| format!("Bind failed: {}", e))?
+        .map_err(|e| format!("Bind failed: {}", ldap_err(e)))?
         .success()
         .map_err(|e| format!("Authentication failed: {}", e))?;
     Ok(ldap)
@@ -199,11 +227,12 @@ pub async fn connect_url(
 
 pub async fn get_base_dn(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search("", Scope::Base, "(objectClass=*)", vec!["defaultNamingContext"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     entries
         .into_iter()
@@ -211,6 +240,22 @@ pub async fn get_base_dn(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
         .map(SearchEntry::construct)
         .and_then(|e| e.attrs.get("defaultNamingContext")?.first().cloned())
         .ok_or_else(|| "Could not determine domain base DN from server".to_string())
+}
+
+/// True for an error saying the DC did not answer in time, when connecting
+/// or during a request.
+pub(crate) fn is_timeout(error: &str) -> bool {
+    error.contains("did not answer within")
+}
+
+/// `open`, for showing a page after an action. If the action just failed
+/// because the DC did not answer, reading the page from the same DC would
+/// only wait as long again: the action's error is returned instead.
+pub async fn open_after(server: &Server, earlier: Option<&str>) -> LdapResult<(ldap3::Ldap, String)> {
+    match earlier {
+        Some(e) if is_timeout(e) => Err(e.to_string()),
+        _ => open(server).await,
+    }
 }
 
 pub async fn open(server: &Server) -> LdapResult<(ldap3::Ldap, String)> {
@@ -228,11 +273,12 @@ async fn find_user_dn(
 ) -> LdapResult<String> {
     let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     entries
         .into_iter()
@@ -251,11 +297,12 @@ pub async fn find_user_for_change(
 ) -> LdapResult<(String, bool)> {
     let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "userPrincipalName"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let e = entries
         .into_iter()
         .next()
@@ -276,11 +323,12 @@ pub(crate) fn is_bind_account(bind: &str, dn: &str, upn: &str, sam: &str) -> boo
 /// Every group's name, sorted: the suggestions for "Add to group".
 pub async fn group_names(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, "(objectClass=group)", vec!["sAMAccountName"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut names: Vec<String> = entries
         .into_iter()
         .map(|e| attr(&SearchEntry::construct(e), "sAMAccountName"))
@@ -294,6 +342,7 @@ pub async fn group_names(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Ve
 
 pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapUser>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Subtree,
@@ -318,9 +367,9 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
             ],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let entries: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
     // manager holds a DN; show the username when the manager is a listed user.
@@ -412,6 +461,7 @@ pub async fn list_containers(
     objects_in: &[&str],
 ) -> LdapResult<Vec<UserContainer>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Subtree,
@@ -420,9 +470,9 @@ pub async fn list_containers(
             vec!["objectClass"],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let found = entries
         .into_iter()
         .map(SearchEntry::construct)
@@ -671,9 +721,9 @@ pub async fn create_user(
         attrs.push((sv("accountExpires"), HashSet::from([sv(&ft.to_string())])));
     }
 
-    ldap.add(&user_dn, attrs)
+    ldap.with_timeout(OP_TIMEOUT).add(&user_dn, attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to create user: {}", e))?;
 
@@ -682,11 +732,11 @@ pub async fn create_user(
         sv("unicodePwd"),
         HashSet::from([encode_password(u.password)]),
     )];
-    let res = ldap.modify(&user_dn, pwd_mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&user_dn, pwd_mods).await.map_err(ldap_err)?;
     if res.rc != 0 {
         // The account exists now, disabled and without a password. Remove
         // it, so a corrected retry does not hit "already exists".
-        let removed = ldap.delete(&user_dn).await.ok().and_then(|r| r.success().ok()).is_some();
+        let removed = ldap.with_timeout(OP_TIMEOUT).delete(&user_dn).await.ok().and_then(|r| r.success().ok()).is_some();
         let msg = password_error("The user was not created", res.rc, &res.text);
         return Err(if removed {
             msg
@@ -699,9 +749,9 @@ pub async fn create_user(
         sv("userAccountControl"),
         HashSet::from([sv("512")]),
     )];
-    ldap.modify(&user_dn, enable_mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&user_dn, enable_mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to enable account: {}", e))?;
 
@@ -727,11 +777,12 @@ pub async fn update_user(
     u.profile.check()?;
     let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["accountExpires"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let entry = entries
         .into_iter()
         .next()
@@ -770,7 +821,7 @@ pub async fn update_user(
         ));
     }
 
-    let res = ldap.modify(&dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
         rc if !u.password.is_empty() && is_password_refusal(rc, &res.text) => {
@@ -788,9 +839,9 @@ pub async fn delete_user(
     username: &str,
 ) -> LdapResult<()> {
     let dn = find_user_dn(ldap, base_dn, username).await?;
-    ldap.delete(&dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(&dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete user: {}", e))?;
     Ok(())
@@ -810,11 +861,12 @@ fn with_account_disabled(uac: i64, disabled: bool) -> i64 {
 
 async fn read_uac(ldap: &mut ldap3::Ldap, dn: &str) -> LdapResult<i64> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(dn, Scope::Base, "(objectClass=*)", vec!["userAccountControl"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     entries
         .into_iter()
         .next()
@@ -835,9 +887,9 @@ pub async fn set_user_enabled(
         sv("userAccountControl"),
         HashSet::from([sv(&uac.to_string())]),
     )];
-    ldap.modify(&dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to change account state: {}", e))?;
     Ok(())
@@ -862,7 +914,7 @@ pub async fn reset_password(
         Mod::Replace(sv("unicodePwd"), HashSet::from([encode_password(new_password)])),
         Mod::Replace(sv("pwdLastSet"), HashSet::from([sv(pwd_last_set)])),
     ];
-    let res = ldap.modify(&dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
         rc => Err(password_error("The password was not changed", rc, &res.text)),
@@ -903,9 +955,9 @@ pub async fn unlock_user(
     let dn = find_user_dn(ldap, base_dn, username).await?;
     let mods: Vec<Mod<Vec<u8>>> =
         vec![Mod::Replace(sv("lockoutTime"), HashSet::from([sv("0")]))];
-    ldap.modify(&dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to unlock account: {}", e))?;
     Ok(())
@@ -1073,11 +1125,12 @@ async fn search_groups(
         attrs.push("member");
     }
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &format!("(&(objectClass=group){filter})"), attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut groups: Vec<LdapGroup> = entries
         .into_iter()
         .map(|e| LdapGroup::from_entry(&SearchEntry::construct(e)))
@@ -1178,9 +1231,9 @@ pub async fn create_group(
         attrs.push((sv("description"), HashSet::from([sv(g.description)])));
     }
 
-    ldap.add(&group_dn, attrs)
+    ldap.with_timeout(OP_TIMEOUT).add(&group_dn, attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to create group: {}", e))?;
 
@@ -1275,9 +1328,9 @@ pub async fn update_group(
         mods.push(Mod::Replace(sv("groupType"), HashSet::from([sv(&gt)])));
     }
 
-    ldap.modify(&group.dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&group.dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to update group: {}", e))?;
 
@@ -1292,9 +1345,9 @@ pub async fn delete_group(
     name: &str,
 ) -> LdapResult<()> {
     let dn = find_group_dn(ldap, base_dn, name).await?;
-    ldap.delete(&dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(&dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete group: {}", e))?;
     Ok(())
@@ -1411,6 +1464,7 @@ pub async fn group_detail(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> 
     let mut found: std::collections::HashMap<String, GroupMember> = std::collections::HashMap::new();
     if !member_dns.is_empty() {
         let (entries, _) = ldap
+            .with_timeout(OP_TIMEOUT)
             .search(
                 base_dn,
                 Scope::Subtree,
@@ -1418,9 +1472,9 @@ pub async fn group_detail(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> 
                 vec!["objectClass", "sAMAccountName", "cn", "displayName", "mail", "userAccountControl", "groupType"],
             )
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(ldap_err)?
             .success()
-            .map_err(|e| e.to_string())?;
+            .map_err(ldap_err)?;
         for e in entries {
             let m = member_from_entry(&SearchEntry::construct(e));
             found.insert(m.dn.to_lowercase(), m);
@@ -1450,11 +1504,12 @@ pub async fn group_detail(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> 
 /// Everything that can be added to a group, for the Add box's suggestions.
 pub async fn member_candidates(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, "(|(objectClass=user)(objectClass=group))", vec!["sAMAccountName"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut names: Vec<String> = entries
         .into_iter()
         .map(|e| attr(&SearchEntry::construct(e), "sAMAccountName"))
@@ -1491,11 +1546,12 @@ pub(crate) fn is_already_member(error: &str) -> bool {
 /// The DNs of a group's direct members.
 pub async fn group_member_dns(ldap: &mut ldap3::Ldap, group_dn: &str) -> LdapResult<Vec<String>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(group_dn, Scope::Base, "(objectClass=group)", vec!["member"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     Ok(entries
         .into_iter()
         .next()
@@ -1517,13 +1573,13 @@ pub async fn add_member_dns(ldap: &mut ldap3::Ldap, group: &LdapGroup, dns: &[St
     let mut results = Vec::with_capacity(dns.len());
     for chunk in dns.chunks(MEMBERS_PER_CHANGE) {
         let all: HashSet<Vec<u8>> = chunk.iter().map(|dn| sv(dn)).collect();
-        let together = ldap.modify(&group.dn, vec![Mod::Add(sv("member"), all)]).await;
+        let together = ldap.with_timeout(OP_TIMEOUT).modify(&group.dn, vec![Mod::Add(sv("member"), all)]).await;
         if matches!(&together, Ok(res) if res.rc == 0) {
             results.extend(chunk.iter().map(|_| Ok(())));
             continue;
         }
         for dn in chunk {
-            let one = ldap.modify(&group.dn, vec![Mod::Add(sv("member"), HashSet::from([sv(dn)]))]).await;
+            let one = ldap.with_timeout(OP_TIMEOUT).modify(&group.dn, vec![Mod::Add(sv("member"), HashSet::from([sv(dn)]))]).await;
             results.push(match one {
                 Ok(res) if res.rc == 0 => Ok(()),
                 Ok(res) if res.rc == 20 || res.rc == 68 => {
@@ -1552,11 +1608,12 @@ pub async fn add_group_member(
         ldap_escape(member)
     );
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["objectClass", "sAMAccountName", "groupType", "isCriticalSystemObject"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut entries: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
     // "name" itself before "name$".
     entries.sort_by_key(|e| !attr(e, "sAMAccountName").eq_ignore_ascii_case(member));
@@ -1577,11 +1634,12 @@ pub async fn add_group_member(
         // that is already inside the child at any depth.
         let loop_filter = format!("(member:1.2.840.113556.1.4.1941:={})", ldap_escape(&target.dn));
         let (inside, _) = ldap
+            .with_timeout(OP_TIMEOUT)
             .search(&child.dn, Scope::Base, &loop_filter, vec!["dn"])
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(ldap_err)?
             .success()
-            .map_err(|e| e.to_string())?;
+            .map_err(ldap_err)?;
         if !inside.is_empty() {
             return Err(format!(
                 "{} is already inside {}, directly or through other groups; adding {} to it would make a loop",
@@ -1591,7 +1649,7 @@ pub async fn add_group_member(
     }
 
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Add(sv("member"), HashSet::from([sv(&entry.dn)]))];
-    let res = ldap.modify(&target.dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&target.dn, mods).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
         20 | 68 => Err(format!("{} {ALREADY_MEMBER} {}", attr(&entry, "sAMAccountName"), target.name)),
@@ -1609,7 +1667,7 @@ pub async fn remove_group_member(
 ) -> LdapResult<()> {
     let group_dn = find_group_dn(ldap, base_dn, group_name).await?;
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Delete(sv("member"), HashSet::from([sv(member_dn)]))];
-    let res = ldap.modify(&group_dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&group_dn, mods).await.map_err(ldap_err)?;
     if res.rc == 0 {
         return Ok(());
     }
@@ -1649,11 +1707,12 @@ async fn find_computer_dn(
 ) -> LdapResult<String> {
     let filter = format!("(&(objectClass=computer)(cn={}))", ldap_escape(name));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     entries
         .into_iter()
@@ -1667,6 +1726,7 @@ pub async fn list_computers(
     base_dn: &str,
 ) -> LdapResult<Vec<LdapComputer>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Subtree,
@@ -1681,9 +1741,9 @@ pub async fn list_computers(
             ],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let mut computers: Vec<LdapComputer> = entries
         .into_iter()
@@ -1713,9 +1773,9 @@ pub async fn delete_computer(
     name: &str,
 ) -> LdapResult<()> {
     let dn = find_computer_dn(ldap, base_dn, name).await?;
-    ldap.delete(&dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(&dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete computer: {}", e))?;
     Ok(())
@@ -1733,9 +1793,9 @@ pub async fn set_computer_enabled(
         sv("userAccountControl"),
         HashSet::from([sv(&uac.to_string())]),
     )];
-    ldap.modify(&dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to change computer state: {}", e))?;
     Ok(())
@@ -2029,6 +2089,7 @@ pub async fn list_dns_zones(
     let mut entries = Vec::new();
     for base in &candidates {
         if let Ok(Ok((e, _))) = ldap
+            .with_timeout(OP_TIMEOUT)
             .search(base, Scope::OneLevel, "(objectClass=dnsZone)", vec!["dc"])
             .await
             .map(|r| r.success())
@@ -2074,6 +2135,7 @@ pub async fn find_zone_dn(
 
     for base in &candidates {
         if let Ok(Ok((entries, _))) = ldap
+            .with_timeout(OP_TIMEOUT)
             .search(base, Scope::OneLevel, &filter, vec!["dc"])
             .await
             .map(|r| r.success())
@@ -2092,6 +2154,7 @@ pub async fn list_dns_records(
     zone_dn: &str,
 ) -> LdapResult<Vec<DnsNode>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             zone_dn,
             Scope::OneLevel,
@@ -2099,9 +2162,9 @@ pub async fn list_dns_records(
             vec!["dc", "dnsRecord"],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let mut nodes: Vec<DnsNode> = entries
         .into_iter()
@@ -2169,6 +2232,7 @@ pub async fn add_dns_record(
 
     // Check if the node already exists
     let exists = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(&node_dn, Scope::Base, "(objectClass=dnsNode)", vec!["dc"])
         .await
         .ok()
@@ -2179,9 +2243,9 @@ pub async fn add_dns_record(
     if exists {
         let mods: Vec<Mod<Vec<u8>>> =
             vec![Mod::Add(sv("dnsRecord"), HashSet::from([record_bytes]))];
-        ldap.modify(&node_dn, mods)
+        ldap.with_timeout(OP_TIMEOUT).modify(&node_dn, mods)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(ldap_err)?
             .success()
             .map_err(|e| format!("Failed to add record: {}", e))?;
     } else {
@@ -2190,9 +2254,9 @@ pub async fn add_dns_record(
             (sv("dc"), HashSet::from([sv(node_name)])),
             (sv("dnsRecord"), HashSet::from([record_bytes])),
         ];
-        ldap.add(&node_dn, attrs)
+        ldap.with_timeout(OP_TIMEOUT).add(&node_dn, attrs)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(ldap_err)?
             .success()
             .map_err(|e| format!("Failed to create DNS node: {}", e))?;
     }
@@ -2271,6 +2335,7 @@ pub async fn list_ous_tree(
     base_dn: &str,
 ) -> LdapResult<Vec<LdapOuNode>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Subtree,
@@ -2278,9 +2343,9 @@ pub async fn list_ous_tree(
             vec!["ou", "description"],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let mut nodes: Vec<LdapOuNode> = entries
         .into_iter()
@@ -2320,9 +2385,9 @@ pub async fn create_ou(
         attrs.push((sv("description"), HashSet::from([sv(description)])));
     }
 
-    ldap.add(&ou_dn, attrs)
+    ldap.with_timeout(OP_TIMEOUT).add(&ou_dn, attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to create OU: {}", e))?;
     Ok(())
@@ -2336,9 +2401,9 @@ pub async fn rename_ou(
     new_name: &str,
 ) -> LdapResult<()> {
     let new_rdn = format!("OU={}", dn_escape(new_name));
-    ldap.modifydn(ou_dn, &new_rdn, true, None)
+    ldap.with_timeout(OP_TIMEOUT).modifydn(ou_dn, &new_rdn, true, None)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to rename OU: {}", e))?;
     Ok(())
@@ -2347,9 +2412,9 @@ pub async fn rename_ou(
 // ── delete OU ─────────────────────────────────────────────────────────────────
 
 pub async fn delete_ou(ldap: &mut ldap3::Ldap, ou_dn: &str) -> LdapResult<()> {
-    ldap.delete(ou_dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(ou_dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete OU (must be empty): {}", e))?;
     Ok(())
@@ -2369,11 +2434,12 @@ pub async fn move_object_to_ou(
         ldap_escape(sam_account)
     );
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut entries: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
     entries.sort_by_key(|e| !attr(e, "sAMAccountName").eq_ignore_ascii_case(sam_account));
     let entry = entries
@@ -2390,9 +2456,10 @@ pub async fn container_name(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> 
         return Err(format!("{dn} is not in this domain"));
     }
     let res = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(dn, Scope::Base, "(|(objectClass=organizationalUnit)(objectClass=container))", vec!["dn"])
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     match res.1.rc {
         0 if !res.0.is_empty() => Ok(first_rdn_value(dn)),
         0 => Err(format!("{} is not an OU or container", first_rdn_value(dn))),
@@ -2417,9 +2484,10 @@ pub async fn move_entry(
     }
     let rdn = dn_parts(dn).first().copied().ok_or_else(|| format!("Invalid DN: {dn}"))?;
     let res = ldap
+        .with_timeout(OP_TIMEOUT)
         .modifydn(dn, rdn, true, Some(target))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let (name, place) = (first_rdn_value(rdn), first_rdn_value(target));
     match res.rc {
         0 => Ok(()),
@@ -2434,6 +2502,7 @@ pub async fn move_entry(
 pub async fn list_gpos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapGpo>> {
     let policies_dn = format!("CN=Policies,CN=System,{}", base_dn);
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             &policies_dn,
             Scope::OneLevel,
@@ -2441,9 +2510,9 @@ pub async fn list_gpos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<
             vec!["cn", "displayName", "flags", "versionNumber", "gPCFileSysPath"],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let mut gpos: Vec<LdapGpo> = entries
         .into_iter()
@@ -2496,9 +2565,9 @@ pub async fn create_gpo(
         (sv("versionNumber"), HashSet::from([sv("0")])),
     ];
 
-    ldap.add(&gpo_dn, attrs)
+    ldap.with_timeout(OP_TIMEOUT).add(&gpo_dn, attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to create GPO: {}", e))?;
 
@@ -2518,9 +2587,9 @@ pub async fn update_gpo(
         Mod::Replace(sv("displayName"), HashSet::from([sv(display_name)])),
         Mod::Replace(sv("flags"), HashSet::from([sv(&flags_str)])),
     ];
-    ldap.modify(gpo_dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(gpo_dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to update GPO: {}", e))?;
     Ok(())
@@ -2529,9 +2598,9 @@ pub async fn update_gpo(
 // ── delete GPO ────────────────────────────────────────────────────────────────
 
 pub async fn delete_gpo(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<()> {
-    ldap.delete(gpo_dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(gpo_dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete GPO: {}", e))?;
     Ok(())
@@ -2541,6 +2610,7 @@ pub async fn delete_gpo(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<()> 
 
 pub async fn list_ous(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapOu>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Subtree,
@@ -2548,9 +2618,9 @@ pub async fn list_ous(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<L
             vec!["ou", "name"],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let domain = base_dn_to_domain(base_dn);
     let mut ous: Vec<LdapOu> = entries
@@ -2616,11 +2686,12 @@ pub async fn list_gpo_links(
     gpo_dn: &str,
 ) -> LdapResult<Vec<GpoLink>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, "(gPLink=*)", vec!["name", "ou", "gPLink"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let gpo_dn_lower = gpo_dn.to_lowercase();
     let mut result = Vec::new();
@@ -2662,11 +2733,12 @@ pub async fn link_gpo_to_ou(
     gpo_dn: &str,
 ) -> LdapResult<()> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(ou_dn, Scope::Base, "(objectClass=*)", vec!["gPLink"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let current = entries
         .into_iter()
@@ -2686,9 +2758,9 @@ pub async fn link_gpo_to_ou(
 
     let mods: Vec<Mod<Vec<u8>>> =
         vec![Mod::Replace(sv("gPLink"), HashSet::from([sv(&new_link)]))];
-    ldap.modify(ou_dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(ou_dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to link GPO: {}", e))?;
 
@@ -2701,11 +2773,12 @@ pub async fn unlink_gpo_from_ou(
     gpo_dn: &str,
 ) -> LdapResult<()> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(ou_dn, Scope::Base, "(objectClass=*)", vec!["gPLink"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let current = entries
         .into_iter()
@@ -2727,9 +2800,9 @@ pub async fn unlink_gpo_from_ou(
         vec![Mod::Replace(sv("gPLink"), HashSet::from([sv(&new_link)]))]
     };
 
-    ldap.modify(ou_dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(ou_dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to unlink GPO: {}", e))?;
 
@@ -2750,9 +2823,9 @@ pub async fn delete_dns_record(
 
     let mods: Vec<Mod<Vec<u8>>> =
         vec![Mod::Delete(sv("dnsRecord"), HashSet::from([raw_bytes]))];
-    ldap.modify(&node_dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&node_dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete record: {}", e))?;
 
@@ -2760,13 +2833,14 @@ pub async fn delete_dns_record(
     // dnsNode stays in the directory. Best effort — the record is gone
     // either way.
     let now_empty = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(&node_dn, Scope::Base, "(&(objectClass=dnsNode)(!(dnsRecord=*)))", vec!["dc"])
         .await
         .ok()
         .and_then(|r| r.success().ok())
         .is_some_and(|(e, _)| !e.is_empty());
     if now_empty {
-        let _ = ldap.delete(&node_dn).await;
+        let _ = ldap.with_timeout(OP_TIMEOUT).delete(&node_dn).await;
     }
     Ok(())
 }
@@ -2829,7 +2903,7 @@ pub async fn edit_dns_record(
         Mod::Delete(sv("dnsRecord"), HashSet::from([old])),
         Mod::Add(sv("dnsRecord"), HashSet::from([new])),
     ];
-    let res = ldap.modify(&node_dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&node_dn, mods).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(true),
         // noSuchAttribute / noSuchObject: the old value is gone.
@@ -2908,6 +2982,7 @@ pub async fn get_password_policy(
     base_dn: &str,
 ) -> LdapResult<PasswordPolicy> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Base,
@@ -2925,9 +3000,9 @@ pub async fn get_password_policy(
             ],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let e = entries
         .into_iter()
@@ -3007,6 +3082,7 @@ pub async fn set_password_policy(
     // complexity bit is flipped, and each interval is kept exactly as stored
     // unless its field was changed (see resolve_interval).
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Base,
@@ -3020,9 +3096,9 @@ pub async fn set_password_policy(
             ],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let current = entries
         .into_iter()
         .next()
@@ -3066,9 +3142,9 @@ pub async fn set_password_policy(
         ),
     ];
 
-    ldap.modify(base_dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(base_dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to update the password policy: {}", e))?;
     Ok(())
@@ -3132,11 +3208,12 @@ const PSO_ATTRS: [&str; 13] = [
 /// 4 = 2008 R2, and so on.
 pub async fn domain_level(ldap: &mut ldap3::Ldap) -> LdapResult<i64> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search("", Scope::Base, "(objectClass=*)", vec!["domainFunctionality"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     entries
         .into_iter()
         .next()
@@ -3180,16 +3257,18 @@ fn pso_from_entry(e: &SearchEntry) -> Pso {
 pub async fn list_psos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<Pso>> {
     let container = format!("{PSO_CONTAINER},{base_dn}");
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(&container, Scope::OneLevel, "(objectClass=msDS-PasswordSettings)", PSO_ATTRS.to_vec())
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut psos: Vec<Pso> = entries.into_iter().map(|e| pso_from_entry(&SearchEntry::construct(e))).collect();
 
     for pso in &mut psos {
         for t in &mut pso.applies_to {
             let found = ldap
+                .with_timeout(OP_TIMEOUT)
                 .search(&t.dn, Scope::Base, "(objectClass=*)", vec!["sAMAccountName", "objectClass"])
                 .await
                 .ok()
@@ -3263,11 +3342,12 @@ async fn find_pso(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResu
     let container = format!("{PSO_CONTAINER},{base_dn}");
     let filter = format!("(&(objectClass=msDS-PasswordSettings)(cn={}))", ldap_escape(name));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(&container, Scope::OneLevel, &filter, PSO_ATTRS.to_vec())
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     entries
         .into_iter()
         .next()
@@ -3290,7 +3370,7 @@ pub async fn create_pso(ldap: &mut ldap3::Ldap, base_dn: &str, s: &PsoSettings<'
     if !s.description.is_empty() {
         attrs.push((sv("description"), HashSet::from([sv(s.description)])));
     }
-    let res = ldap.add(&dn, attrs).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).add(&dn, attrs).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
         68 => Err(format!("A password policy named '{}' already exists", s.name)),
@@ -3311,9 +3391,9 @@ pub async fn update_pso(
         .map(|(attr, value)| Mod::Replace(sv(attr), HashSet::from([sv(&value)])))
         .collect();
     mods.push(set_or_clear("description", s.description));
-    ldap.modify(&current.dn, mods)
+    ldap.with_timeout(OP_TIMEOUT).modify(&current.dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to update password policy: {}", e))?;
     Ok(())
@@ -3321,9 +3401,9 @@ pub async fn update_pso(
 
 pub async fn delete_pso(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<()> {
     let current = find_pso(ldap, base_dn, name).await?;
-    ldap.delete(&current.dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(&current.dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete password policy: {}", e))?;
     Ok(())
@@ -3356,11 +3436,12 @@ pub async fn apply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, ta
     let pso = find_pso(ldap, base_dn, pso_name).await?;
     let filter = format!("(&(|(objectClass=user)(objectClass=group))(sAMAccountName={}))", ldap_escape(target));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["objectClass", "groupType"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let e = entries
         .into_iter()
         .next()
@@ -3370,7 +3451,7 @@ pub async fn apply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, ta
     check_pso_target(target, &classes, attr(&e, "groupType").parse().unwrap_or(0))?;
 
     let mods = vec![Mod::Add(sv("msDS-PSOAppliesTo"), HashSet::from([sv(&e.dn)]))];
-    let res = ldap.modify(&pso.dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&pso.dn, mods).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
         20 => Err(format!("{} already applies to {}", pso_name, target)),
@@ -3381,7 +3462,7 @@ pub async fn apply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, ta
 pub async fn unapply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, target_dn: &str) -> LdapResult<()> {
     let pso = find_pso(ldap, base_dn, pso_name).await?;
     let mods = vec![Mod::Delete(sv("msDS-PSOAppliesTo"), HashSet::from([sv(target_dn)]))];
-    let res = ldap.modify(&pso.dn, mods).await.map_err(|e| e.to_string())?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&pso.dn, mods).await.map_err(ldap_err)?;
     if res.rc == 0 {
         return Ok(());
     }
@@ -3399,11 +3480,12 @@ pub async fn pso_candidates(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult
         group_type_value(GroupScope::Global, true)
     );
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let mut names: Vec<String> = entries
         .into_iter()
         .map(|e| attr(&SearchEntry::construct(e), "sAMAccountName"))
@@ -3418,11 +3500,12 @@ pub async fn pso_candidates(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult
 pub async fn resultant_pso(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) -> LdapResult<Option<String>> {
     let filter = format!("(&(objectCategory=person)(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(base_dn, Scope::Subtree, &filter, vec!["msDS-ResultantPSO"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     let e = entries
         .into_iter()
         .next()
@@ -3574,6 +3657,7 @@ pub async fn dns_partition_dn(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResu
     ];
     for base in &candidates {
         if let Ok(Ok((entries, _))) = ldap
+            .with_timeout(OP_TIMEOUT)
             .search(base, Scope::Base, "(objectClass=*)", vec!["dn"])
             .await
             .map(|r| r.success())
@@ -3595,6 +3679,7 @@ pub async fn dns_partition_dn(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResu
 /// would leave it inconsistent with the rest of the domain.
 pub async fn list_dc_hostnames(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(
             base_dn,
             Scope::Subtree,
@@ -3602,9 +3687,9 @@ pub async fn list_dc_hostnames(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapRes
             vec!["dNSHostName"],
         )
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let mut hosts: Vec<String> = entries
         .into_iter()
@@ -3621,11 +3706,12 @@ pub async fn list_dc_hostnames(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapRes
 /// primary server.
 pub async fn dc_hostname(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search("", Scope::Base, "(objectClass=*)", vec!["dnsHostName"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
     entries
         .into_iter()
         .next()
@@ -3659,9 +3745,9 @@ pub async fn create_dns_zone(
         (sv("dc"), HashSet::from([sv(zone)])),
         (sv("dNSProperty"), props),
     ];
-    ldap.add(&zone_dn, zone_attrs)
+    ldap.with_timeout(OP_TIMEOUT).add(&zone_dn, zone_attrs)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to create zone: {}", e))?;
 
@@ -3687,12 +3773,13 @@ pub async fn create_dns_zone(
         (sv("dnsRecord"), recs),
     ];
     if let Err(e) = ldap
+        .with_timeout(OP_TIMEOUT)
         .add(&node_dn, node_attrs)
         .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r.success().map_err(|e| e.to_string()))
+        .map_err(ldap_err)
+        .and_then(|r| r.success().map_err(ldap_err))
     {
-        let _ = ldap.delete(&zone_dn).await;
+        let _ = ldap.with_timeout(OP_TIMEOUT).delete(&zone_dn).await;
         return Err(format!("Failed to create the zone's apex records: {}", e));
     }
 
@@ -3748,26 +3835,27 @@ pub async fn delete_dns_zone(
     }
 
     let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
         .search(&zone_dn, Scope::OneLevel, "(objectClass=*)", vec!["dc"])
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
-        .map_err(|e| e.to_string())?;
+        .map_err(ldap_err)?;
 
     let mut removed = 0usize;
     for e in entries {
         let dn = SearchEntry::construct(e).dn;
-        ldap.delete(&dn)
+        ldap.with_timeout(OP_TIMEOUT).delete(&dn)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(ldap_err)?
             .success()
             .map_err(|err| format!("Failed to delete {}: {}", dn, err))?;
         removed += 1;
     }
 
-    ldap.delete(&zone_dn)
+    ldap.with_timeout(OP_TIMEOUT).delete(&zone_dn)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(ldap_err)?
         .success()
         .map_err(|e| format!("Failed to delete zone: {}", e))?;
 
@@ -4724,5 +4812,67 @@ mod user_tree_tests {
                 ("Users", 1, 1, 1),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_timeout_says_what_it_means() {
+        let elapsed = tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        let text = super::ldap_err(ldap3::LdapError::Timeout { elapsed });
+        assert!(text.contains("did not answer within 30 seconds"), "{text}");
+        assert!(text.contains("may still be made"), "{text}");
+        // Other errors keep ldap3's own words.
+        assert_eq!(super::ldap_err(ldap3::LdapError::FilterParsing), "filter parse error");
+    }
+
+    #[test]
+    fn both_kinds_of_timeout_are_recognised() {
+        // A page shown after a timed-out action does not wait for the DC again.
+        assert!(super::is_timeout(&super::timed_out()));
+        assert!(super::is_timeout(&format!("Bind failed: {}", super::timed_out())));
+        assert!(super::is_timeout("Connection failed: the domain controller did not answer within 10 seconds"));
+        assert!(!super::is_timeout("Connection failed: connection refused"));
+        assert!(!super::is_timeout("Group 'x' not found"));
+    }
+
+    /// Every request to the DC carries a time limit: a DC busy with a long
+    /// change would otherwise leave the page loading forever.
+    #[test]
+    fn every_request_has_a_time_limit() {
+        let ops = ["search", "modify", "add", "delete", "modifydn", "extended", "simple_bind"];
+        for (file, src) in [
+            ("ldap.rs", include_str!("ldap.rs")),
+            ("health.rs", include_str!("health.rs")),
+            ("remediate.rs", include_str!("remediate.rs")),
+        ] {
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let t = line.trim_start();
+                for op in ops {
+                    // Connection and operation on one line, with no limit between.
+                    for recv in ["ldap", "conn"] {
+                        assert!(
+                            !line.contains(&format!("{recv}.{op}(")),
+                            "{file}:{}: {op} without a time limit",
+                            i + 1
+                        );
+                    }
+                    // The operation on its own line, under the connection.
+                    if t.starts_with(&format!(".{op}(")) {
+                        assert!(
+                            lines[i - 1].contains("with_timeout("),
+                            "{file}:{}: {op} without a time limit",
+                            i + 1
+                        );
+                    }
+                }
+            }
+        }
     }
 }

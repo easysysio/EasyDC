@@ -42,7 +42,7 @@ async fn render_groups(
     ctx.insert("server", server);
 
     let loaded: Result<_, String> = async {
-        let (mut conn, base_dn) = ldap::open(server).await?;
+        let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
         let groups = ldap::list_groups(&mut conn, &base_dn).await?;
         let objects_in: Vec<&str> = groups.iter().map(|g| g.container.as_str()).collect();
         let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in).await?;
@@ -219,7 +219,7 @@ async fn render_group(
     ctx.insert("server", server);
     ctx.insert("group_name", name);
 
-    let loaded = match ldap::open(server).await {
+    let loaded = match ldap::open_after(server, flash_error.as_deref()).await {
         Err(e) => Err(e),
         Ok((mut conn, base_dn)) => match ldap::group_detail(&mut conn, &base_dn, name).await {
             Err(e) => Err(e),
@@ -416,7 +416,7 @@ async fn render_ous(state: &AppState, server: &Server, flash_error: Option<Strin
     let mut ctx = Context::new();
     ctx.insert("server", server);
 
-    match ldap::open(server).await {
+    match ldap::open_after(server, flash_error.as_deref()).await {
         Err(e) => {
             ctx.insert("error", &e);
             ctx.insert("ou_nodes", &Vec::<ldap::LdapOuNode>::new());
@@ -586,7 +586,7 @@ async fn render_dns(
         ctx.insert("notice", &n);
     }
 
-    match ldap::open(server).await {
+    match ldap::open_after(server, error.as_deref()).await {
         Err(e) => {
             ctx.insert("error", &error.unwrap_or(e));
             ctx.insert("zones", &Vec::<ldap::LdapDnsZone>::new());
@@ -724,7 +724,7 @@ async fn render_dns_zone(
     ctx.insert("server", server);
     ctx.insert("zone_name", zone_name);
 
-    let load_error = match ldap::open(server).await {
+    let load_error = match ldap::open_after(server, flash_error.as_deref()).await {
         Err(e) => Some(e),
         Ok((mut conn, base_dn)) => match ldap::find_zone_dn(&mut conn, &base_dn, zone_name).await {
             Err(e) => Some(e),
@@ -1338,6 +1338,14 @@ fn groups_context(
 }
 
 /// The users page, with `flash_error` when an action on it just failed.
+/// What the Users page needs when the DC could not be read: an empty list,
+/// and the view its forms carry. Without the view the page fails to render
+/// and comes out blank instead of showing why.
+fn users_failed_context(ctx: &mut Context, view: &ListView) {
+    ctx.insert("users", &Vec::<ldap::LdapUser>::new());
+    ctx.insert("view_qs", &view.query());
+}
+
 async fn render_users(
     state: &AppState,
     server: &Server,
@@ -1348,7 +1356,7 @@ async fn render_users(
     ctx.insert("server", server);
 
     let loaded: Result<_, String> = async {
-        let (mut conn, base_dn) = ldap::open(server).await?;
+        let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
         let users = ldap::list_users(&mut conn, &base_dn).await?;
         let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
         let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in).await?;
@@ -1362,7 +1370,7 @@ async fn render_users(
             users_context(&mut ctx, server, &base_dn, &users, &tree, view)
         }
         Err(e) => {
-            ctx.insert("users", &Vec::<ldap::LdapUser>::new());
+            users_failed_context(&mut ctx, view);
             Some(e)
         }
     };
@@ -2247,6 +2255,16 @@ mod users_page_tests {
         assert!(html.contains("alert-danger"));
         assert!(html.contains("does not meet the password policy"));
         assert!(html.contains("someone"), "the list is still there");
+    }
+
+    #[test]
+    fn a_dc_that_cannot_be_reached_still_gets_a_page() {
+        let mut c = Context::new();
+        c.insert("server", &server());
+        super::users_failed_context(&mut c, &view("OU=Sales", true, "disabled"));
+        c.insert("error", "Connection failed: the domain controller did not answer within 10 seconds");
+        let html = tera().render("users.html", &c).map_err(|e| format!("{e:?}")).unwrap();
+        assert!(html.contains("did not answer within 10 seconds"));
     }
 
     #[test]

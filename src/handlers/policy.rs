@@ -47,7 +47,7 @@ async fn render_checked(
         ctx.insert("notice", &n);
     }
 
-    match ldap::open(server).await {
+    match ldap::open_after(server, error.as_deref()).await {
         Err(e) => ctx.insert("error", &error.unwrap_or(e)),
         Ok((mut conn, base_dn)) => match ldap::get_password_policy(&mut conn, &base_dn).await {
             Err(e) => ctx.insert("error", &error.unwrap_or(e)),

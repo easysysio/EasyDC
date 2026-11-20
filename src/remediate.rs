@@ -497,12 +497,12 @@ pub async fn plan(conn: &mut ldap3::Ldap, base_dn: &str, kind: &str, keys: &[Str
 }
 
 async fn modify(conn: &mut ldap3::Ldap, dn: &str, mods: Vec<Mod<Vec<u8>>>) -> LdapResult<()> {
-    conn.modify(dn, mods)
+    conn.with_timeout(crate::ldap::OP_TIMEOUT).modify(dn, mods)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(crate::ldap::ldap_err)?
         .success()
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(crate::ldap::ldap_err)
 }
 
 fn one(v: String) -> HashSet<Vec<u8>> {

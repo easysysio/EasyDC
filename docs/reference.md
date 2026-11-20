@@ -14,6 +14,13 @@ EasyDC is a web application and an LDAP client in one binary. Each request opens
 connection to the chosen domain controller, binds as that server's bind account, and reads
 or writes the directory directly. Nothing runs on the domain controllers themselves.
 
+EasyDC waits up to **10 seconds** to connect to a DC and up to **30 seconds** for each
+answer. A DC that does not answer in time gets a message on the page instead of a page that
+never finishes loading. This happens when the DC is down, or busy with a long change such as
+deleting an OU with thousands of objects: Samba finishes that before it makes any other
+change. A change EasyDC sent may then still be made once the DC is free, so check again in a
+few minutes; the audit log records it as failed, with the reason.
+
 ## Requirements
 
 | Category | Supported |
