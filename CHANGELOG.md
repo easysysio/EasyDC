@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-20
+
 ### Added
 - Users: select several users to enable, disable, move to an OU, or add to a group at once.
 - Users: Move, in each user's new ⋯ menu, to move them to another OU or container.
