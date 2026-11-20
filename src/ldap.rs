@@ -29,6 +29,12 @@ pub struct LdapUser {
     /// Last day the account can be used, `YYYY-MM-DD`; empty for never.
     pub expires: String,
     pub expired: bool,
+    pub description: String,
+    /// The DN of the OU or container the user is in.
+    pub container: String,
+    /// That OU or container as a path of names below the domain, such as
+    /// `Sales › Europe`; empty for a user at the top of the domain.
+    pub location: String,
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -97,6 +103,60 @@ pub(crate) fn dn_escape(value: &str) -> String {
         }
     }
     out
+}
+
+/// The parts of a DN (`CN=Doe\\, John`, `OU=Sales`, …), split at the commas
+/// between them and not at an escaped `\\,` inside a name.
+pub(crate) fn dn_parts(dn: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut escaped) = (0, false);
+    for (i, c) in dn.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ',' {
+            parts.push(dn[start..i].trim_start());
+            start = i + 1;
+        }
+    }
+    let last = dn[start..].trim_start();
+    if !last.is_empty() {
+        parts.push(last);
+    }
+    parts
+}
+
+/// The DN of the object that holds `dn`; empty at the top.
+pub(crate) fn parent_dn(dn: &str) -> &str {
+    let mut escaped = false;
+    for (i, c) in dn.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ',' {
+            return dn[i + 1..].trim_start();
+        }
+    }
+    ""
+}
+
+/// Whether `dn` is `top` or somewhere below it. Compares whole parts, so
+/// `OU=a\\,OU=Sales,DC=x` (an OU named `a,OU=Sales`) is not inside `OU=Sales,DC=x`.
+pub(crate) fn is_within(dn: &str, top: &str) -> bool {
+    let top = top.to_lowercase();
+    let mut d = dn.to_lowercase();
+    loop {
+        if d == top {
+            return true;
+        }
+        let p = parent_dn(&d).to_string();
+        if p.is_empty() {
+            return false;
+        }
+        d = p;
+    }
 }
 
 pub(crate) fn attr(e: &SearchEntry, key: &str) -> String {
@@ -205,6 +265,7 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 "mobile",
                 "manager",
                 "accountExpires",
+                "description",
             ],
         )
         .await
@@ -252,6 +313,9 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 manager,
                 expires: expiry_date(expires_at).unwrap_or_default(),
                 expired: expiry_date(expires_at).is_some() && expires_at <= now,
+                description: attr(e, "description"),
+                container: parent_dn(&e.dn).to_string(),
+                location: location(parent_dn(&e.dn), base_dn),
             }
         })
         .filter(|u| !u.username.is_empty())
@@ -261,12 +325,114 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
     Ok(users)
 }
 
+/// `OU=Europe,OU=Sales,DC=x` below `DC=x` as `Sales › Europe`.
+fn location(dn: &str, base_dn: &str) -> String {
+    let parts = dn_parts(dn);
+    let below = parts.len().saturating_sub(dn_parts(base_dn).len());
+    parts[..below]
+        .iter()
+        .rev()
+        .map(|p| first_rdn_value(p))
+        .collect::<Vec<_>>()
+        .join(" › ")
+}
+
+// ── OUs and containers holding users ─────────────────────────────────────────
+
+/// One entry of the users page's directory tree.
+#[derive(Debug, Serialize, Clone)]
+pub struct UserContainer {
+    pub dn: String,
+    pub name: String,
+    /// 1 for an OU or container at the top of the domain.
+    pub depth: usize,
+    pub is_ou: bool,
+    /// Users directly in it.
+    pub direct: usize,
+    /// Users in it and everything below it.
+    pub total: usize,
+}
+
+/// The OUs and containers to browse users by, in tree order: every OU, and the
+/// containers (such as `CN=Users`) that hold users. Like Active Directory Users
+/// and Computers, the "advanced" ones such as `CN=System` are left out.
+pub async fn list_user_containers(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    users: &[LdapUser],
+) -> LdapResult<Vec<UserContainer>> {
+    let (entries, _) = ldap
+        .search(
+            base_dn,
+            Scope::Subtree,
+            "(&(|(objectClass=organizationalUnit)(objectClass=container))(!(showInAdvancedViewOnly=TRUE)))",
+            vec!["objectClass"],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let found = entries
+        .into_iter()
+        .map(SearchEntry::construct)
+        .map(|e| {
+            let is_ou = e.attrs.get("objectClass").is_some_and(|v| {
+                v.iter().any(|c| c.eq_ignore_ascii_case("organizationalUnit"))
+            });
+            (e.dn, is_ou)
+        })
+        .collect();
+    Ok(user_tree(base_dn, found, users))
+}
+
+pub(crate) fn user_tree(base_dn: &str, mut found: Vec<(String, bool)>, users: &[LdapUser]) -> Vec<UserContainer> {
+    found.sort_by_cached_key(|(dn, _)| dn_tree_sort_key(dn));
+
+    let mut direct: std::collections::HashMap<String, usize> = Default::default();
+    let mut total: std::collections::HashMap<String, usize> = Default::default();
+    for u in users {
+        let c = u.container.to_lowercase();
+        *direct.entry(c.clone()).or_default() += 1;
+        let mut d = c.as_str();
+        while !d.is_empty() {
+            *total.entry(d.to_string()).or_default() += 1;
+            d = parent_dn(d);
+        }
+    }
+
+    // Parents sort before their children, so one pass drops everything under
+    // something left out (such as a container inside CN=System).
+    let mut kept: HashSet<String> = HashSet::from([base_dn.to_lowercase()]);
+    let mut tree = Vec::new();
+    for (dn, is_ou) in found {
+        let key = dn.to_lowercase();
+        let in_tree = kept.contains(parent_dn(&key));
+        let count = total.get(&key).copied().unwrap_or(0);
+        // A container with no users (Computers, ForeignSecurityPrincipals…)
+        // is noise here. An OU stays: it is the domain's own structure.
+        if !in_tree || (!is_ou && count == 0) {
+            continue;
+        }
+        kept.insert(key.clone());
+        tree.push(UserContainer {
+            name: first_rdn_value(&dn),
+            depth: ou_depth(&dn, base_dn) + 1,
+            is_ou,
+            direct: direct.get(&key).copied().unwrap_or(0),
+            total: count,
+            dn,
+        });
+    }
+    tree
+}
+
 // ── profile fields and account expiry ────────────────────────────────────────
 
 /// The optional fields the Add and Edit forms share. An empty value means
 /// "not set": nothing is written on create, and the attribute is cleared on edit.
 #[derive(Default)]
 pub struct UserProfile<'a> {
+    pub description: &'a str,
     pub title: &'a str,
     pub department: &'a str,
     pub office: &'a str,
@@ -282,8 +448,9 @@ impl UserProfile<'_> {
     /// (label, attribute, value, maximum length). The limits are Windows AD's
     /// schema limits: Samba does not enforce them, but a Windows DC joined
     /// later, or a Windows tool, would trip over longer values.
-    fn text_fields(&self) -> [(&'static str, &'static str, &str, usize); 5] {
+    fn text_fields(&self) -> [(&'static str, &'static str, &str, usize); 6] {
         [
+            ("Description", "description", self.description, 1024),
             ("Job title", "title", self.title, 128),
             ("Department", "department", self.department, 64),
             ("Office", "physicalDeliveryOfficeName", self.office, 128),
@@ -387,6 +554,8 @@ pub struct NewUser<'a> {
     pub email: &'a str,
     pub password: &'a str,
     pub profile: UserProfile<'a>,
+    /// The OU or container to create the user in; empty for `CN=Users`.
+    pub parent: &'a str,
 }
 
 pub async fn create_user(
@@ -404,7 +573,14 @@ pub async fn create_user(
     };
     let domain = base_dn_to_domain(base_dn);
     let upn = format!("{}@{}", u.username, domain);
-    let user_dn = format!("CN={},CN=Users,{}", dn_escape(&cn), base_dn);
+    let parent = if u.parent.is_empty() {
+        format!("CN=Users,{base_dn}")
+    } else if is_within(u.parent, base_dn) {
+        u.parent.to_string()
+    } else {
+        return Err(format!("{} is not in this domain", u.parent));
+    };
+    let user_dn = format!("CN={},{}", dn_escape(&cn), parent);
 
     // Checked before anything is created, so a typo does not leave a
     // half-made account behind.
@@ -1942,17 +2118,17 @@ pub struct LdapOuNode {
 }
 
 fn ou_depth(dn: &str, base_dn: &str) -> usize {
-    let dn_parts = dn.split(',').count();
-    let base_parts = base_dn.split(',').count();
-    dn_parts.saturating_sub(base_parts + 1)
+    dn_parts(dn).len().saturating_sub(dn_parts(base_dn).len() + 1)
 }
 
-fn dn_tree_sort_key(dn: &str) -> String {
-    dn.split(',')
+/// Sorts a DN after its parent and before its parent's next sibling, siblings
+/// by name.
+fn dn_tree_sort_key(dn: &str) -> Vec<(String, String)> {
+    dn_parts(dn)
+        .into_iter()
         .rev()
-        .map(|s| s.trim().to_lowercase())
-        .collect::<Vec<_>>()
-        .join(",")
+        .map(|p| (first_rdn_value(p).to_lowercase(), p.to_lowercase()))
+        .collect()
 }
 
 // ── list OUs (tree order) ─────────────────────────────────────────────────────
@@ -1987,7 +2163,7 @@ pub async fn list_ous_tree(
         .filter(|o| !o.name.is_empty())
         .collect();
 
-    nodes.sort_by_key(|a| dn_tree_sort_key(&a.dn));
+    nodes.sort_by_cached_key(|a| dn_tree_sort_key(&a.dn));
     Ok(nodes)
 }
 
@@ -4300,5 +4476,74 @@ mod pso_tests {
         assert!(err.contains("universal security") && err.contains("global security"), "{err}");
         assert!(check_pso_target("List", &group, 2).is_err(), "global distribution");
         assert!(check_pso_target("Administrators", &group, -2147483643).is_err(), "builtin");
+    }
+}
+
+#[cfg(test)]
+mod user_tree_tests {
+    use super::*;
+
+    const BASE: &str = "DC=example,DC=com";
+
+    #[test]
+    fn dn_parts_respect_escaped_commas() {
+        assert_eq!(
+            dn_parts(r"CN=Doe\, John,OU=Sales,DC=x"),
+            [r"CN=Doe\, John", "OU=Sales", "DC=x"]
+        );
+        assert_eq!(dn_parts(r"CN=a\\,DC=x"), [r"CN=a\\", "DC=x"], "an escaped backslash ends");
+        assert_eq!(parent_dn(r"CN=Doe\, John,OU=Sales,DC=x"), "OU=Sales,DC=x");
+        assert_eq!(parent_dn("DC=x"), "");
+        assert!(dn_parts("").is_empty());
+        assert_eq!(ou_depth(r"OU=a\,b,OU=Sales,DC=example,DC=com", BASE), 1);
+    }
+
+    #[test]
+    fn is_within_compares_whole_parts() {
+        assert!(is_within("OU=Europe,OU=Sales,DC=example,DC=com", "ou=sales,dc=example,dc=com"));
+        assert!(is_within(BASE, BASE));
+        assert!(!is_within(r"OU=a\,OU=Sales,DC=example,DC=com", "OU=Sales,DC=example,DC=com"));
+        assert!(!is_within("OU=Sales,DC=other,DC=com", BASE));
+    }
+
+    #[test]
+    fn location_reads_top_down() {
+        assert_eq!(location("OU=Europe,OU=Sales,DC=example,DC=com", BASE), "Sales › Europe");
+        assert_eq!(location("CN=Users,DC=example,DC=com", BASE), "Users");
+        assert_eq!(location(r"OU=Doe\, J,DC=example,DC=com", BASE), "Doe, J");
+        assert_eq!(location(BASE, BASE), "");
+    }
+
+    fn u(container: &str) -> LdapUser {
+        LdapUser { container: format!("{container},{BASE}"), ..Default::default() }
+    }
+
+    #[test]
+    fn the_tree_keeps_ous_and_containers_with_users() {
+        let found = vec![
+            (format!("OU=Sales,{BASE}"), true),
+            (format!("CN=Users,{BASE}"), false),
+            (format!("CN=Computers,{BASE}"), false),
+            (format!("OU=Empty,{BASE}"), true),
+            (format!("OU=Europe,OU=Sales,{BASE}"), true),
+            // A sibling whose name starts like "Sales" must not land inside it.
+            (format!("OU=Sales Ops,{BASE}"), true),
+            // Under an advanced-view container that the search left out.
+            (format!("CN=Hidden,CN=System,{BASE}"), false),
+        ];
+        let users = [u("CN=Users"), u("OU=Sales"), u("OU=Europe,OU=Sales"), u("OU=Europe,OU=Sales")];
+        let tree = user_tree(BASE, found, &users);
+        let shown: Vec<(&str, usize, usize, usize)> =
+            tree.iter().map(|c| (c.name.as_str(), c.depth, c.direct, c.total)).collect();
+        assert_eq!(
+            shown,
+            [
+                ("Empty", 1, 0, 0),
+                ("Sales", 1, 1, 3),
+                ("Europe", 2, 2, 2),
+                ("Sales Ops", 1, 0, 0),
+                ("Users", 1, 1, 1),
+            ]
+        );
     }
 }

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Users: browse by OU or container, with or without the OUs below, and create a user in the OU you are looking at.
+- Users: filter by status (enabled, disabled, locked, expired), and search by name, description or email.
+- Users: Description, in the Add and Edit dialogs and as a column in the list.
+- DNS: find a zone by name, and a record by name, value or type.
+
+### Fixed
+- The OU list put an OU whose name contains a comma at the wrong depth.
+
 ## [0.4.1] - 2026-11-18
 
 ### Security

@@ -1,9 +1,9 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tera::Context;
 
 use super::path_segment;
@@ -23,9 +23,6 @@ fn redirect_home() -> Response {
     Redirect::to("/").into_response()
 }
 
-fn redirect_users(id: i64) -> Response {
-    Redirect::to(&format!("/servers/{}/users", id)).into_response()
-}
 
 fn group_page(id: i64, name: &str) -> String {
     format!("/servers/{}/groups/{}/members", id, path_segment(name))
@@ -1082,20 +1079,195 @@ pub async fn gpo_link_remove(
 
 // ── user management ───────────────────────────────────────────────────────────
 
+/// What the users page shows: one OU or container (or the whole domain),
+/// optionally with everything below it, and which accounts. It rides along in
+/// the query string of every action on the page, so an action comes back to
+/// the same view.
+#[derive(Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+pub struct UsersView {
+    /// DN of the OU or container; empty for the whole domain.
+    pub ou: String,
+    /// Non-empty: include users in nested OUs and containers.
+    pub sub: String,
+    /// `enabled`, `disabled`, `locked` or `expired`; anything else is all.
+    pub status: String,
+}
+
+const STATUSES: [(&str, &str); 5] = [
+    ("all", "All"),
+    ("enabled", "Enabled"),
+    ("disabled", "Disabled"),
+    ("locked", "Locked"),
+    ("expired", "Expired"),
+];
+
+impl UsersView {
+    fn nested(&self) -> bool {
+        !self.sub.is_empty()
+    }
+
+    fn status(&self) -> &'static str {
+        STATUSES
+            .iter()
+            .find(|(k, _)| *k == self.status)
+            .map_or("all", |(k, _)| k)
+    }
+
+    fn with(&self, ou: &str, nested: bool, status: &str) -> UsersView {
+        UsersView { ou: ou.to_string(), sub: if nested { "1".into() } else { String::new() }, status: status.to_string() }
+    }
+
+    /// `""` for the default view, otherwise `?ou=…&sub=1&status=…`.
+    fn query(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.ou.is_empty() {
+            parts.push(format!("ou={}", path_segment(&self.ou)));
+            if self.nested() {
+                parts.push("sub=1".to_string());
+            }
+        }
+        if self.status() != "all" {
+            parts.push(format!("status={}", self.status()));
+        }
+        if parts.is_empty() { String::new() } else { format!("?{}", parts.join("&")) }
+    }
+
+    fn shows(&self, u: &ldap::LdapUser) -> bool {
+        let here = self.ou.is_empty()
+            || if self.nested() {
+                ldap::is_within(&u.container, &self.ou)
+            } else {
+                u.container.eq_ignore_ascii_case(&self.ou)
+            };
+        here && status_matches(u, self.status())
+    }
+}
+
+fn status_matches(u: &ldap::LdapUser, status: &str) -> bool {
+    match status {
+        "enabled" => u.enabled,
+        "disabled" => !u.enabled,
+        "locked" => u.locked,
+        "expired" => u.expired,
+        _ => true,
+    }
+}
+
+#[derive(Serialize)]
+struct TreeLink {
+    name: String,
+    depth: usize,
+    is_ou: bool,
+    count: usize,
+    href: String,
+    active: bool,
+}
+
+#[derive(Serialize)]
+struct StatusLink {
+    key: &'static str,
+    label: &'static str,
+    count: usize,
+    href: String,
+    active: bool,
+}
+
+/// Everything the users page needs, from the full user list and the tree.
+/// A view of an OU that is not in the tree falls back to the whole domain.
+fn users_context(
+    ctx: &mut Context,
+    server: &Server,
+    base_dn: &str,
+    all: &[ldap::LdapUser],
+    tree: &[ldap::UserContainer],
+    requested: &UsersView,
+) -> Option<String> {
+    let mut view = requested.clone();
+    let mut error = None;
+    if view.ou.eq_ignore_ascii_case(base_dn) {
+        view.ou.clear();
+    }
+    let selected = tree.iter().find(|c| c.dn.eq_ignore_ascii_case(&view.ou));
+    if !view.ou.is_empty() && selected.is_none() {
+        error = Some(format!("{} is not an OU or container with users; showing the whole domain.", view.ou));
+        view.ou.clear();
+    }
+    if let Some(c) = selected {
+        view.ou = c.dn.clone();
+    }
+    let page = |v: &UsersView| format!("/servers/{}/users{}", server.id, v.query());
+
+    let mut links = vec![TreeLink {
+        name: ldap::base_dn_to_domain(base_dn),
+        depth: 0,
+        is_ou: false,
+        count: all.len(),
+        href: page(&view.with("", view.nested(), view.status())),
+        active: view.ou.is_empty(),
+    }];
+    links.extend(tree.iter().map(|c| TreeLink {
+        name: c.name.clone(),
+        depth: c.depth,
+        is_ou: c.is_ou,
+        count: if view.nested() { c.total } else { c.direct },
+        href: page(&view.with(&c.dn, view.nested(), view.status())),
+        active: c.dn == view.ou,
+    }));
+
+    let here = view.with(&view.ou, view.nested(), "all");
+    let in_scope: Vec<&ldap::LdapUser> = all.iter().filter(|u| here.shows(u)).collect();
+    let statuses: Vec<StatusLink> = STATUSES
+        .iter()
+        .map(|&(key, label)| StatusLink {
+            key,
+            label,
+            count: in_scope.iter().filter(|u| status_matches(u, key)).count(),
+            href: page(&view.with(&view.ou, view.nested(), key)),
+            active: view.status() == key,
+        })
+        .collect();
+    let users: Vec<&ldap::LdapUser> = in_scope.into_iter().filter(|u| view.shows(u)).collect();
+
+    ctx.insert("users", &users);
+    ctx.insert("directory", all);
+    ctx.insert("tree", &links);
+    ctx.insert("statuses", &statuses);
+    ctx.insert("status", view.status());
+    ctx.insert("view_qs", &view.query());
+    ctx.insert("nested", &view.nested());
+    ctx.insert("nested_href", &page(&view.with(&view.ou, !view.nested(), view.status())));
+    // The OU's own name; a user list that spans several shows where each user is.
+    ctx.insert("selected", &selected.map(|c| c.name.clone()));
+    ctx.insert("show_location", &(view.ou.is_empty() || view.nested()));
+    ctx.insert("below", &selected.map_or(0, |c| c.total - c.direct));
+    error
+}
+
 /// The users page, with `flash_error` when an action on it just failed.
-async fn render_users(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
+async fn render_users(
+    state: &AppState,
+    server: &Server,
+    view: &UsersView,
+    flash_error: Option<String>,
+) -> Response {
     let mut ctx = Context::new();
     ctx.insert("server", server);
 
-    let loaded = match ldap::open(server).await {
-        Err(e) => Err(e),
-        Ok((mut conn, base_dn)) => ldap::list_users(&mut conn, &base_dn).await,
+    let loaded: Result<_, String> = async {
+        let (mut conn, base_dn) = ldap::open(server).await?;
+        let users = ldap::list_users(&mut conn, &base_dn).await?;
+        let tree = ldap::list_user_containers(&mut conn, &base_dn, &users).await?;
+        Ok((base_dn, users, tree))
+    }
+    .await;
+    let load_error = match loaded {
+        Ok((base_dn, users, tree)) => users_context(&mut ctx, server, &base_dn, &users, &tree, view),
+        Err(e) => {
+            ctx.insert("users", &Vec::<ldap::LdapUser>::new());
+            Some(e)
+        }
     };
-    let (users, load_error) = match loaded {
-        Ok(u) => (u, None),
-        Err(e) => (Vec::new(), Some(e)),
-    };
-    ctx.insert("users", &users);
     if let Some(e) = flash_error.or(load_error) {
         ctx.insert("error", &e);
     }
@@ -1103,18 +1275,27 @@ async fn render_users(state: &AppState, server: &Server, flash_error: Option<Str
     Html(state.tera.render("users.html", &ctx).unwrap_or_default()).into_response()
 }
 
-/// Back to the list on success; the list with the reason on failure.
-async fn after_user_action(state: &AppState, server: &Server, result: Result<(), String>) -> Response {
+/// Back to the same view on success; the view with the reason on failure.
+async fn after_user_action(
+    state: &AppState,
+    server: &Server,
+    view: &UsersView,
+    result: Result<(), String>,
+) -> Response {
     match result {
-        Ok(()) => redirect_users(server.id),
-        Err(e) => render_users(state, server, Some(e)).await,
+        Ok(()) => Redirect::to(&format!("/servers/{}/users{}", server.id, view.query())).into_response(),
+        Err(e) => render_users(state, server, view, Some(e)).await,
     }
 }
 
-pub async fn users(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+pub async fn users(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(view): Query<UsersView>,
+) -> Response {
     match get_server(&state, id).await {
         None => redirect_home(),
-        Some(server) => render_users(&state, &server, None).await,
+        Some(server) => render_users(&state, &server, &view, None).await,
     }
 }
 
@@ -1125,6 +1306,7 @@ pub async fn users(State(state): State<AppState>, Path(id): Path<i64>) -> Respon
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct ProfileForm {
+    pub description: String,
     pub title: String,
     pub department: String,
     pub office: String,
@@ -1137,6 +1319,7 @@ pub struct ProfileForm {
 impl ProfileForm {
     fn as_profile(&self) -> ldap::UserProfile<'_> {
         ldap::UserProfile {
+            description: self.description.trim(),
             title: self.title.trim(),
             department: self.department.trim(),
             office: self.office.trim(),
@@ -1165,6 +1348,7 @@ pub async fn create_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path(id): Path<i64>,
+    Query(view): Query<UsersView>,
     Form(form): Form<CreateUserForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1184,6 +1368,7 @@ pub async fn create_user(
                 email: &form.email,
                 password: &form.password,
                 profile: form.profile.as_profile(),
+                parent: &view.ou,
             },
         )
         .await
@@ -1191,7 +1376,7 @@ pub async fn create_user(
     .await;
     db::log_action(&state.db, &actor, "user.create", &form.username, Some(id), &result).await;
 
-    after_user_action(&state, &server, result).await
+    after_user_action(&state, &server, &view, result).await
 }
 
 // ── update user ───────────────────────────────────────────────────────────────
@@ -1210,6 +1395,7 @@ pub async fn update_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
+    Query(view): Query<UsersView>,
     Form(form): Form<UpdateUserForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1236,7 +1422,7 @@ pub async fn update_user(
     .await;
     db::log_action(&state.db, &actor, "user.update", &username, Some(id), &result).await;
 
-    after_user_action(&state, &server, result).await
+    after_user_action(&state, &server, &view, result).await
 }
 
 // ── delete user ───────────────────────────────────────────────────────────────
@@ -1245,6 +1431,7 @@ pub async fn delete_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
+    Query(view): Query<UsersView>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -1258,7 +1445,7 @@ pub async fn delete_user(
     .await;
     db::log_action(&state.db, &actor, "user.delete", &username, Some(id), &result).await;
 
-    after_user_action(&state, &server, result).await
+    after_user_action(&state, &server, &view, result).await
 }
 
 // ── enable / disable user ─────────────────────────────────────────────────────
@@ -1272,6 +1459,7 @@ pub async fn toggle_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
+    Query(view): Query<UsersView>,
     Form(form): Form<ToggleForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1288,7 +1476,7 @@ pub async fn toggle_user(
     let action = if enable { "user.enable" } else { "user.disable" };
     db::log_action(&state.db, &actor, action, &username, Some(id), &result).await;
 
-    after_user_action(&state, &server, result).await
+    after_user_action(&state, &server, &view, result).await
 }
 
 // ── reset password ─────────────────────────────────────────────────────────────
@@ -1304,6 +1492,7 @@ pub async fn reset_password(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
+    Query(view): Query<UsersView>,
     Form(form): Form<ResetPasswordForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1322,7 +1511,7 @@ pub async fn reset_password(
     .await;
     db::log_action(&state.db, &actor, "user.reset_password", &username, Some(id), &result).await;
 
-    after_user_action(&state, &server, result).await
+    after_user_action(&state, &server, &view, result).await
 }
 
 // ── unlock account ─────────────────────────────────────────────────────────────
@@ -1331,6 +1520,7 @@ pub async fn unlock_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
+    Query(view): Query<UsersView>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -1344,7 +1534,7 @@ pub async fn unlock_user(
     .await;
     db::log_action(&state.db, &actor, "user.unlock", &username, Some(id), &result).await;
 
-    after_user_action(&state, &server, result).await
+    after_user_action(&state, &server, &view, result).await
 }
 
 #[cfg(test)]
@@ -1496,8 +1686,8 @@ mod dns_zone_tests {
 
 #[cfg(test)]
 mod users_page_tests {
-    use super::{CreateUserForm, UpdateUserForm};
-    use crate::ldap::LdapUser;
+    use super::{users_context, CreateUserForm, UpdateUserForm, UsersView};
+    use crate::ldap::{self, LdapUser};
     use crate::models::Server;
     use tera::{Context, Tera};
 
@@ -1509,31 +1699,169 @@ mod users_page_tests {
         t
     }
 
-    fn render(users: &[LdapUser]) -> String {
-        let mut c = Context::new();
-        c.insert(
-            "server",
-            &Server {
-                id: 1,
-                name: "DC1".to_string(),
-                ldap_url: "ldaps://dc1.example.com".to_string(),
-                bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
-                bind_password: "secret".to_string(),
-                skip_tls: true,
-            },
-        );
-        c.insert("users", users);
-        tera().render("users.html", &c).unwrap()
+    const BASE: &str = "DC=example,DC=com";
+
+    fn server() -> Server {
+        Server {
+            id: 1,
+            name: "DC1".to_string(),
+            ldap_url: "ldaps://dc1.example.com".to_string(),
+            bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
+            bind_password: "secret".to_string(),
+            skip_tls: true,
+        }
     }
 
-    fn user(name: &str) -> LdapUser {
+    /// The page as the handler builds it: the users, the tree they give, a view.
+    fn page(users: &[LdapUser], view: &UsersView, error: Option<&str>) -> (String, Option<String>) {
+        let found = vec![
+            (format!("CN=Users,{BASE}"), false),
+            (format!("OU=Sales,{BASE}"), true),
+            (format!("OU=Europe,OU=Sales,{BASE}"), true),
+        ];
+        let tree = ldap::user_tree(BASE, found, users);
+        let mut c = Context::new();
+        c.insert("server", &server());
+        let fallback = users_context(&mut c, &server(), BASE, users, &tree, view);
+        if let Some(e) = error.map(str::to_string).or(fallback.clone()) {
+            c.insert("error", &e);
+        }
+        (tera().render("users.html", &c).unwrap(), fallback)
+    }
+
+    fn render(users: &[LdapUser]) -> String {
+        page(users, &UsersView::default(), None).0
+    }
+
+    fn user_in(name: &str, container: &str) -> LdapUser {
+        let container = format!("{container},{BASE}");
         LdapUser {
-            dn: format!("CN={name},CN=Users,DC=example,DC=com"),
+            dn: format!("CN={name},{container}"),
             username: name.to_string(),
             display_name: name.to_string(),
             enabled: true,
+            container,
             ..Default::default()
         }
+    }
+
+    fn user(name: &str) -> LdapUser {
+        user_in(name, "CN=Users")
+    }
+
+    fn view(ou: &str, nested: bool, status: &str) -> UsersView {
+        UsersView {
+            ou: if ou.is_empty() { String::new() } else { format!("{ou},{BASE}") },
+            sub: if nested { "1".into() } else { String::new() },
+            status: status.into(),
+        }
+    }
+
+    /// Usernames in the table, in order.
+    fn listed(html: &str) -> Vec<String> {
+        html.split(r#"<i class="bi bi-person-circle me-1 text-secondary"></i>"#)
+            .skip(1)
+            .map(|s| s.split_whitespace().next().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    fn people() -> Vec<LdapUser> {
+        let mut off = user_in("carol", "OU=Europe,OU=Sales");
+        off.enabled = false;
+        vec![user("alice"), user_in("bob", "OU=Sales"), off]
+    }
+
+    #[test]
+    fn an_ou_shows_its_own_users_or_everything_below_it() {
+        let users = people();
+        assert_eq!(listed(&render(&users)), ["alice", "bob", "carol"], "the whole domain by default");
+        assert_eq!(listed(&page(&users, &view("OU=Sales", false, ""), None).0), ["bob"]);
+        assert_eq!(listed(&page(&users, &view("OU=Sales", true, ""), None).0), ["bob", "carol"]);
+        assert_eq!(listed(&page(&users, &view("CN=Users", false, ""), None).0), ["alice"]);
+    }
+
+    #[test]
+    fn status_buttons_filter_and_count_within_the_ou() {
+        let users = people();
+        let (html, _) = page(&users, &view("", false, "disabled"), None);
+        assert_eq!(listed(&html), ["carol"]);
+        let (html, _) = page(&users, &view("OU=Sales", true, "enabled"), None);
+        assert_eq!(listed(&html), ["bob"]);
+        // Counts are for the OU being shown: Sales and below has 2, 1 disabled.
+        assert!(html.contains("All <span class=\"ms-1 opacity-75\">2</span>"), "{html}");
+        assert!(html.contains("Disabled <span class=\"ms-1 opacity-75\">1</span>"));
+        let (html, _) = page(&users, &view("", false, "locked"), None);
+        assert!(listed(&html).is_empty());
+        assert!(html.contains("No locked accounts in this view."));
+    }
+
+    #[test]
+    fn an_empty_ou_points_to_nested_users_only_when_there_are_some() {
+        let users = [user_in("carol", "OU=Europe,OU=Sales")];
+        let (html, _) = page(&users, &view("OU=Sales", false, ""), None);
+        assert!(html.contains("users below it"), "Europe holds carol");
+        let (html, _) = page(&users, &view("OU=Europe,OU=Sales", false, "disabled"), None);
+        assert!(!html.contains("users below it"));
+        let (html, _) = page(&[user("alice")], &view("OU=Sales", false, ""), None);
+        assert!(html.contains("This OU or container holds no users."));
+        assert!(!html.contains("users below it"));
+    }
+
+    #[test]
+    fn the_tree_counts_users_and_links_keep_the_view() {
+        let users = people();
+        let (html, _) = page(&users, &view("OU=Sales", true, "disabled"), None);
+        assert!(html.contains("example.com"), "the domain is the top of the tree");
+        assert!(html.contains(r#"<span class="text-muted fw-normal">in Sales</span>"#));
+        // Links to other OUs keep "nested" and the status filter.
+        assert!(html.contains("ou=OU%3DEurope%2COU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1&amp;status=disabled"), "{html}");
+        // An action comes back to the same view.
+        assert!(html.contains("/users/carol/edit?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1&amp;status=disabled"));
+        // And a new user is created in the OU being shown.
+        assert!(html.contains("/users/new?ou=OU%3DSales"));
+        assert!(html.contains("Created in\n                        <strong>Sales</strong>"));
+    }
+
+    #[test]
+    fn an_unknown_ou_falls_back_to_the_whole_domain() {
+        let (html, err) = page(&people(), &view("OU=Gone", false, ""), None);
+        assert!(err.unwrap().contains("is not an OU or container"));
+        assert_eq!(listed(&html).len(), 3);
+    }
+
+    #[test]
+    fn the_view_survives_the_query_string() {
+        let v = UsersView { ou: format!("OU=Doe\\, J & Co+,{BASE}"), sub: "1".into(), status: "expired".into() };
+        let back: UsersView = serde_urlencoded::from_str(&v.query()[1..]).unwrap();
+        assert_eq!(back.ou, v.ou);
+        assert!(back.nested());
+        assert_eq!(back.status(), "expired");
+        assert_eq!(UsersView::default().query(), "");
+        let odd = UsersView { status: "<script>".into(), ..Default::default() };
+        assert_eq!(odd.query(), "", "an unknown status is just 'all'");
+    }
+
+    #[test]
+    fn description_is_a_column_and_editable() {
+        let mut u = user("ivan");
+        u.description = "Иван Петров".into();
+        let html = render(&[u]);
+        assert!(html.contains(r#"<td class="small text-break">Иван Петров</td>"#));
+        assert!(html.contains(r#"maxlength="1024"
+                            value="Иван Петров""#));
+        let f: UpdateUserForm =
+            serde_urlencoded::from_str("first_name=&last_name=&email=&password=&description=+Ivan+").unwrap();
+        assert_eq!(f.profile.as_profile().description, "Ivan");
+    }
+
+    #[test]
+    fn location_shows_when_the_list_spans_several_ous() {
+        let mut u = user_in("bob", "OU=Sales");
+        u.location = "Sales".into();
+        let html = render(&[u.clone()]);
+        assert!(html.contains("bi-folder2 me-1\"></i>Sales</div>"));
+        let (html, _) = page(&[u], &view("OU=Sales", false, ""), None);
+        assert!(!html.contains("bi-folder2 me-1\"></i>Sales</div>"), "one OU: no need");
     }
 
     #[test]
@@ -1561,18 +1889,11 @@ mod users_page_tests {
 
     #[test]
     fn a_failure_is_shown_above_the_list() {
-        let mut c = Context::new();
-        c.insert("server", &Server {
-            id: 1,
-            name: "DC1".to_string(),
-            ldap_url: "ldaps://dc1.example.com".to_string(),
-            bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
-            bind_password: "secret".to_string(),
-            skip_tls: true,
-        });
-        c.insert("users", &vec![user("someone")]);
-        c.insert("error", "The password was not changed: the password does not meet the password policy");
-        let html = tera().render("users.html", &c).unwrap();
+        let (html, _) = page(
+            &[user("someone")],
+            &UsersView::default(),
+            Some("The password was not changed: the password does not meet the password policy"),
+        );
         assert!(html.contains("alert-danger"));
         assert!(html.contains("does not meet the password policy"));
         assert!(html.contains("someone"), "the list is still there");
@@ -1592,6 +1913,8 @@ mod users_page_tests {
         u.title = evil.into();
         u.manager = evil.into();
         u.office = evil.into();
+        u.description = evil.into();
+        u.location = evil.into();
         let html = render(&[u]);
         assert!(!html.contains("<img src=x"));
     }

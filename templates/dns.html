@@ -64,6 +64,10 @@
     <p class="small">Make sure the bind account has read access to the DNS partition.</p>
 </div>
 {% else %}
+<div class="d-flex mb-3">
+    <input type="search" id="zoneSearch" class="form-control form-control-sm ms-auto" style="max-width: 16rem;"
+        placeholder="Find a zone…" aria-label="Find a zone">
+</div>
 <div class="card shadow-sm">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
@@ -75,7 +79,7 @@
             </thead>
             <tbody>
                 {% for zone in zones %}
-                <tr>
+                <tr class="js-filter-row" data-search="{{ zone.name }}">
                     <td>
                         <i class="bi bi-globe2 me-1 text-warning"></i>
                         <strong>{{ zone.name }}</strong>
@@ -96,6 +100,9 @@
                     </td>
                 </tr>
                 {% endfor %}
+                <tr class="js-no-match d-none">
+                    <td colspan="2" class="text-center text-muted py-4">No zone matches.</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -134,6 +141,23 @@ if (zoneInput) {
     reverseCheck.addEventListener('change', updateHelp);
     zoneInput.addEventListener('input', updateHelp);
     updateHelp();
+}
+
+// Narrow the zone list as you type.
+const zoneSearch = document.getElementById('zoneSearch');
+if (zoneSearch) {
+    const rows = Array.from(document.querySelectorAll('.js-filter-row'));
+    const none = document.querySelector('.js-no-match');
+    zoneSearch.addEventListener('input', function () {
+        const q = this.value.trim().toLowerCase();
+        let shown = 0;
+        rows.forEach(function (row) {
+            const hit = row.dataset.search.toLowerCase().includes(q);
+            row.classList.toggle('d-none', !hit);
+            if (hit) shown++;
+        });
+        none.classList.toggle('d-none', shown > 0);
+    });
 }
 
 // Deleting a zone destroys every record in it, and the DNS server keeps

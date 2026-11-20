@@ -5,8 +5,21 @@ in the [audit log](#audit-log) with who made it and whether it succeeded.
 
 ## Users
 
-- **Create** a user with a username, first and last name, email and initial password.
-- **Edit** names and email, **enable or disable** the account, or **delete** it.
+The left pane lists the domain's **OUs and containers**, as in Active Directory Users and
+Computers, with how many users each holds. Pick one to see only its users; turn on
+**Include nested OUs** to add the users in the OUs below it. The domain name at the top
+shows everyone. Containers with no users (such as `Computers`) and system ones (such as
+`System`) are left out.
+
+Above the list, **All / Enabled / Disabled / Locked / Expired** filter by account status,
+with a count for each, and the search box narrows the list as you type: it looks in the
+username, display name, description, email, job title and department.
+
+- **Create** a user with a username, first and last name, email and initial password. The
+  user is created in the OU or container you are looking at, or in `Users` when the whole
+  domain is shown.
+- **Edit** names, email and description, **enable or disable** the account, or **delete**
+  it. The description is also a column in the list.
 - **Profile**: job title, department, office, phone, mobile and manager, in both the
   Add and Edit dialogs. The manager field suggests usernames as you type. Clearing a
   field removes the value from the directory.
@@ -66,6 +79,9 @@ old record stays. Everything else about the record is kept, including whether a 
 registered it dynamically. To change a record's name or type, add a new one and delete the
 old. If someone else changed the record after your page loaded, nothing is saved and you
 are told to check again.
+
+A search box above each list finds a zone by name, or a record by its name or value.
+Inside a zone you can also show a single record type.
 
 Internal zones such as `_msdcs` and `RootDNSServers` are hidden from the list. Errors
 returned by the server are shown on the page rather than swallowed.
