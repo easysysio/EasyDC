@@ -10,6 +10,20 @@ Three roles:
 - **Admin**: everything, including EasyDC accounts, password policies (domain and per
   group), the health check's fixes, and creating or deleting DNS zones.
 
+| Area | Viewer | Editor | Admin |
+|---|:-:|:-:|:-:|
+| See every page (including replication, the health check and the audit log) | ✅ | ✅ | ✅ |
+| Users: add, edit, delete, enable or disable, reset password, unlock, move | — | ✅ | ✅ |
+| Groups: add, edit, delete, members | — | ✅ | ✅ |
+| Computers: enable or disable, delete, move | — | ✅ | ✅ |
+| DNS records: add, edit, delete | — | ✅ | ✅ |
+| DNS zones: create, delete | — | — | ✅ |
+| OUs: create, rename, delete, move objects | — | — | ✅ |
+| GPOs: create, edit, delete, link | — | — | ✅ |
+| Password policies (domain-wide and per group) | — | — | ✅ |
+| Health check fixes | — | — | ✅ |
+| EasyDC accounts: add and remove, assign roles | — | — | ✅ |
+
 Every refused action needs a clear message on the page and a line in the audit log.
 
 ## Two kinds of EasyDC accounts
