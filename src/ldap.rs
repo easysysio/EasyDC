@@ -196,6 +196,26 @@ pub(crate) fn timed_out() -> String {
     )
 }
 
+/// A change the domain controller refused, in words. `what` says what did not
+/// happen, and `object` names the thing it was made on, for when the DC says it
+/// does not exist. Callers handle the codes that need their own advice first.
+pub(crate) fn refused(what: &str, object: &str, res: &ldap3::LdapResult) -> String {
+    match res.rc {
+        32 => format!("{what}: {object} does not exist. It may have just been deleted or renamed; reload the page to see the current list."),
+        50 => format!("{what}: the account EasyDC signs in with is not allowed to make this change."),
+        rc => format!("{what}: the domain controller refused it, saying \"{}\" (LDAP code {rc}).", dc_text(&res.text)),
+    }
+}
+
+/// The DC's own words, without Samba's leading error number ("00002030: ").
+fn dc_text(text: &str) -> &str {
+    let text = text.trim_matches(|c: char| c.is_whitespace() || c == '\0');
+    match text.split_once(": ") {
+        Some((code, rest)) if code.len() == 8 && code.chars().all(|c| c.is_ascii_hexdigit()) => rest,
+        _ => text,
+    }
+}
+
 pub async fn connect_and_bind(server: &Server) -> LdapResult<ldap3::Ldap> {
     connect_url(server, &server.ldap_url, None).await
 }
@@ -1773,12 +1793,16 @@ pub async fn delete_computer(
     name: &str,
 ) -> LdapResult<()> {
     let dn = find_computer_dn(ldap, base_dn, name).await?;
-    ldap.with_timeout(OP_TIMEOUT).delete(&dn)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to delete computer: {}", e))?;
-    Ok(())
+    let res = ldap.with_timeout(OP_TIMEOUT).delete(&dn).await.map_err(ldap_err)?;
+    let what = format!("{name} was not deleted");
+    match res.rc {
+        0 => Ok(()),
+        66 => Err(format!(
+            "{what}: it holds other objects, such as BitLocker recovery keys or a domain controller's own records, \
+             and the domain controller deletes only computers that hold nothing."
+        )),
+        _ => Err(refused(&what, &format!("computer {name}"), &res)),
+    }
 }
 
 pub async fn set_computer_enabled(
@@ -1793,11 +1817,11 @@ pub async fn set_computer_enabled(
         sv("userAccountControl"),
         HashSet::from([sv(&uac.to_string())]),
     )];
-    ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to change computer state: {}", e))?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods).await.map_err(ldap_err)?;
+    if res.rc != 0 {
+        let what = format!("{name} was not {}", if enable { "enabled" } else { "disabled" });
+        return Err(refused(&what, &format!("computer {name}"), &res));
+    }
     Ok(())
 }
 
@@ -2565,12 +2589,10 @@ pub async fn create_gpo(
         (sv("versionNumber"), HashSet::from([sv("0")])),
     ];
 
-    ldap.with_timeout(OP_TIMEOUT).add(&gpo_dn, attrs)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to create GPO: {}", e))?;
-
+    let res = ldap.with_timeout(OP_TIMEOUT).add(&gpo_dn, attrs).await.map_err(ldap_err)?;
+    if res.rc != 0 {
+        return Err(refused(&format!("{display_name} was not created"), "the Policies container", &res));
+    }
     Ok(())
 }
 
@@ -2587,23 +2609,28 @@ pub async fn update_gpo(
         Mod::Replace(sv("displayName"), HashSet::from([sv(display_name)])),
         Mod::Replace(sv("flags"), HashSet::from([sv(&flags_str)])),
     ];
-    ldap.with_timeout(OP_TIMEOUT).modify(gpo_dn, mods)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to update GPO: {}", e))?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(gpo_dn, mods).await.map_err(ldap_err)?;
+    if res.rc != 0 {
+        return Err(refused("The GPO was not saved", "this GPO", &res));
+    }
     Ok(())
 }
 
 // ── delete GPO ────────────────────────────────────────────────────────────────
 
 pub async fn delete_gpo(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<()> {
-    ldap.with_timeout(OP_TIMEOUT).delete(gpo_dn)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to delete GPO: {}", e))?;
-    Ok(())
+    let res = ldap.with_timeout(OP_TIMEOUT).delete(gpo_dn).await.map_err(ldap_err)?;
+    match res.rc {
+        0 => Ok(()),
+        // GPOs made by Windows or samba-tool hold User and Machine containers.
+        66 => Err(format!(
+            "The GPO was not deleted: it holds its User and Machine settings, and the domain controller \
+             deletes only empty objects. On the DC, run: samba-tool gpo del {} -U Administrator \
+             (this also removes its SYSVOL files).",
+            first_rdn_value(gpo_dn)
+        )),
+        _ => Err(refused("The GPO was not deleted", "this GPO", &res)),
+    }
 }
 
 // ── OU list ───────────────────────────────────────────────────────────────────
@@ -2727,25 +2754,46 @@ pub async fn list_gpo_links(
 
 // ── link / unlink GPO ─────────────────────────────────────────────────────────
 
+/// The OU or container a link is changed on, by name, for messages.
+fn link_place(ou_dn: &str) -> String {
+    let name = first_rdn_value(ou_dn);
+    if ou_dn.get(..3).is_some_and(|t| t.eq_ignore_ascii_case("OU=")) { format!("the OU {name}") } else { name }
+}
+
+/// The gPLink of the OU at `ou_dn`; `what` says what did not happen if it cannot be read.
+async fn read_gp_link(ldap: &mut ldap3::Ldap, ou_dn: &str, what: &str) -> LdapResult<String> {
+    let ldap3::SearchResult(entries, res) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(ou_dn, Scope::Base, "(objectClass=*)", vec!["gPLink"])
+        .await
+        .map_err(ldap_err)?;
+    if res.rc != 0 {
+        return Err(refused(what, &link_place(ou_dn), &res));
+    }
+    Ok(entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .map(|e| attr(&e, "gPLink"))
+        .unwrap_or_default())
+}
+
 pub async fn link_gpo_to_ou(
     ldap: &mut ldap3::Ldap,
     ou_dn: &str,
     gpo_dn: &str,
 ) -> LdapResult<()> {
-    let (entries, _) = ldap
+    let what = "The GPO was not linked";
+    // A link to a GPO that is gone would point at nothing.
+    let ldap3::SearchResult(_, found) = ldap
         .with_timeout(OP_TIMEOUT)
-        .search(ou_dn, Scope::Base, "(objectClass=*)", vec!["gPLink"])
+        .search(gpo_dn, Scope::Base, "(objectClass=groupPolicyContainer)", vec!["cn"])
         .await
-        .map_err(ldap_err)?
-        .success()
         .map_err(ldap_err)?;
-
-    let current = entries
-        .into_iter()
-        .next()
-        .map(SearchEntry::construct)
-        .map(|e| attr(&e, "gPLink"))
-        .unwrap_or_default();
+    if found.rc != 0 {
+        return Err(refused(what, "this GPO", &found));
+    }
+    let current = read_gp_link(ldap, ou_dn, what).await?;
 
     let gpo_dn_lower = gpo_dn.to_lowercase();
     let mut links = parse_gp_link(&current);
@@ -2758,11 +2806,10 @@ pub async fn link_gpo_to_ou(
 
     let mods: Vec<Mod<Vec<u8>>> =
         vec![Mod::Replace(sv("gPLink"), HashSet::from([sv(&new_link)]))];
-    ldap.with_timeout(OP_TIMEOUT).modify(ou_dn, mods)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to link GPO: {}", e))?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(ou_dn, mods).await.map_err(ldap_err)?;
+    if res.rc != 0 {
+        return Err(refused(what, &link_place(ou_dn), &res));
+    }
 
     Ok(())
 }
@@ -2772,20 +2819,8 @@ pub async fn unlink_gpo_from_ou(
     ou_dn: &str,
     gpo_dn: &str,
 ) -> LdapResult<()> {
-    let (entries, _) = ldap
-        .with_timeout(OP_TIMEOUT)
-        .search(ou_dn, Scope::Base, "(objectClass=*)", vec!["gPLink"])
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(ldap_err)?;
-
-    let current = entries
-        .into_iter()
-        .next()
-        .map(SearchEntry::construct)
-        .map(|e| attr(&e, "gPLink"))
-        .unwrap_or_default();
+    let what = "The link was not removed";
+    let current = read_gp_link(ldap, ou_dn, what).await?;
 
     let gpo_dn_lower = gpo_dn.to_lowercase();
     let links: Vec<(String, u8)> = parse_gp_link(&current)
@@ -2800,11 +2835,10 @@ pub async fn unlink_gpo_from_ou(
         vec![Mod::Replace(sv("gPLink"), HashSet::from([sv(&new_link)]))]
     };
 
-    ldap.with_timeout(OP_TIMEOUT).modify(ou_dn, mods)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to unlink GPO: {}", e))?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(ou_dn, mods).await.map_err(ldap_err)?;
+    if res.rc != 0 {
+        return Err(refused(what, &link_place(ou_dn), &res));
+    }
 
     Ok(())
 }
@@ -4874,5 +4908,40 @@ mod timeout_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::{dc_text, link_place, refused};
+
+    fn res(rc: u32, text: &str) -> ldap3::LdapResult {
+        ldap3::LdapResult { rc, matched: String::new(), text: text.to_string(), refs: vec![], ctrls: vec![] }
+    }
+
+    #[test]
+    fn a_missing_object_is_named() {
+        let e = refused("The GPO was not linked", "the OU Sales", &res(32, "0000208D: acl_read: Error retrieving instanceType for base."));
+        assert!(e.starts_with("The GPO was not linked: the OU Sales does not exist."), "{e}");
+        assert!(!e.contains("rc=") && !e.contains("acl_read"), "{e}");
+    }
+
+    #[test]
+    fn no_access_says_whose() {
+        let e = refused("The GPO was not deleted", "this GPO", &res(50, "00002098: Insufficient access rights"));
+        assert!(e.contains("the account EasyDC signs in with is not allowed"), "{e}");
+    }
+
+    #[test]
+    fn anything_else_keeps_the_dcs_words_without_its_number() {
+        let e = refused("The GPO was not saved", "this GPO", &res(19, "0000202F: Constraint violation\n\0"));
+        assert_eq!(e, "The GPO was not saved: the domain controller refused it, saying \"Constraint violation\" (LDAP code 19).");
+        assert_eq!(dc_text("objectclass: no such class"), "objectclass: no such class");
+    }
+
+    #[test]
+    fn link_places_read_naturally() {
+        assert_eq!(link_place("OU=Europe,OU=Sales,DC=lab,DC=test"), "the OU Europe");
+        assert_eq!(link_place("CN=Users,DC=lab,DC=test"), "Users");
     }
 }
