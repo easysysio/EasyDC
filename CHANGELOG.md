@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - Spaces around a new username or OU name were kept. A username or group name with a character Samba refuses, or a name already in use, now gets a plain message, as does deleting an OU that is not empty.
 - A user whose lockout had run out was still shown as Locked until they next signed in.
 - When EasyDC could not reach or sign in to a DC, pages showed raw errors such as "os error 61" or "data 52e". They now say what went wrong and what to change.
+- After deleting a DNS zone, the notice said the DNS server would stop answering for it. Until samba is restarted it still answers that no name in the zone exists; the notice and the confirm prompt now say so.
 - A server's card said "TLS Disabled" when only the certificate check was off. It now says *Certificate checked*, *Certificate not checked* or *Not encrypted*.
 - A bulk action on more than about 1,300 users ran longer than a reverse proxy waits (60 seconds for Nginx), so the browser showed an error while the work went on unseen. A big selection is now sent 100 users at a time, with a progress bar, and each user takes a quarter less time.
 - A DC that stopped answering left the page loading forever. EasyDC now waits up to 10 seconds to connect and 30 seconds for each answer, then says the DC did not answer and that a change may still be made once it is free.

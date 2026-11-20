@@ -143,15 +143,16 @@ if (zoneInput) {
     updateHelp();
 }
 
-// Deleting a zone destroys every record in it, and the DNS server keeps
-// answering for it until samba restarts — so make it deliberate.
+// Deleting a zone destroys every record in it, and until samba restarts the
+// DNS server still answers for it, saying no name in it exists — so make it
+// deliberate.
 document.querySelectorAll('.js-delete-zone').forEach(function (form) {
     form.addEventListener('submit', function (e) {
         const zone = form.dataset.zone;
         const answer = prompt(
             'Delete the zone ' + zone + ' and every record in it?\n\n' +
-            'The DNS server will keep answering for ' + zone + ' until samba is ' +
-            'restarted on each DC.\n\nType the zone name to confirm:'
+            'The DNS server will still treat ' + zone + ' as its own, answering that ' +
+            'no name in it exists, until samba is restarted on each DC.\n\nType the zone name to confirm:'
         );
         if (answer !== zone) {
             e.preventDefault();

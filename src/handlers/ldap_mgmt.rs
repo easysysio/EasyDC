@@ -711,8 +711,8 @@ pub async fn dns_zone_delete(
             &server,
             None,
             Some(format!(
-                "Zone {} and its {} node(s) removed from the directory.                  The DNS server keeps answering for {} until samba is restarted on each DC.",
-                zone, nodes, zone
+                "Zone {zone} and its {nodes} node(s) removed from the directory. Until samba is restarted on each DC, \
+                 the DNS server still treats {zone} as its own and answers that no name in it exists."
             )),
         )
         .await,
