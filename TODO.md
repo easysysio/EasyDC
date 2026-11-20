@@ -39,6 +39,12 @@ An admin adds both kinds in EasyDC and gives each a role. No groups in AD.
 
 Keep at least one local admin, so EasyDC can still be reached when the DC is down.
 
+Decided:
+
+- EasyDC makes every change in AD with the server's bind account, after checking the
+  person's role. The audit log records who did it. People need no rights in AD.
+- A role applies to every server EasyDC manages, not one server at a time.
+
 ## Next features
 
 - Computers page: browse by OU, move computers, and bulk enable, disable or move.
