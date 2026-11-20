@@ -78,8 +78,9 @@
                             <i class="bi bi-pencil"></i>
                         </button>
                         <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal"
-                            data-bs-target="#deleteModal{{ loop.index }}"
+                            data-bs-toggle="modal" data-bs-target="#deleteGpoModal"
+                            data-name="{{ gpo.display_name }}"
+                            data-url="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/delete"
                             title="Delete">
                             <i class="bi bi-trash"></i>
                         </button>
@@ -159,7 +160,10 @@
     </div>
 </div>
 
-<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+{% endfor %}
+
+<!-- Delete: one dialog, filled from the row's button -->
+<div class="modal fade js-row-dialog" id="deleteGpoModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
@@ -167,18 +171,17 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p>Delete <strong>{{ gpo.display_name }}</strong>?</p>
+                <p>Delete <strong data-fill="name"></strong>?</p>
                 <p class="text-muted small mb-0">This removes the LDAP object only. SYSVOL files, if present, must be deleted manually.</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-                <form method="post" action="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/delete" class="d-inline">
+                <form method="post" data-fill-action class="d-inline">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
-{% endfor %}
 
 {% endblock %}

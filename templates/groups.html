@@ -101,8 +101,9 @@
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <button type="button" class="btn btn-outline-danger btn-sm"
-                                data-bs-toggle="modal"
-                                data-bs-target="#deleteModal{{ loop.index }}"
+                                data-bs-toggle="modal" data-bs-target="#deleteGroupModal"
+                                data-name="{{ group.name }}"
+                                data-url="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/delete{{ view_qs | default(value="") }}"
                                 title="Delete">
                                 <i class="bi bi-trash"></i>
                             </button>
@@ -230,31 +231,27 @@
     </div>
 </div>
 
-<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+{% endfor %}
+
+<!-- Delete: one dialog, filled from the row's button -->
+<div class="modal fade js-row-dialog" id="deleteGroupModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger">
-                    <i class="bi bi-trash me-1"></i> Delete Group
-                </h5>
+                <h5 class="modal-title text-danger"><i class="bi bi-trash me-1"></i> Delete Group</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                Delete <strong>{{ group.name }}</strong>? This cannot be undone.
+                Delete <strong data-fill="name"></strong>? This cannot be undone.
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm"
-                    data-bs-dismiss="modal">Cancel</button>
-                <form method="post"
-                    action="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/delete{{ view_qs | default(value="") }}"
-                    class="d-inline">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <form method="post" data-fill-action class="d-inline">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
-
-{% endfor %}
 
 {% endblock %}

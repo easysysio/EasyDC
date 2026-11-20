@@ -2421,8 +2421,11 @@ mod groups_page_tests {
         assert!(html.contains("/groups/Domain%20Admins/members\">Domain Admins</a>"), "nested group links");
         assert!(html.contains("bi-pc-display"));
         assert!(html.contains("Built-in identity"));
-        assert_eq!(html.matches(r#"name="member_dn""#).count(), 4);
-        assert!(html.contains(r#"value="CN=yariv,CN=Users,DC=example,DC=com""#));
+        // Each row's remove button carries the member's DN to one shared dialog.
+        assert_eq!(html.matches(r##"data-bs-target="#removeMemberModal""##).count(), 4);
+        assert_eq!(html.matches(r#"id="removeMemberModal""#).count(), 1);
+        assert!(html.contains(r#"data-dn="CN=yariv,CN=Users,DC=example,DC=com""#));
+        assert!(html.contains(r#"<input type="hidden" name="member_dn" data-fill="dn">"#));
         assert!(html.contains("/groups/Parent%20Group/members"), "member of");
         assert!(html.contains(r#"<option value="Domain Admins">"#));
         assert!(!html.contains("no other group"));

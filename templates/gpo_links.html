@@ -63,8 +63,8 @@
                     </td>
                     <td class="text-end">
                         <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal"
-                            data-bs-target="#unlinkModal{{ loop.index }}"
+                            data-bs-toggle="modal" data-bs-target="#unlinkModal"
+                            data-name="{{ link.ou_name }}" data-dn="{{ link.ou_dn }}"
                             title="Remove link">
                             <i class="bi bi-x-circle"></i>
                         </button>
@@ -106,33 +106,29 @@
     </div>
 </div>
 
-<!-- ── Unlink Modals ──────────────────────────────────────────────────────── -->
-{% for link in links %}
-<div class="modal fade" id="unlinkModal{{ loop.index }}" tabindex="-1">
+<!-- Unlink: one dialog, filled from the row's button -->
+<div class="modal fade js-row-dialog" id="unlinkModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger">
-                    <i class="bi bi-x-circle me-1"></i> Remove Link
-                </h5>
+                <h5 class="modal-title text-danger"><i class="bi bi-x-circle me-1"></i> Remove Link</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p>Remove link from <strong>{{ link.ou_name }}</strong>?</p>
-                <p class="text-muted small font-monospace mb-0">{{ link.ou_dn }}</p>
+                <p>Remove link from <strong data-fill="name"></strong>?</p>
+                <p class="text-muted small font-monospace mb-0" data-fill="dn"></p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
                 <form method="post"
                     action="/servers/{{ server.id }}/gpo/{{ guid }}/links/remove"
                     class="d-inline">
-                    <input type="hidden" name="ou_dn" value="{{ link.ou_dn }}">
+                    <input type="hidden" name="ou_dn" data-fill="dn">
                     <button type="submit" class="btn btn-danger btn-sm">Remove</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
-{% endfor %}
 
 {% endblock %}

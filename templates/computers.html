@@ -100,8 +100,9 @@
                             </form>
                             <!-- Delete -->
                             <button type="button" class="btn btn-outline-danger btn-sm"
-                                data-bs-toggle="modal"
-                                data-bs-target="#deleteModal{{ loop.index }}"
+                                data-bs-toggle="modal" data-bs-target="#deleteComputerModal"
+                                data-name="{{ computer.name }}"
+                                data-url="/servers/{{ server.id }}/computers/{{ computer.name | urlencode_strict }}/delete"
                                 title="Remove from domain">
                                 <i class="bi bi-trash"></i>
                             </button>
@@ -118,9 +119,8 @@
 </div>
 {% endif %}
 
-<!-- Delete Modals -->
-{% for computer in computers %}
-<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+<!-- Delete: one dialog, filled from the row's button -->
+<div class="modal fade js-row-dialog" id="deleteComputerModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
@@ -130,7 +130,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p>Remove <strong>{{ computer.name }}</strong> from the domain?</p>
+                <p>Remove <strong data-fill="name"></strong> from the domain?</p>
                 <p class="text-muted small mb-0">
                     The machine account will be deleted. The computer itself is unaffected
                     until it tries to authenticate again.
@@ -139,15 +139,12 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm"
                     data-bs-dismiss="modal">Cancel</button>
-                <form method="post"
-                    action="/servers/{{ server.id }}/computers/{{ computer.name }}/delete"
-                    class="d-inline">
+                <form method="post" data-fill-action class="d-inline">
                     <button type="submit" class="btn btn-danger btn-sm">Remove</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
-{% endfor %}
 
 {% endblock %}

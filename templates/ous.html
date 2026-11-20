@@ -68,8 +68,8 @@
                             <i class="bi bi-pencil"></i>
                         </button>
                         <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal"
-                            data-bs-target="#deleteModal{{ loop.index }}"
+                            data-bs-toggle="modal" data-bs-target="#deleteOuModal"
+                            data-name="{{ ou.name }}" data-dn="{{ ou.dn }}"
                             title="Delete">
                             <i class="bi bi-trash"></i>
                         </button>
@@ -184,7 +184,10 @@
     </div>
 </div>
 
-<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+{% endfor %}
+
+<!-- Delete: one dialog, filled from the row's button -->
+<div class="modal fade js-row-dialog" id="deleteOuModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
@@ -192,19 +195,18 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p>Delete <strong>{{ ou.name }}</strong>?</p>
+                <p>Delete <strong data-fill="name"></strong>?</p>
                 <p class="text-muted small mb-0">The OU must be empty (no child OUs or objects) before it can be deleted.</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
                 <form method="post" action="/servers/{{ server.id }}/ous/delete" class="d-inline">
-                    <input type="hidden" name="ou_dn" value="{{ ou.dn }}">
+                    <input type="hidden" name="ou_dn" data-fill="dn">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
-{% endfor %}
 
 {% endblock %}

@@ -191,6 +191,22 @@
             },
         };
     })();
+
+    // One dialog serves every row: <div class="modal js-row-dialog"> is filled
+    // from the button that opened it. data-fill="x" takes the button's data-x
+    // (as text, or as the value of an input), and a <form data-fill-action>
+    // posts to the button's data-url.
+    document.addEventListener('show.bs.modal', function (e) {
+        const modal = e.target;
+        if (!modal.classList.contains('js-row-dialog')) return;
+        const from = e.relatedTarget;
+        if (!from) return e.preventDefault();
+        modal.querySelectorAll('[data-fill]').forEach(function (el) {
+            const value = from.dataset[el.dataset.fill] || '';
+            if (el.tagName === 'INPUT') el.value = value; else el.textContent = value;
+        });
+        modal.querySelectorAll('form[data-fill-action]').forEach(f => { f.action = from.dataset.url; });
+    });
     </script>
 </head>
 <body>

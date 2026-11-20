@@ -132,8 +132,8 @@
                     </td>
                     <td class="text-end">
                         <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal"
-                            data-bs-target="#removeModal{{ loop.index }}"
+                            data-bs-toggle="modal" data-bs-target="#removeMemberModal"
+                            data-name="{{ member.name }}" data-dn="{{ member.dn }}"
                             title="Remove from group">
                             <i class="bi bi-person-dash"></i>
                         </button>
@@ -149,33 +149,28 @@
 </div>
 {% endif %}
 
-<!-- Remove Member Modals -->
-{% for member in members %}
-<div class="modal fade" id="removeModal{{ loop.index }}" tabindex="-1">
+<!-- Remove: one dialog, filled from the row's button -->
+<div class="modal fade js-row-dialog" id="removeMemberModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger">
-                    <i class="bi bi-person-dash me-1"></i> Remove Member
-                </h5>
+                <h5 class="modal-title text-danger"><i class="bi bi-person-dash me-1"></i> Remove Member</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                Remove <strong>{{ member.name }}</strong> from <strong>{{ group_name }}</strong>?
+                Remove <strong data-fill="name"></strong> from <strong>{{ group_name }}</strong>?
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary btn-sm"
-                    data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
                 <form method="post"
                     action="/servers/{{ server.id }}/groups/{{ group_name | urlencode_strict }}/members/remove"
                     class="d-inline">
-                    <input type="hidden" name="member_dn" value="{{ member.dn }}">
+                    <input type="hidden" name="member_dn" data-fill="dn">
                     <button type="submit" class="btn btn-danger btn-sm">Remove</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
-{% endfor %}
 
 {% endblock %}
