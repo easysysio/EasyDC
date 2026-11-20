@@ -13,15 +13,28 @@ On the dashboard, click **Add Server** and fill in:
 | Field | Example | Notes |
 |---|---|---|
 | **Name** | `DC1` | Any label; shown on the dashboard |
-| **LDAP URL** | `ldaps://dc1.example.com` | `ldap://` works, but see below |
+| **LDAP URL** | `ldaps://dc1.example.com` | Use `ldaps://`: see below |
 | **Bind DN** | `CN=Administrator,CN=Users,DC=example,DC=com` | The account EasyDC acts as |
 | **Bind Password** | | Stored in the EasyDC database |
 | **Skip TLS Verify** | on for self-signed | Samba's default certificate is self-signed |
 
 !!! warning "Use LDAPS"
-    Samba rejects password writes (`unicodePwd`) over plain LDAP, so **password resets and
-    new users with a password need an `ldaps://` URL** on port 636. Plain LDAP also sends the
-    bind password in the clear.
+    By default Samba does not accept a password over plain LDAP, so with an `ldap://` URL
+    EasyDC cannot sign in at all. Use `ldaps://` (port 636) and the DC's name rather than its
+    IP address, since the certificate is made out to the name. Even where a DC allows
+    `ldap://`, it refuses password writes over it, and the bind password crosses the network
+    in the clear.
+
+**Skip TLS Verify**: Samba makes its own certificate, which nothing trusts until you
+install the domain's CA certificate on the EasyDC machine. Until then, turn this on. The
+connection stays encrypted, but EasyDC does not check that it is talking to your DC. Each
+server's card on the dashboard shows which it is: *Certificate checked*, *Certificate not
+checked*, or *Not encrypted*.
+
+When you save a server, EasyDC signs in to it once and shows the result at the top of the
+dashboard. If that fails, the message says why and what to change: a wrong password, a
+disabled or locked bind account, a certificate this machine does not trust, a wrong port,
+a name not in DNS, or Samba not running on the DC.
 
 The bind account needs read/write access to the parts of the directory you want to manage —
 in practice a member of **Domain Admins** for full use.

@@ -216,6 +216,71 @@ fn dc_text(text: &str) -> &str {
     }
 }
 
+/// The host and port an LDAP URL points at, for messages.
+fn url_place(url: &str) -> (String, u16) {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("ldap", url));
+    let hostport = rest.split(['/', '?']).next().unwrap_or("");
+    let default = if scheme.eq_ignore_ascii_case("ldaps") { 636 } else { 389 };
+    // An IPv6 address is written in brackets: [::1]:636.
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) if !p.contains(']') => (h, p.parse().unwrap_or(default)),
+        _ => (hostport, default),
+    };
+    (host.trim_matches(['[', ']']).to_string(), port)
+}
+
+/// Why EasyDC could not connect to a DC, in words, with what to check.
+fn connect_failed(url: &str, wait: std::time::Duration, e: ldap3::LdapError) -> String {
+    use std::io::ErrorKind;
+    let (host, port) = url_place(url);
+    let io = match &e {
+        ldap3::LdapError::Timeout { .. } => {
+            return format!("Connection failed: the domain controller did not answer within {} seconds", wait.as_secs())
+        }
+        ldap3::LdapError::Io { source } => source,
+        ldap3::LdapError::NativeTLS { source } => {
+            let detail = source.to_string();
+            return if detail.contains("certificate") || detail.contains("verify") {
+                format!(
+                    "Connection failed: this machine does not trust the certificate of {host}, \
+                     or it does not match that name. Samba makes its own certificate, which nothing trusts \
+                     until you install the domain's CA certificate here. Until then, you can turn on \
+                     Skip TLS verification with the Edit button on this server's card on the Dashboard: \
+                     the connection stays encrypted, but the DC's identity is not checked."
+                )
+            } else if port == 389 {
+                format!(
+                    "Connection failed: {host} did not start a secure connection on port 389. \
+                     Port 389 is for ldap://; ldaps:// uses port 636. Fix the address with the Edit button \
+                     on this server's card on the Dashboard."
+                )
+            } else {
+                format!(
+                    "Connection failed: a secure connection to {host} on port {port} could not be set up ({detail}). \
+                     Check that the address uses the DC's LDAPS port, normally 636."
+                )
+            };
+        }
+        _ => return format!("Connection failed: {e}"),
+    };
+    match io.kind() {
+        ErrorKind::ConnectionRefused => format!(
+            "Connection failed: {host} turned the connection away on port {port}. \
+             Samba may be stopped there (on the DC, check with: systemctl status samba-ad-dc), \
+             or the port in the address is wrong."
+        ),
+        ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => format!(
+            "Connection failed: there is no network path to {host}. \
+             The machine may be off, or a network or firewall is in the way."
+        ),
+        _ if io.to_string().contains("lookup address") => format!(
+            "Connection failed: the name {host} was not found in DNS. \
+             Check the spelling of this server's LDAP URL, and that this machine uses DNS that knows the domain."
+        ),
+        _ => format!("Connection failed: {e}"),
+    }
+}
+
 pub async fn connect_and_bind(server: &Server) -> LdapResult<ldap3::Ldap> {
     connect_url(server, &server.ldap_url, None).await
 }
@@ -230,19 +295,63 @@ pub async fn connect_url(
 ) -> LdapResult<ldap3::Ldap> {
     let wait = timeout.unwrap_or(CONNECT_TIMEOUT);
     let settings = LdapConnSettings::new().set_no_tls_verify(server.skip_tls).set_conn_timeout(wait);
-    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, url).await.map_err(|e| match e {
-        ldap3::LdapError::Timeout { .. } => {
-            format!("Connection failed: the domain controller did not answer within {} seconds", wait.as_secs())
-        }
-        other => format!("Connection failed: {}", other),
-    })?;
+    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, url)
+        .await
+        .map_err(|e| connect_failed(url, wait, e))?;
     ldap3::drive!(conn);
     ldap.with_timeout(OP_TIMEOUT).simple_bind(&server.bind_dn, &server.bind_password)
         .await
-        .map_err(|e| format!("Bind failed: {}", ldap_err(e)))?
+        .map_err(|e| bind_failed(url, e))?
         .success()
-        .map_err(|e| format!("Authentication failed: {}", e))?;
+        .map_err(|e| match e {
+            ldap3::LdapError::LdapResult { result } => sign_in_refused(url, &result),
+            other => format!("Sign-in to the DC failed: {other}"),
+        })?;
     Ok(ldap)
+}
+
+const EDIT_SERVER: &str = "with the Edit button on this server's card on the Dashboard";
+
+/// The bind request got no answer: the DC timed out, or closed the connection.
+fn bind_failed(url: &str, e: ldap3::LdapError) -> String {
+    let (host, port) = url_place(url);
+    match e {
+        ldap3::LdapError::ResultRecv { .. } | ldap3::LdapError::OpSend { .. } => {
+            let mut text = format!("Connection failed: {host} closed the connection before answering.");
+            if port == 636 && !url.to_ascii_lowercase().starts_with("ldaps") {
+                text.push_str(&format!(" Port 636 is for ldaps://: change the address to ldaps://{host} {EDIT_SERVER}."));
+            }
+            text
+        }
+        other => format!("Bind failed: {}", ldap_err(other)),
+    }
+}
+
+/// The DC refused the bind account's sign-in. For a refused password,
+/// Samba (like Windows) says why in the "data" part of its text.
+fn sign_in_refused(url: &str, res: &ldap3::LdapResult) -> String {
+    let start = "Sign-in to the DC failed:";
+    let reason = res.text.split("data ").nth(1).and_then(|s| s.split(',').next()).unwrap_or("").trim();
+    match (res.rc, reason) {
+        (8, _) => format!(
+            "{start} the DC only accepts passwords over an encrypted connection, and this address starts with ldap://. \
+             Change it to ldaps://{} {EDIT_SERVER}.",
+            url_place(url).0
+        ),
+        (49, "533") => format!("{start} the bind account is disabled. Enable it on the DC, or use another account."),
+        (49, "775") => format!(
+            "{start} the bind account is locked out after too many wrong passwords. \
+             It unlocks by itself after the lockout time, or unlock it on the DC."
+        ),
+        (49, "532") => format!("{start} the bind account's password has expired. Set a new one on the DC, then {EDIT_SERVER}."),
+        (49, "773") => format!(
+            "{start} the bind account must change its password before it can sign in. \
+             Set a new one on the DC, then enter it {EDIT_SERVER}."
+        ),
+        (49, "701") => format!("{start} the bind account has expired. Extend it on the DC, or use another account."),
+        (49, _) => format!("{start} the bind DN or its password is wrong. Check both {EDIT_SERVER}."),
+        (rc, _) => format!("{start} the DC refused it, saying \"{}\" (LDAP code {rc}).", dc_text(&res.text)),
+    }
 }
 
 pub async fn get_base_dn(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
@@ -4873,6 +4982,81 @@ mod timeout_tests {
         assert!(text.contains("may still be made"), "{text}");
         // Other errors keep ldap3's own words.
         assert_eq!(super::ldap_err(ldap3::LdapError::FilterParsing), "filter parse error");
+    }
+
+    #[test]
+    fn a_failed_connection_says_what_to_check() {
+        use std::io::{Error, ErrorKind};
+        let wait = std::time::Duration::from_secs(10);
+        let io = |kind, text: &str| ldap3::LdapError::Io { source: Error::new(kind, text.to_string()) };
+
+        let text = super::connect_failed("ldaps://dc.lab.test", wait, io(ErrorKind::ConnectionRefused, "refused"));
+        assert!(text.contains("dc.lab.test turned the connection away on port 636"), "{text}");
+        assert!(text.contains("systemctl status samba-ad-dc"), "{text}");
+        let text = super::connect_failed("ldap://dc.lab.test:3890/", wait, io(ErrorKind::ConnectionRefused, "refused"));
+        assert!(text.contains("on port 3890"), "{text}");
+
+        let text = super::connect_failed(
+            "ldaps://nosuch.lab.test",
+            wait,
+            io(ErrorKind::Other, "failed to lookup address information: nodename nor servname provided, or not known"),
+        );
+        assert!(text.contains("the name nosuch.lab.test was not found in DNS"), "{text}");
+        assert!(!text.contains("nodename"), "{text}");
+
+        let text = super::connect_failed("ldaps://[fd00::5]:636", wait, io(ErrorKind::HostUnreachable, "no route"));
+        assert!(text.contains("no network path to fd00::5"), "{text}");
+
+        // A plain timeout keeps the words a page shown after it looks for.
+        let elapsed = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+            tokio::time::timeout(std::time::Duration::from_millis(1), std::future::pending::<()>()).await.unwrap_err()
+        });
+        let text = super::connect_failed("ldaps://dc", wait, ldap3::LdapError::Timeout { elapsed });
+        assert!(super::is_timeout(&text), "{text}");
+
+        // Anything else keeps ldap3's words.
+        let text = super::connect_failed("ldaps://dc", wait, io(ErrorKind::ConnectionReset, "reset by peer"));
+        assert_eq!(text, "Connection failed: I/O error: reset by peer");
+    }
+
+    #[test]
+    fn a_refused_sign_in_says_why() {
+        let res = |rc, text: &str| ldap3::LdapResult { rc, matched: String::new(), text: text.into(), refs: vec![], ctrls: vec![] };
+        let samba = |data| format!("80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data {data}, v1db1");
+        let url = "ldaps://dc.lab.test";
+        for (data, says) in [
+            ("52e", "the bind DN or its password is wrong"),
+            ("533", "the bind account is disabled"),
+            ("775", "the bind account is locked out"),
+            ("532", "password has expired"),
+            ("773", "must change its password"),
+            ("701", "the bind account has expired"),
+        ] {
+            let text = super::sign_in_refused(url, &res(49, &samba(data)));
+            assert!(text.starts_with("Sign-in to the DC failed: "), "{text}");
+            assert!(text.contains(says), "{data}: {text}");
+            assert!(!text.contains("DSID"), "{text}");
+        }
+        let text = super::sign_in_refused("ldap://dc.lab.test", &res(8, "BindSimple: Transport encryption required."));
+        assert!(text.contains("Change it to ldaps://dc.lab.test"), "{text}");
+        let text = super::sign_in_refused(url, &res(53, "00000000: unwilling"));
+        assert_eq!(text, "Sign-in to the DC failed: the DC refused it, saying \"unwilling\" (LDAP code 53).");
+    }
+
+    #[test]
+    fn a_closed_connection_points_to_the_port() {
+        // What ldap3 gives when the DC drops the connection mid-request.
+        let closed = || {
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            drop(tx);
+            let source = tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(rx).unwrap_err();
+            ldap3::LdapError::ResultRecv { source }
+        };
+        let text = super::bind_failed("ldap://dc.lab.test:636", closed());
+        assert!(text.contains("dc.lab.test closed the connection"), "{text}");
+        assert!(text.contains("change the address to ldaps://dc.lab.test"), "{text}");
+        let text = super::bind_failed("ldaps://dc.lab.test", closed());
+        assert!(!text.contains("change the address"), "{text}");
     }
 
     #[test]

@@ -63,14 +63,16 @@ After logging in, click **Add Server** on the dashboard and fill in:
 | Field | Example |
 |-------|---------|
 | Name | My DC |
-| LDAP URL | `ldap://192.168.1.10` or `ldaps://dc.domain.local` |
+| LDAP URL | `ldaps://dc.domain.local` (Samba refuses passwords over `ldap://`) |
 | Bind DN | `CN=Administrator,CN=Users,DC=domain,DC=local` |
 | Bind Password | your password |
 | Skip TLS Verify | enable for self-signed certificates |
 
+On saving, EasyDC signs in to the server once and shows whether that worked, and why not.
+
 ## Notes
 
-- **Password changes** require LDAPS (port 636). Plain LDAP connections will reject `unicodePwd` modifications.
+- **Use LDAPS** (port 636). A default Samba DC refuses a password over plain LDAP, so EasyDC cannot sign in over `ldap://`; and where a DC allows it, it still rejects password changes.
 - **DNS** manages records stored in the AD DNS partition (`CN=MicrosoftDNS,DC=DomainDnsZones`). Internal zones (`_msdcs`, `RootDNSServers`) are hidden automatically.
 - **GPO** manages LDAP metadata (name, status, OU links). Editing actual policy settings (registry values, scripts, etc.) requires direct access to SYSVOL on the DC.
 - **Health check** runs entirely over LDAP and changes nothing. Checks that need shell access on the DC — `samba-tool dbcheck`, SYSVOL replication and ACLs, `net ads testjoin`, service status — are out of its reach. Replication reporting currently covers partner *presence* only; use `samba-tool drs showrepl` for last-success times.

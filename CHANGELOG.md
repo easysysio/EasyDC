@@ -8,7 +8,12 @@ All notable changes to this project will be documented in this file.
 - The Audit Log searches and pages through the whole log, with a Failures only switch. It used to show only the latest 500 entries, so one big bulk action hid everything before it.
 - A group's members page is half the size for large groups.
 
+### Added
+- Saving a server on the dashboard signs in to it once and shows whether that worked, so a wrong address or password shows up straight away.
+
 ### Fixed
+- When EasyDC could not reach or sign in to a DC, pages showed raw errors such as "os error 61" or "data 52e". They now say what went wrong and what to change.
+- A server's card said "TLS Disabled" when only the certificate check was off. It now says *Certificate checked*, *Certificate not checked* or *Not encrypted*.
 - A bulk action on more than about 1,300 users ran longer than a reverse proxy waits (60 seconds for Nginx), so the browser showed an error while the work went on unseen. A big selection is now sent 100 users at a time, with a progress bar, and each user takes a quarter less time.
 - A DC that stopped answering left the page loading forever. EasyDC now waits up to 10 seconds to connect and 30 seconds for each answer, then says the DC did not answer and that a change may still be made once it is free.
 - The Users page came out blank when the DC could not be reached, instead of saying why.

@@ -9,6 +9,13 @@
     </button>
 </div>
 
+{% if check %}
+<div class="alert {% if check.ok %}alert-success{% else %}alert-warning{% endif %} alert-dismissible">
+    <i class="bi {% if check.ok %}bi-check-circle{% else %}bi-exclamation-triangle{% endif %} me-1"></i> {{ check.message }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+{% endif %}
+
 {% if servers | length == 0 %}
 <div class="text-center py-5 text-muted">
     <i class="bi bi-hdd-network fs-1"></i>
@@ -30,10 +37,12 @@
                 <p class="card-text text-muted small mb-2">
                     <i class="bi bi-person-badge"></i> {{ server.bind_dn }}
                 </p>
-                {% if server.skip_tls %}
-                <span class="badge bg-warning text-dark"><i class="bi bi-shield-exclamation me-1"></i>TLS Disabled</span>
+                {% if server.ldap_url is not starting_with("ldaps://") and server.ldap_url is not starting_with("LDAPS://") %}
+                <span class="badge bg-danger"><i class="bi bi-shield-x me-1"></i>Not encrypted</span>
+                {% elif server.skip_tls %}
+                <span class="badge bg-warning text-dark" title="Encrypted, but the DC's certificate is not checked"><i class="bi bi-shield-exclamation me-1"></i>Certificate not checked</span>
                 {% else %}
-                <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>TLS Enabled</span>
+                <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Certificate checked</span>
                 {% endif %}
             </div>
             <div class="card-footer bg-transparent d-flex gap-2">
@@ -75,7 +84,8 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">LDAP URL</label>
-                        <input type="text" name="ldap_url" class="form-control" required placeholder="ldap://192.168.1.1">
+                        <input type="text" name="ldap_url" class="form-control" required placeholder="ldaps://dc1.example.com">
+                        <div class="form-text">Use ldaps:// and the DC's name: Samba does not accept passwords over ldap://.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Bind DN</label>
@@ -89,6 +99,7 @@
                     <div class="form-check">
                         <input type="checkbox" name="skip_tls" class="form-check-input" id="skipTlsAdd" value="on">
                         <label class="form-check-label" for="skipTlsAdd">Skip TLS verification</label>
+                        <div class="form-text">Needed until this machine trusts the domain's CA certificate. The connection stays encrypted, but the DC's identity is not checked.</div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -133,6 +144,7 @@
                             id="skipTlsEdit{{ server.id }}" value="on"
                             {% if server.skip_tls %}checked{% endif %}>
                         <label class="form-check-label" for="skipTlsEdit{{ server.id }}">Skip TLS verification</label>
+                        <div class="form-text">Needed until this machine trusts the domain's CA certificate. The connection stays encrypted, but the DC's identity is not checked.</div>
                     </div>
                 </div>
                 <div class="modal-footer">

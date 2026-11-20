@@ -94,15 +94,47 @@ fn page_links(page: i64, pages: i64) -> Vec<i64> {
     out
 }
 
-pub async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
+/// `?check=ID`: after a server is added or changed, the Dashboard signs in
+/// to it once and says whether that worked, so a mistyped address or
+/// password shows up straight away rather than on the next page opened.
+#[derive(Deserialize, Default)]
+pub struct DashboardView {
+    #[serde(default)]
+    pub check: String,
+}
+
+pub async fn dashboard(State(state): State<AppState>, Query(view): Query<DashboardView>) -> impl IntoResponse {
     let servers = sqlx::query_as::<_, Server>("SELECT * FROM servers ORDER BY name")
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
 
+    let checked = match view.check.parse::<i64>().ok().and_then(|id| servers.iter().find(|s| s.id == id)) {
+        Some(server) => Some((server.name.clone(), crate::ldap::open(server).await.map(|(_, base_dn)| base_dn))),
+        None => None,
+    };
+    Html(state.tera.render("dashboard.html", &dashboard_context(&servers, checked)).unwrap_or_default())
+}
+
+fn dashboard_context(servers: &[Server], checked: Option<(String, Result<String, String>)>) -> Context {
     let mut ctx = Context::new();
-    ctx.insert("servers", &servers);
-    Html(state.tera.render("dashboard.html", &ctx).unwrap_or_default())
+    ctx.insert("servers", servers);
+    if let Some((name, result)) = checked {
+        let (ok, message) = match result {
+            Ok(base_dn) => (true, format!("EasyDC signed in to {name} and found the domain {base_dn}.")),
+            Err(e) => (false, format!("Saved {name}, but EasyDC could not sign in to it. {e}")),
+        };
+        ctx.insert("check", &serde_json::json!({ "ok": ok, "message": message }));
+    }
+    ctx
+}
+
+/// Back to the Dashboard after a save: check the server if it was saved.
+fn saved(id: Option<i64>) -> Redirect {
+    match id {
+        Some(id) => Redirect::to(&format!("/?check={id}")),
+        None => Redirect::to("/"),
+    }
 }
 
 pub async fn server_detail(
@@ -151,10 +183,11 @@ pub async fn create_server(
     .execute(&state.db)
     .await;
 
+    let id = res.as_ref().ok().map(|r| r.last_insert_rowid());
     let result = res.map(|_| ()).map_err(|e| e.to_string());
-    db::log_action(&state.db, &actor, "server.create", &form.name, None, &result).await;
+    db::log_action(&state.db, &actor, "server.create", &form.name, id, &result).await;
 
-    Redirect::to("/")
+    saved(id)
 }
 
 #[derive(Deserialize)]
@@ -199,10 +232,11 @@ pub async fn update_server(
         .await
     };
 
+    let changed = res.as_ref().ok().map(|_| id);
     let result = res.map(|_| ()).map_err(|e| e.to_string());
     db::log_action(&state.db, &actor, "server.update", &form.name, Some(id), &result).await;
 
-    Redirect::to("/")
+    saved(changed)
 }
 
 pub async fn delete_server(
@@ -222,12 +256,57 @@ pub async fn delete_server(
 }
 
 #[cfg(test)]
+mod dashboard_tests {
+    use super::dashboard_context;
+    use crate::models::Server;
+
+    fn server(id: i64, url: &str, skip_tls: bool) -> Server {
+        Server {
+            id,
+            name: format!("DC{id}"),
+            ldap_url: url.into(),
+            bind_dn: "CN=Administrator,CN=Users,DC=lab,DC=test".into(),
+            bind_password: "secret".into(),
+            skip_tls,
+        }
+    }
+
+    fn render(checked: Option<(String, Result<String, String>)>) -> String {
+        let servers = [server(1, "ldaps://dc1.lab.test", false), server(2, "ldaps://dc2.lab.test", true), server(3, "ldap://dc3", false)];
+        super::audit_page_tests::tera().render("dashboard.html", &dashboard_context(&servers, checked)).unwrap()
+    }
+
+    #[test]
+    fn a_saved_server_is_checked_and_the_result_shown() {
+        let html = render(Some(("LAB".into(), Ok("DC=lab,DC=test".into()))));
+        assert!(html.contains("alert-success"), "{html}");
+        assert!(html.contains("EasyDC signed in to LAB and found the domain DC=lab,DC=test."));
+
+        let html = render(Some(("LAB".into(), Err("Sign-in to the DC failed: wrong.".into()))));
+        assert!(html.contains("alert-warning"));
+        assert!(html.contains("Saved LAB, but EasyDC could not sign in to it. Sign-in to the DC failed: wrong."));
+
+        let html = render(None);
+        assert!(!html.contains("alert-dismissible"));
+        assert!(!html.contains("secret"), "the bind password never reaches the page");
+    }
+
+    #[test]
+    fn each_card_says_how_the_connection_is_protected() {
+        let html = render(None);
+        assert_eq!(html.matches(">Certificate checked<").count(), 1);
+        assert_eq!(html.matches(">Certificate not checked<").count(), 1);
+        assert_eq!(html.matches(">Not encrypted<").count(), 1);
+    }
+}
+
+#[cfg(test)]
 mod audit_page_tests {
     use super::{audit_context, page_links, AuditView};
     use crate::models::AuditEntry;
     use tera::Tera;
 
-    fn tera() -> Tera {
+    pub(super) fn tera() -> Tera {
         let mut t = Tera::new("templates/**/*.html").expect("templates parse");
         t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
             Ok(tera::Value::String("test".to_string()))
