@@ -1706,10 +1706,8 @@ fn first_rdn_value(dn: &str) -> String {
                     }
                 }
                 _ => {
-                    if let Some(e) = chars.next() {
-                        if in_value {
-                            out.extend_from_slice(e.encode_utf8(&mut [0; 4]).as_bytes());
-                        }
+                    if let Some(e) = chars.next().filter(|_| in_value) {
+                        out.extend_from_slice(e.encode_utf8(&mut [0; 4]).as_bytes());
                     }
                 }
             }
