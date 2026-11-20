@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 - Users: **Must change password** and **Password expired** badges, and a *Password to change* filter, for users who cannot sign in with their current password.
 
 ### Fixed
+- A second user with the same first and last name in the same place (two John Smiths) could not be created. Their directory entry now also carries the username.
+- An OU name such as `semi;colon` showed as `semi3Bcolon` in the tree and in users' locations.
+- Spaces around a new username or OU name were kept. A username or group name with a character Samba refuses, or a name already in use, now gets a plain message, as does deleting an OU that is not empty.
 - A user whose lockout had run out was still shown as Locked until they next signed in.
 - When EasyDC could not reach or sign in to a DC, pages showed raw errors such as "os error 61" or "data 52e". They now say what went wrong and what to change.
 - A server's card said "TLS Disabled" when only the certificate check was off. It now says *Certificate checked*, *Certificate not checked* or *Not encrypted*.

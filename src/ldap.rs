@@ -916,9 +916,11 @@ pub async fn create_user(
     } else {
         display.clone()
     };
+    check_account_name("A username", u.username)?;
     let domain = base_dn_to_domain(base_dn);
     let upn = format!("{}@{}", u.username, domain);
-    let user_dn = format!("CN={},{}", dn_escape(&cn), new_object_parent(u.parent, base_dn)?);
+    let parent = new_object_parent(u.parent, base_dn)?;
+    let mut user_dn = format!("CN={},{}", dn_escape(&cn), parent);
 
     // Checked before anything is created, so a typo does not leave a
     // half-made account behind.
@@ -965,11 +967,29 @@ pub async fn create_user(
         attrs.push((sv("accountExpires"), HashSet::from([sv(&ft.to_string())])));
     }
 
-    ldap.with_timeout(OP_TIMEOUT).add(&user_dn, attrs)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to create user: {}", e))?;
+    let mut res = ldap.with_timeout(OP_TIMEOUT).add(&user_dn, attrs.clone()).await.map_err(ldap_err)?;
+    if res.rc == 68 && !account_name_taken(&res) && cn != u.username {
+        // Something here already has this name, such as a second John
+        // Smith: this one's object is named after its username as well. Its
+        // display name stays as typed.
+        let cn = format!("{cn} ({})", u.username);
+        user_dn = format!("CN={},{}", dn_escape(&cn), parent);
+        for (name, values) in attrs.iter_mut() {
+            if name.as_slice() == b"cn" {
+                *values = HashSet::from([sv(&cn)]);
+            }
+        }
+        res = ldap.with_timeout(OP_TIMEOUT).add(&user_dn, attrs).await.map_err(ldap_err)?;
+    }
+    let what = "The user was not created";
+    match res.rc {
+        0 => {}
+        68 if account_name_taken(&res) => {
+            return Err(format!("{what}: the username {} is already used by another user, group or computer.", u.username))
+        }
+        68 => return Err(format!("{what}: {} already holds an object named {cn}.", link_place(&parent))),
+        _ => return Err(refused(what, &link_place(&parent), &res)),
+    }
 
     // Set password then enable
     let pwd_mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
@@ -1435,6 +1455,46 @@ pub(crate) fn is_builtin_container(dn: &str, base_dn: &str) -> bool {
 /// Where a new user or group goes: `parent`, checked to be in the domain, or
 /// `CN=Users` when none is given, or when it is `CN=Builtin`, which holds only
 /// Windows' own groups.
+/// The characters Samba and Windows refuse in an account name
+/// (sAMAccountName): a username, or a group's name.
+const ACCOUNT_NAME_FORBIDDEN: &str = "\"/\\[]:;|=,+*?<>@";
+
+/// Refuse an account name the DC would refuse, saying which character is
+/// the problem; `what` is "A username" or "A group name".
+pub(crate) fn check_account_name(what: &str, name: &str) -> LdapResult<()> {
+    if name.trim().is_empty() {
+        return Err(format!("{what} is needed."));
+    }
+    if name != name.trim() {
+        return Err(format!("{what} cannot start or end with a space."));
+    }
+    if let Some(c) = name.chars().find(|&c| ACCOUNT_NAME_FORBIDDEN.contains(c) || c.is_control()) {
+        let shown = if c.is_control() { "a control character".to_string() } else { format!("\"{c}\"") };
+        return Err(format!("{what} cannot contain {shown}. These are not allowed: \" / \\ [ ] : ; | = , + * ? < > @"));
+    }
+    if name.ends_with('.') {
+        return Err(format!("{what} cannot end with a full stop."));
+    }
+    Ok(())
+}
+
+/// The DC refused an add because the account name is in use somewhere in
+/// the domain, rather than because the same place holds the same name.
+fn account_name_taken(res: &ldap3::LdapResult) -> bool {
+    res.text.to_ascii_lowercase().contains("samaccountname")
+}
+
+/// `text` with a capital first letter, to start a message.
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// `link_place`, or "the top of the domain" for the domain itself.
+fn place_or_domain(dn: &str) -> String {
+    if dn.get(..3).is_some_and(|t| t.eq_ignore_ascii_case("DC=")) { "the top of the domain".into() } else { link_place(dn) }
+}
+
 fn new_object_parent(parent: &str, base_dn: &str) -> LdapResult<String> {
     if parent.is_empty() || is_builtin_container(parent, base_dn) {
         Ok(format!("CN=Users,{base_dn}"))
@@ -1461,7 +1521,9 @@ pub async fn create_group(
     g: &NewGroup<'_>,
 ) -> LdapResult<()> {
     check_new_group_type(g.group_type)?;
-    let group_dn = format!("CN={},{}", dn_escape(g.name), new_object_parent(g.parent, base_dn)?);
+    check_account_name("A group name", g.name)?;
+    let parent = new_object_parent(g.parent, base_dn)?;
+    let group_dn = format!("CN={},{}", dn_escape(g.name), parent);
     let gt = g.group_type.to_string();
 
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
@@ -1474,13 +1536,16 @@ pub async fn create_group(
         attrs.push((sv("description"), HashSet::from([sv(g.description)])));
     }
 
-    ldap.with_timeout(OP_TIMEOUT).add(&group_dn, attrs)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to create group: {}", e))?;
-
-    Ok(())
+    let res = ldap.with_timeout(OP_TIMEOUT).add(&group_dn, attrs).await.map_err(ldap_err)?;
+    let what = "The group was not created";
+    match res.rc {
+        0 => Ok(()),
+        68 if account_name_taken(&res) => {
+            Err(format!("{what}: the name {} is already used by another user, group or computer.", g.name))
+        }
+        68 => Err(format!("{what}: {} already holds an object named {}.", link_place(&parent), g.name)),
+        _ => Err(refused(what, &link_place(&parent), &res)),
+    }
 }
 
 // ── update group ──────────────────────────────────────────────────────────────
@@ -1622,25 +1687,41 @@ pub struct GroupDetail {
 /// The value of a DN's first part, unescaped enough to read: `CN=Doe\, John,…`
 /// gives `Doe, John`.
 fn first_rdn_value(dn: &str) -> String {
-    let mut out = String::new();
-    let mut chars = dn.chars();
-    let mut escaped = false;
+    // Bytes, since an escape may be hex: `\3B` for `;`, `\C3\A9` for `é`.
+    let mut out = Vec::new();
+    let mut chars = dn.chars().peekable();
     let mut in_value = false;
-    for c in chars.by_ref() {
-        if escaped {
-            out.push(c);
-            escaped = false;
-        } else if c == '\\' {
-            escaped = true;
+    let hex = |c: Option<&char>| c.and_then(|c| c.to_digit(16));
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            let high = hex(chars.peek());
+            let mut ahead = chars.clone();
+            ahead.next();
+            match (high, hex(ahead.peek())) {
+                (Some(h), Some(l)) => {
+                    chars.next();
+                    chars.next();
+                    if in_value {
+                        out.push((h * 16 + l) as u8);
+                    }
+                }
+                _ => {
+                    if let Some(e) = chars.next() {
+                        if in_value {
+                            out.extend_from_slice(e.encode_utf8(&mut [0; 4]).as_bytes());
+                        }
+                    }
+                }
+            }
         } else if !in_value {
             in_value = c == '=';
         } else if c == ',' {
             break;
         } else {
-            out.push(c);
+            out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Names for the well-known SIDs Samba puts into builtin groups, which show
@@ -2620,6 +2701,10 @@ pub async fn create_ou(
     name: &str,
     description: &str,
 ) -> LdapResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("The OU was not created: its name is empty.".into());
+    }
     let ou_dn = format!("OU={},{}", dn_escape(name), parent_dn);
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
         (
@@ -2632,12 +2717,13 @@ pub async fn create_ou(
         attrs.push((sv("description"), HashSet::from([sv(description)])));
     }
 
-    ldap.with_timeout(OP_TIMEOUT).add(&ou_dn, attrs)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to create OU: {}", e))?;
-    Ok(())
+    let res = ldap.with_timeout(OP_TIMEOUT).add(&ou_dn, attrs).await.map_err(ldap_err)?;
+    let what = "The OU was not created";
+    match res.rc {
+        0 => Ok(()),
+        68 => Err(format!("{what}: {} already holds an OU or container named {name}.", place_or_domain(parent_dn))),
+        _ => Err(refused(what, &place_or_domain(parent_dn), &res)),
+    }
 }
 
 // ── rename OU ─────────────────────────────────────────────────────────────────
@@ -2647,24 +2733,32 @@ pub async fn rename_ou(
     ou_dn: &str,
     new_name: &str,
 ) -> LdapResult<()> {
+    let new_name = new_name.trim();
+    let what = sentence(&format!("{} was not renamed", link_place(ou_dn)));
+    if new_name.is_empty() {
+        return Err(format!("{what}: the new name is empty."));
+    }
     let new_rdn = format!("OU={}", dn_escape(new_name));
-    ldap.with_timeout(OP_TIMEOUT).modifydn(ou_dn, &new_rdn, true, None)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to rename OU: {}", e))?;
-    Ok(())
+    let res = ldap.with_timeout(OP_TIMEOUT).modifydn(ou_dn, &new_rdn, true, None).await.map_err(ldap_err)?;
+    match res.rc {
+        0 => Ok(()),
+        68 => Err(format!("{what}: an OU or container named {new_name} is already there.")),
+        _ => Err(refused(&what, &link_place(ou_dn), &res)),
+    }
 }
 
 // ── delete OU ─────────────────────────────────────────────────────────────────
 
 pub async fn delete_ou(ldap: &mut ldap3::Ldap, ou_dn: &str) -> LdapResult<()> {
-    ldap.with_timeout(OP_TIMEOUT).delete(ou_dn)
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(|e| format!("Failed to delete OU (must be empty): {}", e))?;
-    Ok(())
+    let res = ldap.with_timeout(OP_TIMEOUT).delete(ou_dn).await.map_err(ldap_err)?;
+    let what = sentence(&format!("{} was not deleted", link_place(ou_dn)));
+    match res.rc {
+        0 => Ok(()),
+        66 => Err(format!(
+            "{what}: it is not empty. Move or delete what is in it first: users, groups, computers and the OUs below it."
+        )),
+        _ => Err(refused(&what, &link_place(ou_dn), &res)),
+    }
 }
 
 // ── move object to OU ─────────────────────────────────────────────────────────
@@ -4849,10 +4943,35 @@ mod group_tests {
     }
 
     #[test]
+    fn account_names_are_checked_before_the_dc_sees_them() {
+        assert!(check_account_name("A username", "zz-josé").is_ok());
+        assert!(check_account_name("A username", "דני").is_ok());
+        assert!(check_account_name("A group name", "R&D Team (EU) #1 100%").is_ok());
+        assert!(check_account_name("A username", "o'brien").is_ok());
+        let e = check_account_name("A username", "a/b").unwrap_err();
+        assert!(e.starts_with("A username cannot contain \"/\"."), "{e}");
+        assert!(e.contains("\" / \\ [ ] : ; | = , + * ? < > @"), "{e}");
+        assert!(check_account_name("A group name", "q\"x").unwrap_err().contains("cannot contain \"\"\""));
+        assert!(check_account_name("A username", "a@b").is_err());
+        assert!(check_account_name("A username", "x.").unwrap_err().contains("full stop"));
+        assert!(check_account_name("A username", " x").unwrap_err().contains("space"));
+        assert!(check_account_name("A username", "").unwrap_err().contains("needed"));
+        assert_eq!(sentence("the OU Sales was not deleted"), "The OU Sales was not deleted");
+        assert_eq!(sentence("éclair"), "Éclair");
+    }
+
+    #[test]
     fn rdn_values_are_unescaped_for_display() {
         assert_eq!(first_rdn_value("CN=Doe\\, John,CN=Users,DC=x"), "Doe, John");
         assert_eq!(first_rdn_value("CN=S-1-5-11,CN=ForeignSecurityPrincipals,DC=x"), "S-1-5-11");
         assert_eq!(first_rdn_value("OU=a\\+b"), "a+b");
+        // Samba writes some characters as hex: `;` and `=` here.
+        assert_eq!(first_rdn_value("OU=zz semi\\3Beq\\3D,DC=lab,DC=test"), "zz semi;eq=");
+        assert_eq!(first_rdn_value("OU=Caf\\C3\\A9,DC=x"), "Café");
+        assert_eq!(first_rdn_value("OU=zz Q\\#1 \\<b\\>,DC=x"), "zz Q#1 <b>");
+        assert_eq!(first_rdn_value("OU=zz a/b\\\\c,DC=x"), "zz a/b\\c");
+        assert_eq!(first_rdn_value("OU=zz trailing\\ ,DC=x"), "zz trailing ");
+        assert_eq!(first_rdn_value("OU=מכירות,DC=x"), "מכירות");
     }
 
     #[test]

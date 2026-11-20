@@ -33,7 +33,10 @@ take no time.
   **Edit** on the dashboard.
 - **Create** a user with a username, first and last name, email and initial password. The
   user is created in the OU or container you are looking at, or in `Users` when the whole
-  domain is shown.
+  domain is shown. A username cannot contain `" / \ [ ] : ; | = , + * ? < > @`; accents,
+  Hebrew and other letters are fine. If the place already holds someone with the same first
+  and last name, the new user's directory entry is named *John Smith (jsmith2)*; the display
+  name stays *John Smith*.
 - **Edit** names, email and description, **enable or disable** the account, or **delete**
   it. The description is also a column in the list.
 - **Profile**: job title, department, office, phone, mobile and manager, in both the

@@ -494,7 +494,7 @@ pub async fn ou_create(
         ldap::create_ou(&mut conn, &form.parent_dn, &form.name, &form.description).await
     }
     .await;
-    let target = format!("OU={},{}", ldap::dn_escape(&form.name), form.parent_dn);
+    let target = format!("OU={},{}", ldap::dn_escape(form.name.trim()), form.parent_dn);
     db::log_action(&state.db, &actor, "ou.create", &target, Some(id), &result).await;
 
     after_ou_action(&state, &server, result).await
@@ -1528,10 +1528,10 @@ pub async fn create_user(
             &mut conn,
             &base_dn,
             &ldap::NewUser {
-                username: &form.username,
-                first_name: &form.first_name,
-                last_name: &form.last_name,
-                email: &form.email,
+                username: form.username.trim(),
+                first_name: form.first_name.trim(),
+                last_name: form.last_name.trim(),
+                email: form.email.trim(),
                 password: &form.password,
                 profile: form.profile.as_profile(),
                 parent: &view.ou,
@@ -1540,7 +1540,7 @@ pub async fn create_user(
         .await
     }
     .await;
-    db::log_action(&state.db, &actor, "user.create", &form.username, Some(id), &result).await;
+    db::log_action(&state.db, &actor, "user.create", form.username.trim(), Some(id), &result).await;
 
     after_user_action(&state, &server, &view, result).await
 }
