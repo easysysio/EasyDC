@@ -56,7 +56,5 @@ Decided:
 
 ## Checks and housekeeping
 
-- Large domains: user and group lists are read in one LDAP request without paging. Check
-  whether Samba caps the number of results, and page the searches if it does.
 - Remove the `RUSTSEC-2026-0459` ignore in `.cargo/audit.toml` once sqlx allows the fixed
   SQLite (libsqlite3-sys 0.39 or later).

@@ -1688,7 +1688,9 @@ pub async fn bulk_users(
             return Err("No users were selected".to_string());
         }
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        // Checked once, not once per user.
+        // Checked once, not once per user: the group is looked up here and
+        // reused for every user.
+        let mut group = None;
         let place = match action {
             "move" => {
                 if target.is_empty() {
@@ -1701,14 +1703,27 @@ pub async fn bulk_users(
                 if target.is_empty() {
                     return Err("Enter the group to add to".to_string());
                 }
-                format!(" to {}", ldap::find_group(&mut conn, &base_dn, target).await?.name)
+                let found = ldap::find_group(&mut conn, &base_dn, target).await?;
+                let place = format!(" to {}", found.name);
+                group = Some(found);
+                place
             }
             _ => String::new(),
         };
 
+        let results = match &group {
+            Some(group) => add_users_to_group(&mut conn, &base_dn, group, &names).await?,
+            None => {
+                let mut results = Vec::with_capacity(names.len());
+                for name in &names {
+                    results.push(bulk_one(&mut conn, &base_dn, &server.bind_dn, action, name, target).await);
+                }
+                results
+            }
+        };
+
         let mut failed = Vec::new();
-        for name in &names {
-            let r = bulk_one(&mut conn, &base_dn, &server.bind_dn, action, name, target).await;
+        for (name, r) in names.iter().zip(results) {
             let logged = if target.is_empty() { name.to_string() } else { format!("{name} → {target}") };
             db::log_action(&state.db, &actor, audit, &logged, Some(id), &r).await;
             if let Err(e) = r {
@@ -1742,11 +1757,38 @@ async fn bulk_one(
             refuse_bind_account(bind.trim().eq_ignore_ascii_case(&dn), name, "moving")?;
             ldap::move_entry(conn, base_dn, &dn, target).await
         }
-        _ => match ldap::add_group_member(conn, base_dn, target, name).await {
+        other => Err(format!("Unknown action '{other}'")),
+    }
+}
+
+/// Bulk "Add to group": look every user up, leave out those already in the
+/// group, and add the rest a few hundred per change. One result per name.
+async fn add_users_to_group(
+    conn: &mut ldap3::Ldap,
+    base_dn: &str,
+    group: &ldap::LdapGroup,
+    names: &[&str],
+) -> Result<Vec<Result<(), String>>, String> {
+    let present: std::collections::HashSet<String> =
+        ldap::group_member_dns(conn, &group.dn).await?.iter().map(|dn| dn.to_lowercase()).collect();
+    let mut results: Vec<Result<(), String>> = vec![Ok(()); names.len()];
+    let mut todo: Vec<(usize, String)> = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        match ldap::find_user_for_change(conn, base_dn, name, "").await {
+            Err(e) => results[i] = Err(e),
+            Ok((dn, _)) if present.contains(&dn.to_lowercase()) => {}
+            Ok((dn, _)) => todo.push((i, dn)),
+        }
+    }
+    let dns: Vec<String> = todo.iter().map(|(_, dn)| dn.clone()).collect();
+    let added = ldap::add_member_dns(conn, group, &dns).await;
+    for ((i, _), r) in todo.iter().zip(added) {
+        results[*i] = match r {
             Err(e) if ldap::is_already_member(&e) => Ok(()),
             other => other,
-        },
+        };
     }
+    Ok(results)
 }
 
 // ── unlock account ─────────────────────────────────────────────────────────────

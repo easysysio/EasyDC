@@ -1051,16 +1051,29 @@ impl LdapGroup {
     }
 }
 
-const GROUP_ATTRS: [&str; 5] =
-    ["sAMAccountName", "description", "groupType", "isCriticalSystemObject", "member"];
+const GROUP_ATTRS: [&str; 4] = ["sAMAccountName", "description", "groupType", "isCriticalSystemObject"];
+
+/// Whether a group search also reads each group's member list. Only the
+/// groups list needs it, for the member count: a large group's list is
+/// thousands of DNs, so every other lookup leaves it out.
+#[derive(Clone, Copy, PartialEq)]
+enum Members {
+    Count,
+    Skip,
+}
 
 async fn search_groups(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     filter: &str,
+    members: Members,
 ) -> LdapResult<Vec<LdapGroup>> {
+    let mut attrs = GROUP_ATTRS.to_vec();
+    if members == Members::Count {
+        attrs.push("member");
+    }
     let (entries, _) = ldap
-        .search(base_dn, Scope::Subtree, &format!("(&(objectClass=group){filter})"), GROUP_ATTRS.to_vec())
+        .search(base_dn, Scope::Subtree, &format!("(&(objectClass=group){filter})"), attrs)
         .await
         .map_err(|e| e.to_string())?
         .success()
@@ -1076,7 +1089,7 @@ async fn search_groups(
 
 pub(crate) async fn find_group(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<LdapGroup> {
     let filter = format!("(sAMAccountName={})", ldap_escape(name));
-    search_groups(ldap, base_dn, &filter)
+    search_groups(ldap, base_dn, &filter, Members::Skip)
         .await?
         .into_iter()
         .next()
@@ -1089,18 +1102,18 @@ async fn find_group_dn(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> Lda
 
 /// Groups that have `dn` as a direct member.
 async fn parent_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapResult<Vec<LdapGroup>> {
-    search_groups(ldap, base_dn, &format!("(member={})", ldap_escape(dn))).await
+    search_groups(ldap, base_dn, &format!("(member={})", ldap_escape(dn)), Members::Skip).await
 }
 
 /// Groups that are direct members of the group `dn`.
 async fn child_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapResult<Vec<LdapGroup>> {
-    search_groups(ldap, base_dn, &format!("(memberOf={})", ldap_escape(dn))).await
+    search_groups(ldap, base_dn, &format!("(memberOf={})", ldap_escape(dn)), Members::Skip).await
 }
 
 // ── list groups ───────────────────────────────────────────────────────────────
 
 pub async fn list_groups(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapGroup>> {
-    let mut groups = search_groups(ldap, base_dn, "").await?;
+    let mut groups = search_groups(ldap, base_dn, "", Members::Count).await?;
     for g in &mut groups {
         g.location = location(&g.container, base_dn);
     }
@@ -1392,18 +1405,7 @@ fn member_from_entry(e: &SearchEntry) -> GroupMember {
 /// is a member of.
 pub async fn group_detail(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<GroupDetail> {
     let group = find_group(ldap, base_dn, name).await?;
-    let (entries, _) = ldap
-        .search(&group.dn, Scope::Base, "(objectClass=group)", vec!["member"])
-        .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| e.to_string())?;
-    let member_dns: Vec<String> = entries
-        .into_iter()
-        .next()
-        .map(SearchEntry::construct)
-        .and_then(|e| e.attrs.get("member").cloned())
-        .unwrap_or_default();
+    let member_dns = group_member_dns(ldap, &group.dn).await?;
 
     // One search for all members, instead of one per member.
     let mut found: std::collections::HashMap<String, GroupMember> = std::collections::HashMap::new();
@@ -1484,6 +1486,55 @@ const ALREADY_MEMBER: &str = "is already a member of";
 /// Whether an error from [`add_group_member`] only says the member was there.
 pub(crate) fn is_already_member(error: &str) -> bool {
     error.contains(ALREADY_MEMBER)
+}
+
+/// The DNs of a group's direct members.
+pub async fn group_member_dns(ldap: &mut ldap3::Ldap, group_dn: &str) -> LdapResult<Vec<String>> {
+    let (entries, _) = ldap
+        .search(group_dn, Scope::Base, "(objectClass=group)", vec!["member"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    Ok(entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .and_then(|e| e.attrs.get("member").cloned())
+        .unwrap_or_default())
+}
+
+/// How many members one change adds. Samba rewrites a group's whole member
+/// list on every change, so one change per member slows down as the group
+/// grows: 2,000 one at a time took two minutes.
+const MEMBERS_PER_CHANGE: usize = 250;
+
+/// Add users, by DN, to a group, a few hundred per change. Every DN gets its
+/// own result. If a change is refused, its users are added one at a time, so
+/// the one that caused it gets the error and the others are still added.
+/// The caller leaves out users already in the group.
+pub async fn add_member_dns(ldap: &mut ldap3::Ldap, group: &LdapGroup, dns: &[String]) -> Vec<LdapResult<()>> {
+    let mut results = Vec::with_capacity(dns.len());
+    for chunk in dns.chunks(MEMBERS_PER_CHANGE) {
+        let all: HashSet<Vec<u8>> = chunk.iter().map(|dn| sv(dn)).collect();
+        let together = ldap.modify(&group.dn, vec![Mod::Add(sv("member"), all)]).await;
+        if matches!(&together, Ok(res) if res.rc == 0) {
+            results.extend(chunk.iter().map(|_| Ok(())));
+            continue;
+        }
+        for dn in chunk {
+            let one = ldap.modify(&group.dn, vec![Mod::Add(sv("member"), HashSet::from([sv(dn)]))]).await;
+            results.push(match one {
+                Ok(res) if res.rc == 0 => Ok(()),
+                Ok(res) if res.rc == 20 || res.rc == 68 => {
+                    Err(format!("{} {ALREADY_MEMBER} {}", first_rdn_value(dn), group.name))
+                }
+                Ok(res) => Err(format!("Failed to add member: {}", res)),
+                Err(e) => Err(e.to_string()),
+            });
+        }
+    }
+    results
 }
 
 /// Add a user, computer or group to a group, by its sAMAccountName. A

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Adding many users to a group at once slowed down as the group grew: 2,000 users took nearly 3 minutes, and now take about 15 seconds.
+
 ## [0.4.4] - 2026-11-20
 
 ### Added
