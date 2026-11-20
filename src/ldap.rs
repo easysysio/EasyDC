@@ -214,6 +214,25 @@ pub(crate) fn refused(what: &str, object: &str, res: &ldap3::LdapResult) -> Stri
     }
 }
 
+/// A change the DC refused, in words, for the places that have nothing more
+/// particular to say. `what` says what did not happen.
+pub(crate) fn dc_refused(what: &str, res: &ldap3::LdapResult) -> String {
+    match res.rc {
+        50 => format!("{what}: the account EasyDC signs in with is not allowed to make this change."),
+        32 => format!("{what}: it no longer exists. It may have just been deleted or renamed; reload the page to see the current list."),
+        rc => format!("{what}: the domain controller refused it, saying \"{}\" (LDAP code {rc}).", dc_text(&res.text)),
+    }
+}
+
+/// `dc_refused`, for the error from `.success()`; any other error (a
+/// timeout, say) keeps its own words.
+pub(crate) fn dc_failed(what: &str) -> impl FnOnce(ldap3::LdapError) -> String + '_ {
+    move |e| match e {
+        ldap3::LdapError::LdapResult { result } => dc_refused(what, &result),
+        other => format!("{what}: {}", ldap_err(other)),
+    }
+}
+
 /// The DC's own words, without Samba's leading error number ("00002030: ").
 fn dc_text(text: &str) -> &str {
     let text = text.trim_matches(|c: char| c.is_whitespace() || c == '\0');
@@ -1017,7 +1036,7 @@ pub async fn create_user(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to enable account: {}", e))?;
+        .map_err(dc_failed("Failed to enable account"))?;
 
     Ok(())
 }
@@ -1091,7 +1110,7 @@ pub async fn update_user(
         rc if !u.password.is_empty() && is_password_refusal(rc, &res.text) => {
             Err(password_error("Nothing was saved", rc, &res.text))
         }
-        _ => Err(format!("Failed to update user: {}", res)),
+        _ => Err(dc_refused("Failed to update user", &res)),
     }
 }
 
@@ -1107,7 +1126,7 @@ pub async fn delete_user(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to delete user: {}", e))?;
+        .map_err(dc_failed("Failed to delete user"))?;
     Ok(())
 }
 
@@ -1202,6 +1221,8 @@ pub(crate) fn password_error(what: &str, rc: u32, text: &str) -> String {
         )
     } else if rc == 13 {
         format!("{what}: passwords can only be set over an encrypted connection. Add the server with an ldaps:// URL.")
+    } else if rc == 50 {
+        format!("{what}: the account EasyDC signs in with is not allowed to set passwords here.")
     } else {
         format!("{what}: {} (rc={rc})", text.trim())
     }
@@ -1222,7 +1243,7 @@ pub async fn unlock_user(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to unlock account: {}", e))?;
+        .map_err(dc_failed("Failed to unlock account"))?;
     Ok(())
 }
 
@@ -1640,7 +1661,7 @@ pub async fn update_group(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to update group: {}", e))?;
+        .map_err(dc_failed("Failed to update group"))?;
 
     Ok(())
 }
@@ -1657,7 +1678,7 @@ pub async fn delete_group(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to delete group: {}", e))?;
+        .map_err(dc_failed("Failed to delete group"))?;
     Ok(())
 }
 
@@ -1907,7 +1928,7 @@ pub async fn add_member_dns(ldap: &mut ldap3::Ldap, group: &LdapGroup, dns: &[St
                 Ok(res) if res.rc == 20 || res.rc == 68 => {
                     Err(format!("{} {ALREADY_MEMBER} {}", first_rdn_value(dn), group.name))
                 }
-                Ok(res) => Err(format!("Failed to add member: {}", res)),
+                Ok(res) => Err(dc_refused("Failed to add member", &res)),
                 Err(e) => Err(e.to_string()),
             });
         }
@@ -1975,7 +1996,7 @@ pub async fn add_group_member(
     match res.rc {
         0 => Ok(()),
         20 | 68 => Err(format!("{} {ALREADY_MEMBER} {}", attr(&entry, "sAMAccountName"), target.name)),
-        _ => Err(format!("Failed to add member: {}", res)),
+        _ => Err(dc_refused("Failed to add member", &res)),
     }
 }
 
@@ -1996,7 +2017,7 @@ pub async fn remove_group_member(
     Err(if not_a_member(res.rc, &res.text) {
         format!("{} is not a member of {}", first_rdn_value(member_dn), group_name)
     } else {
-        format!("Failed to remove member: {}", res)
+        dc_refused("Failed to remove member", &res)
     })
 }
 
@@ -2573,7 +2594,7 @@ pub async fn add_dns_record(
             .await
             .map_err(ldap_err)?
             .success()
-            .map_err(|e| format!("Failed to add record: {}", e))?;
+            .map_err(dc_failed("Failed to add record"))?;
     } else {
         let attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
             (sv("objectClass"), HashSet::from([sv("top"), sv("dnsNode")])),
@@ -2584,7 +2605,7 @@ pub async fn add_dns_record(
             .await
             .map_err(ldap_err)?
             .success()
-            .map_err(|e| format!("Failed to create DNS node: {}", e))?;
+            .map_err(dc_failed("Failed to create DNS node"))?;
     }
     Ok(())
 }
@@ -2832,7 +2853,7 @@ pub async fn move_entry(
         0 => Ok(()),
         68 => Err(format!("{place} already holds an object named {name}")),
         32 => Err(format!("{target} does not exist")),
-        _ => Err(format!("Failed to move {name}: {res}")),
+        _ => Err(dc_refused(&format!("Failed to move {name}"), &res)),
     }
 }
 
@@ -3176,7 +3197,7 @@ pub async fn delete_dns_record(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to delete record: {}", e))?;
+        .map_err(dc_failed("Failed to delete record"))?;
 
     // That was the name's last record: remove the name too, or an empty
     // dnsNode stays in the directory. Best effort — the record is gone
@@ -3262,7 +3283,7 @@ pub async fn edit_dns_record(
         // attributeOrValueExists: the new value is already a record here.
         20 => Err("An identical record already exists on this name. Nothing was saved."
             .to_string()),
-        rc => Err(format!("Failed to edit record: {} (rc={})", res.text, rc)),
+        _ => Err(dc_refused("Failed to edit record", &res)),
     }
 }
 
@@ -3495,7 +3516,7 @@ pub async fn set_password_policy(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to update the password policy: {}", e))?;
+        .map_err(dc_failed("Failed to update the password policy"))?;
     Ok(())
 }
 
@@ -3723,7 +3744,7 @@ pub async fn create_pso(ldap: &mut ldap3::Ldap, base_dn: &str, s: &PsoSettings<'
     match res.rc {
         0 => Ok(()),
         68 => Err(format!("A password policy named '{}' already exists", s.name)),
-        _ => Err(format!("Failed to create password policy: {}", res)),
+        _ => Err(dc_refused("Failed to create password policy", &res)),
     }
 }
 
@@ -3744,7 +3765,7 @@ pub async fn update_pso(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to update password policy: {}", e))?;
+        .map_err(dc_failed("Failed to update password policy"))?;
     Ok(())
 }
 
@@ -3754,7 +3775,7 @@ pub async fn delete_pso(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> Ld
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to delete password policy: {}", e))?;
+        .map_err(dc_failed("Failed to delete password policy"))?;
     Ok(())
 }
 
@@ -3804,7 +3825,7 @@ pub async fn apply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, ta
     match res.rc {
         0 => Ok(()),
         20 => Err(format!("{} already applies to {}", pso_name, target)),
-        _ => Err(format!("Failed to apply password policy: {}", res)),
+        _ => Err(dc_refused("Failed to apply password policy", &res)),
     }
 }
 
@@ -3818,7 +3839,7 @@ pub async fn unapply_pso(ldap: &mut ldap3::Ldap, base_dn: &str, pso_name: &str, 
     Err(if not_a_member(res.rc, &res.text) {
         format!("{} does not apply to {}", pso_name, first_rdn_value(target_dn))
     } else {
-        format!("Failed to remove: {}", res)
+        dc_refused("Failed to remove", &res)
     })
 }
 
@@ -4098,7 +4119,7 @@ pub async fn create_dns_zone(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to create zone: {}", e))?;
+        .map_err(dc_failed("Failed to create zone"))?;
 
     // The apex. If this fails the zone object is already there, so it is
     // removed again rather than left as a zone with no SOA.
@@ -4198,7 +4219,7 @@ pub async fn delete_dns_zone(
             .await
             .map_err(ldap_err)?
             .success()
-            .map_err(|err| format!("Failed to delete {}: {}", dn, err))?;
+            .map_err(dc_failed(&format!("Failed to delete {}", first_rdn_value(&dn))))?;
         removed += 1;
     }
 
@@ -4206,7 +4227,7 @@ pub async fn delete_dns_zone(
         .await
         .map_err(ldap_err)?
         .success()
-        .map_err(|e| format!("Failed to delete zone: {}", e))?;
+        .map_err(dc_failed("Failed to delete zone"))?;
 
     Ok(removed)
 }
@@ -4783,9 +4804,28 @@ mod user_profile_tests {
 
         let msg = password_error("x", 13, "confidentiality required");
         assert!(msg.contains("ldaps://"));
-        // Anything else is passed on as it came, with its code.
+        // No access is said in words; anything else is passed on with its code.
         assert!(!is_password_refusal(19, "some other constraint"));
-        assert_eq!(password_error("x", 50, " no rights "), "x: no rights (rc=50)");
+        assert_eq!(password_error("x", 50, " no rights "), "x: the account EasyDC signs in with is not allowed to set passwords here.");
+        assert_eq!(password_error("x", 53, " unwilling "), "x: unwilling (rc=53)");
+    }
+
+    #[test]
+    fn a_refused_change_is_said_in_words() {
+        let res = |rc, text: &str| ldap3::LdapResult { rc, matched: String::new(), text: text.into(), refs: vec![], ctrls: vec![] };
+        let no_access = res(50, "00002098: Object CN=x,DC=lab,DC=test has no write property access ");
+        assert_eq!(
+            dc_refused("Failed to update group", &no_access),
+            "Failed to update group: the account EasyDC signs in with is not allowed to make this change."
+        );
+        assert!(dc_refused("Failed to delete group", &res(32, "")).contains("no longer exists"));
+        assert_eq!(
+            dc_refused("Failed to delete zone", &res(53, "00000000: busy")),
+            "Failed to delete zone: the domain controller refused it, saying \"busy\" (LDAP code 53)."
+        );
+        let e = dc_failed("Failed to unlock account")(ldap3::LdapError::LdapResult { result: no_access });
+        assert!(e.ends_with("is not allowed to make this change."), "{e}");
+        assert_eq!(dc_failed("x")(ldap3::LdapError::FilterParsing), "x: filter parse error");
     }
 
     #[test]

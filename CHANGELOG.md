@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Users: **Must change password** and **Password expired** badges, and a *Password to change* filter, for users who cannot sign in with their current password.
 
 ### Fixed
+- With a bind account that may not make a change, editing users and groups, unlocking, moving, deleting, members, DNS zones and password policies showed the DC's raw "insufficientAccessRights" error. They now say the account EasyDC signs in with is not allowed to make that change.
 - A second user with the same first and last name in the same place (two John Smiths) could not be created. Their directory entry now also carries the username.
 - An OU name such as `semi;colon` showed as `semi3Bcolon` in the tree and in users' locations.
 - Spaces around a new username or OU name were kept. A username or group name with a character Samba refuses, or a name already in use, now gets a plain message, as does deleting an OU that is not empty.
