@@ -97,48 +97,16 @@
                 </tr>
             </thead>
             <tbody data-paged="members" data-search-input="listSearch">
+                {#- A group can have thousands of members, so each row is kept short. #}
                 {% for member in members %}
-                <tr
-                    data-search="{{ member.name }} {{ member.display_name }} {% if member.kind == "foreign" %}built-in identity{% else %}{{ member.kind }}{% endif %} {{ member.detail }}">
-                    <td class="fw-medium">
-                        {% if member.kind == "group" %}
-                        <i class="bi bi-people-fill me-1 text-success"></i>
-                        <a href="/servers/{{ server.id }}/groups/{{ member.group | urlencode_strict }}/members">{{ member.name }}</a>
-                        {% elif member.kind == "computer" %}
-                        <i class="bi bi-pc-display me-1 text-secondary"></i>{{ member.name }}
-                        {% elif member.kind == "user" %}
-                        <i class="bi bi-person-circle me-1 text-secondary"></i>{{ member.name }}
-                        {% else %}
-                        <i class="bi bi-person-badge me-1 text-secondary"></i>{{ member.name }}
-                        {% endif %}
-                        {% if member.display_name %}
-                        <div class="small text-muted fw-normal">{{ member.display_name }}</div>
-                        {% endif %}
-                    </td>
-                    <td class="small">
-                        {% if member.kind == "foreign" %}Built-in identity{% else %}{{ member.kind | capitalize }}{% endif %}
-                    </td>
-                    <td class="text-muted small">{{ member.detail }}</td>
-                    <td>
-                        {% if member.enabled == true %}
-                        <span class="badge bg-success-subtle text-success border border-success-subtle">
-                            <i class="bi bi-check-circle me-1"></i>Enabled
-                        </span>
-                        {% elif member.enabled == false %}
-                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
-                            <i class="bi bi-x-circle me-1"></i>Disabled
-                        </span>
-                        {% endif %}
-                    </td>
-                    <td class="text-end">
-                        <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal" data-bs-target="#removeMemberModal"
-                            data-name="{{ member.name }}" data-dn="{{ member.dn }}"
-                            title="Remove from group">
-                            <i class="bi bi-person-dash"></i>
-                        </button>
-                    </td>
-                </tr>
+<tr data-search="{{ member.name }} {{ member.display_name }} {% if member.kind == "foreign" %}built-in identity{% else %}{{ member.kind }}{% endif %} {{ member.detail }}">
+<td class="fw-medium">{% if member.kind == "group" %}<i class="bi bi-people-fill me-1 text-success"></i><a href="/servers/{{ server.id }}/groups/{{ member.group | urlencode_strict }}/members">{{ member.name }}</a>{% elif member.kind == "computer" %}<i class="bi bi-pc-display me-1 text-secondary"></i>{{ member.name }}{% elif member.kind == "user" %}<i class="bi bi-person-circle me-1 text-secondary"></i>{{ member.name }}{% else %}<i class="bi bi-person-badge me-1 text-secondary"></i>{{ member.name }}{% endif %}
+{% if member.display_name %}<div class="small text-muted fw-normal">{{ member.display_name }}</div>{% endif %}</td>
+<td class="small">{% if member.kind == "foreign" %}Built-in identity{% else %}{{ member.kind | capitalize }}{% endif %}</td>
+<td class="text-muted small">{{ member.detail }}</td>
+<td>{% if member.enabled == true %}<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle me-1"></i>Enabled</span>{% elif member.enabled == false %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle"><i class="bi bi-x-circle me-1"></i>Disabled</span>{% endif %}</td>
+<td class="text-end"><button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#removeMemberModal" data-name="{{ member.name }}" data-dn="{{ member.dn }}" title="Remove from group"><i class="bi bi-person-dash"></i></button></td>
+</tr>
                 {% endfor %}
                 <tr class="js-no-match d-none">
                     <td colspan="5" class="text-center text-muted py-4">No member matches the search.</td>

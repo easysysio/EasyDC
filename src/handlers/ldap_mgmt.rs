@@ -2459,6 +2459,21 @@ mod groups_page_tests {
     }
 
     #[test]
+    fn member_rows_stay_small() {
+        // A group can have thousands of members: the page grows by one row
+        // each, so the row must stay lean (it was 1.4 KB; now about 0.7 KB).
+        let one = |i: usize| {
+            let mut m = member(&format!("test{i:04}"), "user", Some(true));
+            m.display_name = format!("Test User {i:04}");
+            m
+        };
+        let empty = members_page(vec![one(0)], vec![], None).len();
+        let html = members_page((0..1001).map(one).collect(), vec![], None);
+        let per_row = (html.len() - empty) / 1000;
+        assert!(per_row < 800, "{per_row} bytes per member row");
+    }
+
+    #[test]
     fn members_of_every_kind_are_listed_and_removable_by_dn() {
         let html = members_page(
             vec![member("Domain Admins", "group", None), member("yariv", "user", Some(true)),
