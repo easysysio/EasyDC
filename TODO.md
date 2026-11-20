@@ -7,13 +7,14 @@ Three roles:
 - **Viewer**: sees everything, changes nothing.
 - **Editor**: adds, edits and deletes users, groups, computers and DNS records. Cannot
   touch OUs or GPOs, and cannot add EasyDC accounts.
-- **Admin**: everything, including EasyDC accounts.
+- **Admin**: everything, including EasyDC accounts, password policies (domain and per
+  group) and the health check's fixes.
 
 To decide:
 
-- Password policies (domain and per group), the health check's fixes, and creating or
-  deleting DNS zones: editor or admin only?
-- Every refused action needs a clear message on the page and a line in the audit log.
+- Creating or deleting DNS zones: editor or admin only?
+
+Every refused action needs a clear message on the page and a line in the audit log.
 
 ## Two kinds of EasyDC accounts
 
