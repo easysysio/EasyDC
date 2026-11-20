@@ -1547,7 +1547,7 @@ fn refuse_bind_account(is_bind: bool, username: &str, doing: &str) -> Result<(),
     if is_bind {
         Err(format!(
             "EasyDC signs in to the DC as {username}, so {doing} it would lock EasyDC out. \
-             Change the server's bind account in Settings first."
+             To do it, first change the server's bind account (Edit on the dashboard)."
         ))
     } else {
         Ok(())
@@ -2006,6 +2006,7 @@ mod users_page_tests {
         let e = super::refuse_bind_account(true, "Administrator", "disabling").unwrap_err();
         assert!(e.contains("EasyDC signs in to the DC as Administrator"));
         assert!(e.contains("disabling it would lock EasyDC out"));
+        assert!(e.contains("Edit on the dashboard"));
     }
 
     #[test]
