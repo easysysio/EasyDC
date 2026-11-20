@@ -95,8 +95,13 @@
                                 <i class="bi bi-person-lines-fill"></i>
                             </a>
                             <button type="button" class="btn btn-outline-secondary btn-sm"
-                                data-bs-toggle="modal"
-                                data-bs-target="#editModal{{ loop.index }}"
+                                data-bs-toggle="modal" data-bs-target="#editGroupModal"
+                                data-name="{{ group.name }}" data-description="{{ group.description }}"
+                                data-url="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/edit{{ view_qs | default(value="") }}"
+                                data-label="{{ group.group_type_label }}"
+                                data-scope="{% if group.scope and not group.system %}{{ group.scope }}{% endif %}"
+                                data-kind="{% if group.security %}security{% else %}distribution{% endif %}"
+                                {% if group.system %}data-system="1"{% endif %}
                                 title="Edit">
                                 <i class="bi bi-pencil"></i>
                             </button>
@@ -168,59 +173,56 @@
     </div>
 </div>
 
-<!-- ── Per-group Edit and Delete Modals ─────────────────────────────────── -->
-{% for group in groups %}
-
-<div class="modal fade" id="editModal{{ loop.index }}" tabindex="-1">
+<!-- ── Edit: one dialog, filled from the row's button ──────────────────── -->
+<div class="modal fade js-row-dialog" id="editGroupModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-pencil me-1"></i> Edit — {{ group.name }}
+                    <i class="bi bi-pencil me-1"></i> Edit — <span data-fill="name"></span>
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" action="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/edit{{ view_qs | default(value="") }}">
+            <form method="post" data-fill-action>
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Group Name</label>
-                        <input type="text" class="form-control" value="{{ group.name }}" disabled>
+                        <input type="text" class="form-control" data-fill="name" disabled>
                         <div class="form-text">Group name cannot be changed here.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Description</label>
-                        <input type="text" name="description" class="form-control"
-                            value="{{ group.description }}">
+                        <input type="text" name="description" class="form-control" data-fill="description">
                     </div>
-                    {% if group.system or not group.scope %}
-                    <div class="mb-1 text-muted small">
+                    <!-- A built-in group, or one of no known scope, keeps its scope and type. -->
+                    <div class="mb-1 text-muted small js-fixed">
                         <i class="bi bi-lock me-1"></i>
-                        {{ group.group_type_label }}{% if group.system %}: a built-in group, so its scope and type stay as they are{% endif %}.
+                        <span data-fill="label"></span><span class="js-builtin">: a built-in group, so its scope and type stay as they are</span>.
                     </div>
-                    {% else %}
-                    <div class="row">
-                        <div class="col mb-3">
-                            <label class="form-label">Scope</label>
-                            <select name="scope" class="form-select">
-                                <option value="global" {% if group.scope == "global" %}selected{% endif %}>Global</option>
-                                <option value="domain_local" {% if group.scope == "domain_local" %}selected{% endif %}>Domain Local</option>
-                                <option value="universal" {% if group.scope == "universal" %}selected{% endif %}>Universal</option>
-                            </select>
+                    <div class="js-changeable">
+                        <div class="row">
+                            <div class="col mb-3">
+                                <label class="form-label">Scope</label>
+                                <select name="scope" class="form-select" data-fill="scope">
+                                    <option value="global">Global</option>
+                                    <option value="domain_local">Domain Local</option>
+                                    <option value="universal">Universal</option>
+                                </select>
+                            </div>
+                            <div class="col mb-3">
+                                <label class="form-label">Type</label>
+                                <select name="kind" class="form-select" data-fill="kind">
+                                    <option value="security">Security</option>
+                                    <option value="distribution">Distribution</option>
+                                </select>
+                            </div>
                         </div>
-                        <div class="col mb-3">
-                            <label class="form-label">Type</label>
-                            <select name="kind" class="form-select">
-                                <option value="security" {% if group.security %}selected{% endif %}>Security</option>
-                                <option value="distribution" {% if not group.security %}selected{% endif %}>Distribution</option>
-                            </select>
+                        <div class="form-text">
+                            Global and domain local change only through universal. A change that would
+                            break this group's memberships is refused, with the reason.
+                            Distribution groups are for email lists and do not grant access.
                         </div>
                     </div>
-                    <div class="form-text">
-                        Global and domain local change only through universal. A change that would
-                        break this group's memberships is refused, with the reason.
-                        Distribution groups are for email lists and do not grant access.
-                    </div>
-                    {% endif %}
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -231,7 +233,18 @@
     </div>
 </div>
 
-{% endfor %}
+<script>
+// Scope and type are offered only for ordinary groups. When they are hidden
+// they are also disabled, so the form does not send them.
+document.getElementById('editGroupModal').addEventListener('show.bs.modal', function (event) {
+    const data = event.relatedTarget ? event.relatedTarget.dataset : {};
+    const fixed = !data.scope;
+    this.querySelector('.js-fixed').classList.toggle('d-none', !fixed);
+    this.querySelector('.js-builtin').classList.toggle('d-none', !data.system);
+    this.querySelector('.js-changeable').classList.toggle('d-none', fixed);
+    this.querySelectorAll('.js-changeable select').forEach(el => { el.disabled = fixed; });
+});
+</script>
 
 <!-- Delete: one dialog, filled from the row's button -->
 <div class="modal fade js-row-dialog" id="deleteGroupModal" tabindex="-1">

@@ -2378,8 +2378,14 @@ mod groups_page_tests {
         c.insert("server", &server());
         c.insert("groups", &vec![group("Team", -2147483646, false), group("Domain Admins", -2147483646, true)]);
         let html = tera().render("groups.html", &c).unwrap();
+        // One Edit dialog for every group, filled from the row's button.
+        assert_eq!(html.matches(r#"id="editGroupModal""#).count(), 1);
         assert_eq!(html.matches(r#"<select name="scope""#).count(), 1);
-        assert!(html.contains(r#"<option value="global" selected>"#));
+        // An ordinary group carries its scope; a built-in one none, so the
+        // dialog shows scope and type as fixed and does not send them.
+        assert!(html.contains(r#"data-scope="global""#), "{html}");
+        assert_eq!(html.matches(r#"data-scope="""#).count(), 1);
+        assert_eq!(html.matches(r#"data-system="1""#).count(), 1);
         assert!(html.contains("a built-in group"));
         assert!(html.contains("/groups/Domain%20Admins/edit"));
     }

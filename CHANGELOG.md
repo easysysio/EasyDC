@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - The Users page is much lighter for large domains: 2,000 users went from 25 MB to 4.4 MB, and pages are sent compressed (about 110 KB).
-- Computers, groups, group members, GPOs, GPO links and OUs use one delete dialog per page instead of one per row.
+- Computers, groups, group members, GPOs, GPO links and OUs use one delete dialog per page instead of one per row, and Groups one Edit dialog.
 
 ## [0.4.3] - 2026-11-20
 
