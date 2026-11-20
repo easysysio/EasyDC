@@ -6,12 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Users: select several users to enable, disable, move to an OU, or add to a group at once.
-- Users: a Move button on each user, to move them to another OU or container.
+- Users: Move, in each user's new ⋯ menu, to move them to another OU or container.
+- Groups: browse by OU or container, as on the Users page, and create a group in the OU you are looking at.
 
 ### Changed
 - EasyDC refuses to disable, delete or move the account it signs in to the DC with, since that would lock it out.
 
 ### Fixed
+- The Users page no longer runs wider than the window since the OU tree was added. Less-used actions moved to a ⋯ menu, the email shows under the display name, and the Users and Groups pages use the full window width.
 - Creating, renaming, deleting or moving on the OUs page reported nothing when it failed. The reason is shown now.
 - Move Object on the OUs page failed for names with a comma, and for a computer given without its `$`, as the form suggests.
 

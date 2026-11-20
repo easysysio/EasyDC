@@ -20,8 +20,8 @@ and a bar appears to **enable**, **disable**, **move** them to another OU or con
 **add them to a group**. If some of them fail, the page says which and why; the others
 are done. Each user's change is a separate line in the audit log.
 
-- **Move** (the folder button) moves one user to another OU or container. The user keeps
-  their name, groups and settings.
+- **Move**, in a user's **⋯** menu with *Reset password* and *Delete*, moves one user to
+  another OU or container. The user keeps their name, groups and settings.
 - EasyDC will not disable, delete or move the account it signs in to the DC with, since
   that would lock it out. To do it anyway, first change the server's bind account with
   **Edit** on the dashboard.
@@ -51,6 +51,11 @@ are done. Each user's change is a separate line in the audit log.
 
 Create **security** or **distribution** groups with a **global**, **domain local** or
 **universal** scope, edit and delete them, and manage membership.
+
+As on the Users page, the left pane lists the OUs and containers with how many groups each
+holds, including `Builtin` for Windows' own groups. Pick one to see its groups, with
+**Include nested OUs** for the ones below. A new group is created in the OU you are
+looking at, or in `Users` when the whole domain or `Builtin` is shown.
 
 - **Members**: open a group to see everyone in it — users, computers, other groups, and
   the built-in identities Samba puts in its own groups, such as *Authenticated Users*.

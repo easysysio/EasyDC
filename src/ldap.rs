@@ -386,9 +386,9 @@ fn location(dn: &str, base_dn: &str) -> String {
         .join(" › ")
 }
 
-// ── OUs and containers holding users ─────────────────────────────────────────
+// ── OUs and containers, as a tree to browse by ───────────────────────────────
 
-/// One entry of the users page's directory tree.
+/// One entry of the directory tree on the Users and Groups pages.
 #[derive(Debug, Serialize, Clone)]
 pub struct UserContainer {
     pub dn: String,
@@ -396,25 +396,27 @@ pub struct UserContainer {
     /// 1 for an OU or container at the top of the domain.
     pub depth: usize,
     pub is_ou: bool,
-    /// Users directly in it.
+    /// Objects (users, or groups) directly in it.
     pub direct: usize,
-    /// Users in it and everything below it.
+    /// Objects in it and everything below it.
     pub total: usize,
 }
 
-/// The OUs and containers to browse users by, in tree order: every OU, and the
-/// containers (such as `CN=Users`) that hold users. Like Active Directory Users
-/// and Computers, the "advanced" ones such as `CN=System` are left out.
-pub async fn list_user_containers(
+/// The OUs and containers to browse by, in tree order: every OU, and the
+/// containers (such as `CN=Users` or `CN=Builtin`) that hold one of the
+/// objects listed, given by the DN of the container each is in. Like Active
+/// Directory Users and Computers, "advanced" ones such as `CN=System` are left out.
+pub async fn list_containers(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
-    users: &[LdapUser],
+    objects_in: &[&str],
 ) -> LdapResult<Vec<UserContainer>> {
     let (entries, _) = ldap
         .search(
             base_dn,
             Scope::Subtree,
-            "(&(|(objectClass=organizationalUnit)(objectClass=container))(!(showInAdvancedViewOnly=TRUE)))",
+            "(&(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=builtinDomain))\
+             (!(showInAdvancedViewOnly=TRUE)))",
             vec!["objectClass"],
         )
         .await
@@ -431,16 +433,16 @@ pub async fn list_user_containers(
             (e.dn, is_ou)
         })
         .collect();
-    Ok(user_tree(base_dn, found, users))
+    Ok(container_tree(base_dn, found, objects_in))
 }
 
-pub(crate) fn user_tree(base_dn: &str, mut found: Vec<(String, bool)>, users: &[LdapUser]) -> Vec<UserContainer> {
+pub(crate) fn container_tree(base_dn: &str, mut found: Vec<(String, bool)>, objects_in: &[&str]) -> Vec<UserContainer> {
     found.sort_by_cached_key(|(dn, _)| dn_tree_sort_key(dn));
 
     let mut direct: std::collections::HashMap<String, usize> = Default::default();
     let mut total: std::collections::HashMap<String, usize> = Default::default();
-    for u in users {
-        let c = u.container.to_lowercase();
+    for container in objects_in {
+        let c = container.to_lowercase();
         *direct.entry(c.clone()).or_default() += 1;
         let mut d = c.as_str();
         while !d.is_empty() {
@@ -457,8 +459,8 @@ pub(crate) fn user_tree(base_dn: &str, mut found: Vec<(String, bool)>, users: &[
         let key = dn.to_lowercase();
         let in_tree = kept.contains(parent_dn(&key));
         let count = total.get(&key).copied().unwrap_or(0);
-        // A container with no users (Computers, ForeignSecurityPrincipals…)
-        // is noise here. An OU stays: it is the domain's own structure.
+        // A container with none of the objects (Computers on the Users page,
+        // ForeignSecurityPrincipals…) is noise here. An OU stays: it is the domain's own structure.
         if !in_tree || (!is_ou && count == 0) {
             continue;
         }
@@ -622,14 +624,7 @@ pub async fn create_user(
     };
     let domain = base_dn_to_domain(base_dn);
     let upn = format!("{}@{}", u.username, domain);
-    let parent = if u.parent.is_empty() {
-        format!("CN=Users,{base_dn}")
-    } else if is_within(u.parent, base_dn) {
-        u.parent.to_string()
-    } else {
-        return Err(format!("{} is not in this domain", u.parent));
-    };
-    let user_dn = format!("CN={},{}", dn_escape(&cn), parent);
+    let user_dn = format!("CN={},{}", dn_escape(&cn), new_object_parent(u.parent, base_dn)?);
 
     // Checked before anything is created, so a typo does not leave a
     // half-made account behind.
@@ -1029,6 +1024,10 @@ pub struct LdapGroup {
     /// A built-in or critical system group: its scope and type stay as they are.
     pub system: bool,
     pub member_count: usize,
+    /// The DN of the OU or container the group is in.
+    pub container: String,
+    /// That OU or container as `Sales › Europe`; filled in by [`list_groups`].
+    pub location: String,
 }
 
 impl LdapGroup {
@@ -1046,6 +1045,8 @@ impl LdapGroup {
             system: scope == Some(GroupScope::Builtin)
                 || attr(e, "isCriticalSystemObject").eq_ignore_ascii_case("TRUE"),
             member_count: e.attrs.get("member").map(|v| v.len()).unwrap_or(0),
+            container: parent_dn(&e.dn).to_string(),
+            location: String::new(),
         }
     }
 }
@@ -1099,7 +1100,11 @@ async fn child_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapRe
 // ── list groups ───────────────────────────────────────────────────────────────
 
 pub async fn list_groups(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapGroup>> {
-    search_groups(ldap, base_dn, "").await
+    let mut groups = search_groups(ldap, base_dn, "").await?;
+    for g in &mut groups {
+        g.location = location(&g.container, base_dn);
+    }
+    Ok(groups)
 }
 
 // ── create group ──────────────────────────────────────────────────────────────
@@ -1108,6 +1113,27 @@ pub struct NewGroup<'a> {
     pub name: &'a str,
     pub description: &'a str,
     pub group_type: i64,
+    /// The OU or container to create the group in; empty for `CN=Users`.
+    pub parent: &'a str,
+}
+
+/// `CN=Builtin`, the container for Windows' own groups.
+pub(crate) fn is_builtin_container(dn: &str, base_dn: &str) -> bool {
+    parent_dn(dn).eq_ignore_ascii_case(base_dn)
+        && dn_parts(dn).first().is_some_and(|p| p.eq_ignore_ascii_case("CN=Builtin"))
+}
+
+/// Where a new user or group goes: `parent`, checked to be in the domain, or
+/// `CN=Users` when none is given, or when it is `CN=Builtin`, which holds only
+/// Windows' own groups.
+fn new_object_parent(parent: &str, base_dn: &str) -> LdapResult<String> {
+    if parent.is_empty() || is_builtin_container(parent, base_dn) {
+        Ok(format!("CN=Users,{base_dn}"))
+    } else if is_within(parent, base_dn) {
+        Ok(parent.to_string())
+    } else {
+        Err(format!("{parent} is not in this domain"))
+    }
 }
 
 /// One of the six types the Add form offers, and nothing else: a made-up
@@ -1126,7 +1152,7 @@ pub async fn create_group(
     g: &NewGroup<'_>,
 ) -> LdapResult<()> {
     check_new_group_type(g.group_type)?;
-    let group_dn = format!("CN={},CN=Users,{}", dn_escape(g.name), base_dn);
+    let group_dn = format!("CN={},{}", dn_escape(g.name), new_object_parent(g.parent, base_dn)?);
     let gt = g.group_type.to_string();
 
     let mut attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
@@ -4633,7 +4659,8 @@ mod user_tree_tests {
             (format!("CN=Hidden,CN=System,{BASE}"), false),
         ];
         let users = [u("CN=Users"), u("OU=Sales"), u("OU=Europe,OU=Sales"), u("OU=Europe,OU=Sales")];
-        let tree = user_tree(BASE, found, &users);
+        let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
+        let tree = container_tree(BASE, found, &objects_in);
         let shown: Vec<(&str, usize, usize, usize)> =
             tree.iter().map(|c| (c.name.as_str(), c.depth, c.direct, c.total)).collect();
         assert_eq!(

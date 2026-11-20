@@ -32,19 +32,30 @@ fn group_page(id: i64, name: &str) -> String {
 
 /// The groups page, with `flash_error` when an action on it just failed: the
 /// reason belongs on the page, not only in the audit log.
-async fn render_groups(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
+async fn render_groups(
+    state: &AppState,
+    server: &Server,
+    view: &ListView,
+    flash_error: Option<String>,
+) -> Response {
     let mut ctx = Context::new();
     ctx.insert("server", server);
 
-    let loaded = match ldap::open(server).await {
-        Err(e) => Err(e),
-        Ok((mut conn, base_dn)) => ldap::list_groups(&mut conn, &base_dn).await,
+    let loaded: Result<_, String> = async {
+        let (mut conn, base_dn) = ldap::open(server).await?;
+        let groups = ldap::list_groups(&mut conn, &base_dn).await?;
+        let objects_in: Vec<&str> = groups.iter().map(|g| g.container.as_str()).collect();
+        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in).await?;
+        Ok((base_dn, groups, tree))
+    }
+    .await;
+    let load_error = match loaded {
+        Ok((base_dn, groups, tree)) => groups_context(&mut ctx, server, &base_dn, &groups, &tree, view),
+        Err(e) => {
+            ctx.insert("groups", &Vec::<ldap::LdapGroup>::new());
+            Some(e)
+        }
     };
-    let (groups, load_error) = match loaded {
-        Ok(g) => (g, None),
-        Err(e) => (Vec::new(), Some(e)),
-    };
-    ctx.insert("groups", &groups);
     if let Some(e) = flash_error.or(load_error) {
         ctx.insert("error", &e);
     }
@@ -52,10 +63,27 @@ async fn render_groups(state: &AppState, server: &Server, flash_error: Option<St
     Html(state.tera.render("groups.html", &ctx).unwrap_or_default()).into_response()
 }
 
-pub async fn groups(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+/// Back to the same view of the groups on success; with the reason on failure.
+async fn after_group_action(
+    state: &AppState,
+    server: &Server,
+    view: &ListView,
+    result: Result<(), String>,
+) -> Response {
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/groups{}", server.id, view.query())).into_response(),
+        Err(e) => render_groups(state, server, view, Some(e)).await,
+    }
+}
+
+pub async fn groups(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(view): Query<ListView>,
+) -> Response {
     match get_server(&state, id).await {
         None => redirect_home(),
-        Some(server) => render_groups(&state, &server, None).await,
+        Some(server) => render_groups(&state, &server, &view, None).await,
     }
 }
 
@@ -72,6 +100,7 @@ pub async fn create_group(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path(id): Path<i64>,
+    Query(view): Query<ListView>,
     Form(form): Form<CreateGroupForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -88,6 +117,7 @@ pub async fn create_group(
                 name: form.name.trim(),
                 description: form.description.trim(),
                 group_type: form.group_type,
+                parent: &view.ou,
             },
         )
         .await
@@ -95,10 +125,7 @@ pub async fn create_group(
     .await;
     db::log_action(&state.db, &actor, "group.create", &form.name, Some(id), &result).await;
 
-    match result {
-        Ok(()) => Redirect::to(&format!("/servers/{}/groups", id)).into_response(),
-        Err(e) => render_groups(&state, &server, Some(e)).await,
-    }
+    after_group_action(&state, &server, &view, result).await
 }
 
 // ── update group ──────────────────────────────────────────────────────────────
@@ -119,6 +146,7 @@ pub async fn update_group(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, name)): Path<(i64, String)>,
+    Query(view): Query<ListView>,
     Form(form): Form<UpdateGroupForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -153,10 +181,7 @@ pub async fn update_group(
     };
     db::log_action(&state.db, &actor, "group.update", &target, Some(id), &result).await;
 
-    match result {
-        Ok(()) => Redirect::to(&format!("/servers/{}/groups", id)).into_response(),
-        Err(e) => render_groups(&state, &server, Some(e)).await,
-    }
+    after_group_action(&state, &server, &view, result).await
 }
 
 // ── delete group ──────────────────────────────────────────────────────────────
@@ -165,6 +190,7 @@ pub async fn delete_group(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, name)): Path<(i64, String)>,
+    Query(view): Query<ListView>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -178,10 +204,7 @@ pub async fn delete_group(
     .await;
     db::log_action(&state.db, &actor, "group.delete", &name, Some(id), &result).await;
 
-    match result {
-        Ok(()) => Redirect::to(&format!("/servers/{}/groups", id)).into_response(),
-        Err(e) => render_groups(&state, &server, Some(e)).await,
-    }
+    after_group_action(&state, &server, &view, result).await
 }
 
 // ── group members page ────────────────────────────────────────────────────────
@@ -1092,13 +1115,13 @@ pub async fn gpo_link_remove(
 
 // ── user management ───────────────────────────────────────────────────────────
 
-/// What the users page shows: one OU or container (or the whole domain),
-/// optionally with everything below it, and which accounts. It rides along in
+/// What the Users or Groups page shows: one OU or container (or the whole
+/// domain), optionally with everything below it, and (users only) which accounts. It rides along in
 /// the query string of every action on the page, so an action comes back to
 /// the same view.
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(default)]
-pub struct UsersView {
+pub struct ListView {
     /// DN of the OU or container; empty for the whole domain.
     pub ou: String,
     /// Non-empty: include users in nested OUs and containers.
@@ -1115,7 +1138,7 @@ const STATUSES: [(&str, &str); 5] = [
     ("expired", "Expired"),
 ];
 
-impl UsersView {
+impl ListView {
     fn nested(&self) -> bool {
         !self.sub.is_empty()
     }
@@ -1127,8 +1150,8 @@ impl UsersView {
             .map_or("all", |(k, _)| k)
     }
 
-    fn with(&self, ou: &str, nested: bool, status: &str) -> UsersView {
-        UsersView { ou: ou.to_string(), sub: if nested { "1".into() } else { String::new() }, status: status.to_string() }
+    fn with(&self, ou: &str, nested: bool, status: &str) -> ListView {
+        ListView { ou: ou.to_string(), sub: if nested { "1".into() } else { String::new() }, status: status.to_string() }
     }
 
     /// `""` for the default view, otherwise `?ou=…&sub=1&status=…`.
@@ -1146,14 +1169,18 @@ impl UsersView {
         if parts.is_empty() { String::new() } else { format!("?{}", parts.join("&")) }
     }
 
-    fn shows(&self, u: &ldap::LdapUser) -> bool {
-        let here = self.ou.is_empty()
+    /// Whether something in `container` is in this view's OU.
+    fn holds(&self, container: &str) -> bool {
+        self.ou.is_empty()
             || if self.nested() {
-                ldap::is_within(&u.container, &self.ou)
+                ldap::is_within(container, &self.ou)
             } else {
-                u.container.eq_ignore_ascii_case(&self.ou)
-            };
-        here && status_matches(u, self.status())
+                container.eq_ignore_ascii_case(&self.ou)
+            }
+    }
+
+    fn shows(&self, u: &ldap::LdapUser) -> bool {
+        self.holds(&u.container) && status_matches(u, self.status())
     }
 }
 
@@ -1188,37 +1215,48 @@ struct StatusLink {
     active: bool,
 }
 
-/// Everything the users page needs, from the full user list and the tree.
-/// A view of an OU that is not in the tree falls back to the whole domain.
-fn users_context(
-    ctx: &mut Context,
-    server: &Server,
+/// The view checked against the tree: the OU it shows (if any), and a message
+/// when it asked for one that is not there and fell back to the whole domain.
+fn resolve_view<'t>(
+    requested: &ListView,
     base_dn: &str,
-    all: &[ldap::LdapUser],
-    tree: &[ldap::UserContainer],
-    requested: &UsersView,
-) -> Option<String> {
+    tree: &'t [ldap::UserContainer],
+    what: &str,
+) -> (ListView, Option<&'t ldap::UserContainer>, Option<String>) {
     let mut view = requested.clone();
-    let mut error = None;
     if view.ou.eq_ignore_ascii_case(base_dn) {
         view.ou.clear();
     }
     let selected = tree.iter().find(|c| c.dn.eq_ignore_ascii_case(&view.ou));
-    if !view.ou.is_empty() && selected.is_none() {
-        error = Some(format!("{} is not an OU or container with users; showing the whole domain.", view.ou));
-        view.ou.clear();
+    let mut error = None;
+    match selected {
+        Some(c) => view.ou = c.dn.clone(),
+        None if !view.ou.is_empty() => {
+            error = Some(format!("{} is not an OU or container with {what}; showing the whole domain.", view.ou));
+            view.ou.clear();
+        }
+        None => {}
     }
-    if let Some(c) = selected {
-        view.ou = c.dn.clone();
-    }
-    let page = |v: &UsersView| format!("/servers/{}/users{}", server.id, v.query());
+    (view, selected, error)
+}
 
+/// The tree on the left and what goes with it, the same on the Users and
+/// Groups pages. `page` turns a view into its URL; `total` counts everything.
+fn insert_tree(
+    ctx: &mut Context,
+    page: &dyn Fn(&ListView) -> String,
+    base_dn: &str,
+    total: usize,
+    tree: &[ldap::UserContainer],
+    view: &ListView,
+    selected: Option<&ldap::UserContainer>,
+) {
     let mut links = vec![TreeLink {
         dn: String::new(),
         name: ldap::base_dn_to_domain(base_dn),
         depth: 0,
         is_ou: false,
-        count: all.len(),
+        count: total,
         href: page(&view.with("", view.nested(), view.status())),
         active: view.ou.is_empty(),
     }];
@@ -1231,6 +1269,33 @@ fn users_context(
         href: page(&view.with(&c.dn, view.nested(), view.status())),
         active: c.dn == view.ou,
     }));
+    ctx.insert("tree", &links);
+    ctx.insert("view_qs", &view.query());
+    ctx.insert("nested", &view.nested());
+    ctx.insert("nested_href", &page(&view.with(&view.ou, !view.nested(), view.status())));
+    // The OU's own name; a list that spans several shows where each entry is.
+    ctx.insert("selected", &selected.map(|c| c.name.clone()));
+    // Where Add creates: the OU shown, except Builtin, which holds only
+    // Windows' own groups; then the default container, Users.
+    let create_in = selected.filter(|c| !ldap::is_builtin_container(&c.dn, base_dn));
+    ctx.insert("create_in", &create_in.map(|c| c.name.clone()));
+    ctx.insert("show_location", &(view.ou.is_empty() || view.nested()));
+    ctx.insert("below", &selected.map_or(0, |c| c.total - c.direct));
+}
+
+/// Everything the users page needs, from the full user list and the tree.
+/// A view of an OU that is not in the tree falls back to the whole domain.
+fn users_context(
+    ctx: &mut Context,
+    server: &Server,
+    base_dn: &str,
+    all: &[ldap::LdapUser],
+    tree: &[ldap::UserContainer],
+    requested: &ListView,
+) -> Option<String> {
+    let (view, selected, error) = resolve_view(requested, base_dn, tree, "users");
+    let page = |v: &ListView| format!("/servers/{}/users{}", server.id, v.query());
+    insert_tree(ctx, &page, base_dn, all.len(), tree, &view, selected);
 
     let here = view.with(&view.ou, view.nested(), "all");
     let in_scope: Vec<&ldap::LdapUser> = all.iter().filter(|u| here.shows(u)).collect();
@@ -1248,16 +1313,27 @@ fn users_context(
 
     ctx.insert("users", &users);
     ctx.insert("directory", all);
-    ctx.insert("tree", &links);
     ctx.insert("statuses", &statuses);
     ctx.insert("status", view.status());
-    ctx.insert("view_qs", &view.query());
-    ctx.insert("nested", &view.nested());
-    ctx.insert("nested_href", &page(&view.with(&view.ou, !view.nested(), view.status())));
-    // The OU's own name; a user list that spans several shows where each user is.
-    ctx.insert("selected", &selected.map(|c| c.name.clone()));
-    ctx.insert("show_location", &(view.ou.is_empty() || view.nested()));
-    ctx.insert("below", &selected.map_or(0, |c| c.total - c.direct));
+    error
+}
+
+/// The groups page's list and tree; like [`users_context`], without statuses.
+fn groups_context(
+    ctx: &mut Context,
+    server: &Server,
+    base_dn: &str,
+    all: &[ldap::LdapGroup],
+    tree: &[ldap::UserContainer],
+    requested: &ListView,
+) -> Option<String> {
+    let (mut view, selected, error) = resolve_view(requested, base_dn, tree, "groups");
+    view.status.clear();
+    let page = |v: &ListView| format!("/servers/{}/groups{}", server.id, v.query());
+    insert_tree(ctx, &page, base_dn, all.len(), tree, &view, selected);
+    let groups: Vec<&ldap::LdapGroup> = all.iter().filter(|g| view.holds(&g.container)).collect();
+    ctx.insert("groups", &groups);
+    ctx.insert("any_groups", &!all.is_empty());
     error
 }
 
@@ -1265,7 +1341,7 @@ fn users_context(
 async fn render_users(
     state: &AppState,
     server: &Server,
-    view: &UsersView,
+    view: &ListView,
     flash_error: Option<String>,
 ) -> Response {
     let mut ctx = Context::new();
@@ -1274,7 +1350,8 @@ async fn render_users(
     let loaded: Result<_, String> = async {
         let (mut conn, base_dn) = ldap::open(server).await?;
         let users = ldap::list_users(&mut conn, &base_dn).await?;
-        let tree = ldap::list_user_containers(&mut conn, &base_dn, &users).await?;
+        let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
+        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in).await?;
         let groups = ldap::group_names(&mut conn, &base_dn).await?;
         Ok((base_dn, users, tree, groups))
     }
@@ -1300,7 +1377,7 @@ async fn render_users(
 async fn after_user_action(
     state: &AppState,
     server: &Server,
-    view: &UsersView,
+    view: &ListView,
     result: Result<(), String>,
 ) -> Response {
     match result {
@@ -1312,7 +1389,7 @@ async fn after_user_action(
 pub async fn users(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
 ) -> Response {
     match get_server(&state, id).await {
         None => redirect_home(),
@@ -1369,7 +1446,7 @@ pub async fn create_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path(id): Path<i64>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
     Form(form): Form<CreateUserForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1416,7 +1493,7 @@ pub async fn update_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
     Form(form): Form<UpdateUserForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1452,7 +1529,7 @@ pub async fn delete_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -1482,7 +1559,7 @@ pub async fn toggle_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
     Form(form): Form<ToggleForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1519,7 +1596,7 @@ pub async fn reset_password(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
     Form(form): Form<ResetPasswordForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1588,7 +1665,7 @@ pub async fn bulk_users(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path(id): Path<i64>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
     Form(form): Form<BulkUsersForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -1678,7 +1755,7 @@ pub async fn unlock_user(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, username)): Path<(i64, String)>,
-    Query(view): Query<UsersView>,
+    Query(view): Query<ListView>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -1844,7 +1921,7 @@ mod dns_zone_tests {
 
 #[cfg(test)]
 mod users_page_tests {
-    use super::{users_context, CreateUserForm, UpdateUserForm, UsersView};
+    use super::{users_context, CreateUserForm, UpdateUserForm, ListView};
     use crate::ldap::{self, LdapUser};
     use crate::models::Server;
     use tera::{Context, Tera};
@@ -1871,13 +1948,13 @@ mod users_page_tests {
     }
 
     /// The page as the handler builds it: the users, the tree they give, a view.
-    fn page(users: &[LdapUser], view: &UsersView, error: Option<&str>) -> (String, Option<String>) {
+    fn page(users: &[LdapUser], view: &ListView, error: Option<&str>) -> (String, Option<String>) {
         let found = vec![
             (format!("CN=Users,{BASE}"), false),
             (format!("OU=Sales,{BASE}"), true),
             (format!("OU=Europe,OU=Sales,{BASE}"), true),
         ];
-        let tree = ldap::user_tree(BASE, found, users);
+        let tree = tree_of(found, users);
         let mut c = Context::new();
         c.insert("server", &server());
         let fallback = users_context(&mut c, &server(), BASE, users, &tree, view);
@@ -1888,7 +1965,12 @@ mod users_page_tests {
     }
 
     fn render(users: &[LdapUser]) -> String {
-        page(users, &UsersView::default(), None).0
+        page(users, &ListView::default(), None).0
+    }
+
+    fn tree_of(found: Vec<(String, bool)>, users: &[LdapUser]) -> Vec<ldap::UserContainer> {
+        let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
+        ldap::container_tree(BASE, found, &objects_in)
     }
 
     fn user_in(name: &str, container: &str) -> LdapUser {
@@ -1907,8 +1989,8 @@ mod users_page_tests {
         user_in(name, "CN=Users")
     }
 
-    fn view(ou: &str, nested: bool, status: &str) -> UsersView {
-        UsersView {
+    fn view(ou: &str, nested: bool, status: &str) -> ListView {
+        ListView {
             ou: if ou.is_empty() { String::new() } else { format!("{ou},{BASE}") },
             sub: if nested { "1".into() } else { String::new() },
             status: status.into(),
@@ -1965,17 +2047,18 @@ mod users_page_tests {
             r#"<option value="OU=Europe,OU=Sales,DC=example,DC=com">&nbsp;&nbsp;&nbsp;Europe</option>"#
         ));
         assert!(!html.contains(r#"<option value="">"#));
-        assert!(html.contains(r#"data-user="carol" title="Move to another OU""#));
+        assert!(html.contains(r#"class="dropdown-item js-move-one"
+                                                data-user="carol""#), "{html}");
     }
 
     #[test]
     fn group_names_are_suggested() {
         let users = people();
-        let tree = ldap::user_tree(BASE, vec![], &users);
+        let tree = tree_of(vec![], &users);
         let mut c = Context::new();
         c.insert("server", &server());
         c.insert("group_names", &vec!["Domain Admins", "<Sales>"]);
-        users_context(&mut c, &server(), BASE, &users, &tree, &UsersView::default());
+        users_context(&mut c, &server(), BASE, &users, &tree, &ListView::default());
         let html = tera().render("users.html", &c).unwrap();
         assert!(html.contains(r#"<option value="Domain Admins">"#));
         assert!(html.contains(r#"<option value="&lt;Sales&gt;">"#), "escaped");
@@ -2045,13 +2128,13 @@ mod users_page_tests {
 
     #[test]
     fn the_view_survives_the_query_string() {
-        let v = UsersView { ou: format!("OU=Doe\\, J & Co+,{BASE}"), sub: "1".into(), status: "expired".into() };
-        let back: UsersView = serde_urlencoded::from_str(&v.query()[1..]).unwrap();
+        let v = ListView { ou: format!("OU=Doe\\, J & Co+,{BASE}"), sub: "1".into(), status: "expired".into() };
+        let back: ListView = serde_urlencoded::from_str(&v.query()[1..]).unwrap();
         assert_eq!(back.ou, v.ou);
         assert!(back.nested());
         assert_eq!(back.status(), "expired");
-        assert_eq!(UsersView::default().query(), "");
-        let odd = UsersView { status: "<script>".into(), ..Default::default() };
+        assert_eq!(ListView::default().query(), "");
+        let odd = ListView { status: "<script>".into(), ..Default::default() };
         assert_eq!(odd.query(), "", "an unknown status is just 'all'");
     }
 
@@ -2105,7 +2188,7 @@ mod users_page_tests {
     fn a_failure_is_shown_above_the_list() {
         let (html, _) = page(
             &[user("someone")],
-            &UsersView::default(),
+            &ListView::default(),
             Some("The password was not changed: the password does not meet the password policy"),
         );
         assert!(html.contains("alert-danger"));
@@ -2150,8 +2233,8 @@ mod users_page_tests {
 
 #[cfg(test)]
 mod groups_page_tests {
-    use super::{path_segment, AddMemberForm, UpdateGroupForm};
-    use crate::ldap::{GroupMember, LdapGroup};
+    use super::{groups_context, path_segment, AddMemberForm, ListView, UpdateGroupForm};
+    use crate::ldap::{self, GroupMember, LdapGroup};
     use crate::models::Server;
     use tera::{Context, Tera};
 
@@ -2185,7 +2268,89 @@ mod groups_page_tests {
             security: gt < 0,
             system,
             member_count: 0,
+            container: "CN=Users,DC=example,DC=com".to_string(),
+            location: "Users".to_string(),
         }
+    }
+
+    const BASE: &str = "DC=example,DC=com";
+
+    /// The groups page as the handler builds it, for a view.
+    fn groups_page(groups: &[LdapGroup], view: &ListView) -> (String, Option<String>) {
+        let found = vec![
+            (format!("CN=Users,{BASE}"), false),
+            (format!("CN=Builtin,{BASE}"), false),
+            (format!("OU=Sales,{BASE}"), true),
+            (format!("OU=Europe,OU=Sales,{BASE}"), true),
+        ];
+        let objects_in: Vec<&str> = groups.iter().map(|g| g.container.as_str()).collect();
+        let tree = ldap::container_tree(BASE, found, &objects_in);
+        let mut c = Context::new();
+        c.insert("server", &server());
+        let err = groups_context(&mut c, &server(), BASE, groups, &tree, view);
+        (tera().render("groups.html", &c).unwrap(), err)
+    }
+
+    fn group_in(name: &str, container: &str, location: &str) -> LdapGroup {
+        LdapGroup {
+            dn: format!("CN={name},{container},{BASE}"),
+            container: format!("{container},{BASE}"),
+            location: location.to_string(),
+            ..group(name, -2147483646, false)
+        }
+    }
+
+    fn listed(html: &str) -> Vec<String> {
+        html.split(r#"<i class="bi bi-people-fill me-1 text-secondary"></i>"#)
+            .skip(1)
+            .map(|s| s.split_whitespace().next().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    fn ou(ou: &str, nested: bool) -> ListView {
+        ListView { ou: format!("{ou},{BASE}"), sub: if nested { "1".into() } else { String::new() }, status: String::new() }
+    }
+
+    #[test]
+    fn groups_can_be_browsed_by_ou() {
+        let groups = vec![
+            group_in("Admins", "CN=Builtin", "Builtin"),
+            group_in("Sales", "OU=Sales", "Sales"),
+            group_in("EU", "OU=Europe,OU=Sales", "Sales › Europe"),
+        ];
+        let (html, _) = groups_page(&groups, &ListView::default());
+        assert_eq!(listed(&html), ["Admins", "Sales", "EU"]);
+        assert!(html.contains("Builtin"), "CN=Builtin is in the tree");
+        assert!(html.contains("bi-folder2 me-1\"></i>Sales › Europe</div>"), "location shown");
+
+        let (html, _) = groups_page(&groups, &ou("OU=Sales", false));
+        assert_eq!(listed(&html), ["Sales"]);
+        assert!(html.contains(r#"<span class="text-muted fw-normal">in Sales</span>"#));
+        // Actions come back here, and a new group is created here.
+        assert!(html.contains("/groups/Sales/edit?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom"));
+        assert!(html.contains("/groups/new?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom"));
+        assert!(html.contains("Created in\n                        <strong>Sales</strong>"));
+
+        // Builtin holds only Windows' own groups: new ones go to Users.
+        let (html, _) = groups_page(&groups, &ou("CN=Builtin", false));
+        assert_eq!(listed(&html), ["Admins"]);
+        assert!(html.contains("Created in\n                        <strong>Users</strong>"), "{html}");
+        assert!(crate::ldap::is_builtin_container("CN=Builtin,DC=example,DC=com", BASE));
+        assert!(!crate::ldap::is_builtin_container("CN=Builtin,OU=x,DC=example,DC=com", BASE));
+
+        let (html, _) = groups_page(&groups, &ou("OU=Sales", true));
+        assert_eq!(listed(&html), ["Sales", "EU"]);
+    }
+
+    #[test]
+    fn an_empty_ou_and_an_unknown_one() {
+        let groups = vec![group_in("EU", "OU=Europe,OU=Sales", "Sales › Europe")];
+        let (html, _) = groups_page(&groups, &ou("OU=Sales", false));
+        assert!(html.contains("No groups here"));
+        assert!(html.contains("to see the groups below it"));
+        let (html, err) = groups_page(&groups, &ou("OU=Gone", false));
+        assert!(err.unwrap().contains("not an OU or container with groups"));
+        assert_eq!(listed(&html), ["EU"]);
     }
 
     #[test]

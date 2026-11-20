@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Users - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
 <nav aria-label="breadcrumb" class="mb-4">
@@ -27,35 +28,9 @@
 {% endif %}
 
 <div class="row g-4">
-    {% if tree %}
-    <div class="col-lg-3">
-        <div class="card shadow-sm">
-            <div class="card-header bg-white small text-muted text-uppercase">OUs and containers</div>
-            <div class="list-group list-group-flush small" style="max-height: 70vh; overflow-y: auto;">
-                {% for node in tree %}
-                <a href="{{ node.href }}"
-                    class="list-group-item list-group-item-action d-flex align-items-center{% if node.active %} active{% endif %}"
-                    style="padding-left: {{ node.depth * 0.9 + 0.75 }}rem;"{% if node.active %} aria-current="true"{% endif %}>
-                    {% if node.depth == 0 %}<i class="bi bi-diagram-3 me-2"></i>
-                    {% elif node.is_ou %}<i class="bi bi-folder2{% if not node.active %} text-warning{% endif %} me-2"></i>
-                    {% else %}<i class="bi bi-folder{% if not node.active %} text-secondary{% endif %} me-2"></i>{% endif %}
-                    <span class="text-truncate">{{ node.name }}</span>
-                    <span class="badge rounded-pill {% if node.active %}bg-light text-dark{% else %}bg-secondary-subtle text-secondary{% endif %} ms-auto">{{ node.count }}</span>
-                </a>
-                {% endfor %}
-            </div>
-            {% if selected %}
-            <div class="card-footer bg-white small">
-                <a href="{{ nested_href }}" class="text-decoration-none">
-                    <i class="bi bi-{% if nested %}check-square{% else %}square{% endif %} me-1"></i>Include nested OUs
-                </a>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-    {% endif %}
+    {% include "ou_tree.html" %}
 
-    <div class="{% if tree %}col-lg-9{% else %}col-12{% endif %}">
+    <div class="{% if tree %}col-lg-9 col-xxl-10{% else %}col-12{% endif %}">
         {% if statuses %}
         <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
             <div class="btn-group btn-group-sm" role="group" aria-label="Filter by account status">
@@ -118,9 +93,8 @@
                                     aria-label="Select all users shown">
                             </th>
                             <th>Username</th>
-                            <th>Display Name</th>
+                            <th class="text-nowrap">Display name</th>
                             <th>Description</th>
-                            <th>Email</th>
                             <th>Status</th>
                             <th class="text-end">Actions</th>
                         </tr>
@@ -147,9 +121,9 @@
                                     {{ user.title }}{% if user.title and user.department %} · {% endif %}{{ user.department }}
                                 </div>
                                 {% endif %}
+                                {% if user.email %}<div class="small text-muted">{{ user.email }}</div>{% endif %}
                             </td>
                             <td class="small text-break">{{ user.description }}</td>
-                            <td class="text-muted small">{{ user.email }}</td>
                             <td>
                                 {% if user.enabled %}
                                 <span class="badge bg-success-subtle text-success border border-success-subtle">
@@ -209,18 +183,6 @@
                                         </button>
                                     </form>
                                     {% endif %}
-                                    <!-- Reset password button -->
-                                    <button type="button" class="btn btn-outline-primary btn-sm"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#resetModal{{ loop.index }}"
-                                        title="Reset password">
-                                        <i class="bi bi-key"></i>
-                                    </button>
-                                    <!-- Move button -->
-                                    <button type="button" class="btn btn-outline-secondary btn-sm js-move-one"
-                                        data-user="{{ user.username }}" title="Move to another OU">
-                                        <i class="bi bi-folder-symlink"></i>
-                                    </button>
                                     <!-- Edit button -->
                                     <button type="button" class="btn btn-outline-secondary btn-sm"
                                         data-bs-toggle="modal"
@@ -228,19 +190,33 @@
                                         title="Edit">
                                         <i class="bi bi-pencil"></i>
                                     </button>
-                                    <!-- Delete button -->
-                                    <button type="button" class="btn btn-outline-danger btn-sm"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#deleteModal{{ loop.index }}"
-                                        title="Delete">
-                                        <i class="bi bi-trash"></i>
-                                    </button>
+                                    <!-- The rest, in a menu: fixed positioning keeps it from
+                                         being cut off by the scrolling table. -->
+                                    <div class="btn-group btn-group-sm">
+                                        <button type="button" class="btn btn-outline-secondary btn-sm"
+                                            data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}'
+                                            aria-expanded="false" title="More actions" aria-label="More actions for {{ user.username }}">
+                                            <i class="bi bi-three-dots"></i>
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end">
+                                            <li><button type="button" class="dropdown-item" data-bs-toggle="modal"
+                                                data-bs-target="#resetModal{{ loop.index }}">
+                                                <i class="bi bi-key me-2"></i>Reset password</button></li>
+                                            <li><button type="button" class="dropdown-item js-move-one"
+                                                data-user="{{ user.username }}">
+                                                <i class="bi bi-folder-symlink me-2"></i>Move to another OU</button></li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal"
+                                                data-bs-target="#deleteModal{{ loop.index }}">
+                                                <i class="bi bi-trash me-2"></i>Delete</button></li>
+                                        </ul>
+                                    </div>
                                 </div>
                             </td>
                         </tr>
                         {% endfor %}
                         <tr id="noUserMatch" class="d-none">
-                            <td colspan="7" class="text-center text-muted py-4">No users match the search.</td>
+                            <td colspan="6" class="text-center text-muted py-4">No users match the search.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -266,8 +242,8 @@
                 <div class="modal-body">
                     <p class="small text-muted">
                         <i class="bi bi-folder2 me-1"></i>Created in
-                        <strong>{% if selected %}{{ selected }}{% else %}Users{% endif %}</strong>{% if not selected %},
-                        the default container. Pick an OU on the left to create the user there.{% endif %}
+                        <strong>{% if create_in %}{{ create_in }}{% else %}Users{% endif %}</strong>{% if not create_in %},
+                        the default container.{% if not selected %} Pick an OU on the left to create the user there.{% endif %}{% endif %}
                     </p>
                     <div class="mb-3">
                         <label class="form-label">Username <span class="text-danger">*</span></label>
