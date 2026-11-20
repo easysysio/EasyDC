@@ -48,9 +48,9 @@
                     <th class="text-end">Actions</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody data-paged="computers" data-search-input="listSearch">
                 {% for computer in computers %}
-                <tr class="js-search-row"
+                <tr
                     data-search="{{ computer.name }} {{ computer.dns_hostname }} {{ computer.os }} {{ computer.os_version }} {% if computer.enabled %}enabled{% else %}disabled{% endif %}">
                     <td class="fw-medium">
                         <i class="bi bi-pc-display me-1 text-secondary"></i>
@@ -109,7 +109,7 @@
                     </td>
                 </tr>
                 {% endfor %}
-                <tr id="noSearchMatch" class="d-none">
+                <tr class="js-no-match d-none">
                     <td colspan="6" class="text-center text-muted py-4">No computer matches the search.</td>
                 </tr>
             </tbody>
@@ -149,25 +149,5 @@
     </div>
 </div>
 {% endfor %}
-
-<script>
-// Narrow the list as you type; every word must appear somewhere in the row.
-const listSearch = document.getElementById('listSearch');
-if (listSearch) {
-    const rows = Array.from(document.querySelectorAll('.js-search-row'));
-    const none = document.getElementById('noSearchMatch');
-    listSearch.addEventListener('input', function () {
-        const words = this.value.toLowerCase().split(/\s+/).filter(Boolean);
-        let shown = 0;
-        rows.forEach(function (row) {
-            const text = row.dataset.search.toLowerCase();
-            const hit = words.every(w => text.includes(w));
-            row.classList.toggle('d-none', !hit);
-            if (hit) shown++;
-        });
-        none.classList.toggle('d-none', shown > 0);
-    });
-}
-</script>
 
 {% endblock %}

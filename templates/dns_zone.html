@@ -55,10 +55,10 @@
                     <th class="text-end" style="width:10%">Actions</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody data-paged="records" data-search-input="recordSearch">
                 {% for node in nodes %}
                 {% for record in node.records %}
-                <tr class="js-record-row" data-type="{{ record.record_type }}"
+                <tr data-type="{{ record.record_type }}"
                     data-search="{{ node.name }} {{ record.value }}">
                     <td class="fw-medium font-monospace">
                         {% if node.name == "@" %}
@@ -118,7 +118,7 @@
                 </tr>
                 {% endfor %}
                 {% endfor %}
-                <tr id="noRecordMatch" class="d-none">
+                <tr class="js-no-match d-none">
                     <td colspan="5" class="text-center text-muted py-4">No record matches.</td>
                 </tr>
             </tbody>
@@ -266,27 +266,16 @@ document.getElementById('editRecordModal').addEventListener('show.bs.modal', fun
     document.getElementById('editValueHint').textContent = valueHints[b.type] || '';
 });
 
-// Narrow the records by type and by text in the name or value.
-const recordSearch = document.getElementById('recordSearch');
-const recordType = document.getElementById('recordTypeFilter');
-if (recordSearch) {
-    const rows = Array.from(document.querySelectorAll('.js-record-row'));
-    const none = document.getElementById('noRecordMatch');
-    const filterRecords = function () {
-        const q = recordSearch.value.trim().toLowerCase();
+// Show one record type; the search box is handled with the pages.
+EasyTable.ready(function () {
+    const records = EasyTable.get('records');
+    const recordType = document.getElementById('recordTypeFilter');
+    if (!records || !recordType) return;
+    recordType.addEventListener('change', function () {
         const type = recordType.value;
-        let shown = 0;
-        rows.forEach(function (row) {
-            const hit = (!type || row.dataset.type === type)
-                && row.dataset.search.toLowerCase().includes(q);
-            row.classList.toggle('d-none', !hit);
-            if (hit) shown++;
-        });
-        none.classList.toggle('d-none', shown > 0);
-    };
-    recordSearch.addEventListener('input', filterRecords);
-    recordType.addEventListener('change', filterRecords);
-}
+        records.setFilter('type', type ? row => row.dataset.type === type : null);
+    });
+});
 
 // Delete confirmations read their text from data-confirm, never from script.
 document.querySelectorAll('form[data-confirm]').forEach(function (form) {

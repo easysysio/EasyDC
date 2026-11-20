@@ -75,6 +75,7 @@
                     data-bs-target="#addToGroupModal">
                     <i class="bi bi-people me-1"></i>Add to group…
                 </button>
+                <button type="button" class="btn btn-sm btn-link d-none" id="selectMatching"></button>
                 <button type="button" class="btn btn-sm btn-link ms-auto" id="bulkClear">Clear selection</button>
             </div>
         </div>
@@ -90,7 +91,7 @@
                         <tr>
                             <th style="width: 2rem;">
                                 <input type="checkbox" class="form-check-input" id="selectAll"
-                                    aria-label="Select all users shown">
+                                    aria-label="Select the users on this page">
                             </th>
                             <th>Username</th>
                             <th class="text-nowrap">Display name</th>
@@ -99,123 +100,34 @@
                             <th class="text-end">Actions</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody data-paged="users" data-search-input="userSearch">
+                        {#- A domain can hold thousands of users, so each row is kept short:
+                            no indentation, and the dialogs are shared and filled from data-*. #}
                         {% for user in users %}
-                        <tr class="js-user-row"
-                            data-search="{{ user.username }} {{ user.display_name }} {{ user.description }} {{ user.email }} {{ user.title }} {{ user.department }}">
-                            <td>
-                                <input type="checkbox" class="form-check-input js-select" value="{{ user.username }}"
-                                    aria-label="Select {{ user.username }}">
-                            </td>
-                            <td class="fw-medium">
-                                <i class="bi bi-person-circle me-1 text-secondary"></i>
-                                {{ user.username }}
-                                {% if show_location and user.location %}
-                                <div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ user.location }}</div>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {{ user.display_name }}
-                                {% if user.title or user.department %}
-                                <div class="small text-muted">
-                                    {{ user.title }}{% if user.title and user.department %} · {% endif %}{{ user.department }}
-                                </div>
-                                {% endif %}
-                                {% if user.email %}<div class="small text-muted">{{ user.email }}</div>{% endif %}
-                            </td>
-                            <td class="small text-break">{{ user.description }}</td>
-                            <td>
-                                {% if user.enabled %}
-                                <span class="badge bg-success-subtle text-success border border-success-subtle">
-                                    <i class="bi bi-check-circle me-1"></i>Enabled
-                                </span>
-                                {% else %}
-                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
-                                    <i class="bi bi-x-circle me-1"></i>Disabled
-                                </span>
-                                {% endif %}
-                                {% if user.locked %}
-                                <span class="badge bg-warning-subtle text-warning border border-warning-subtle"
-                                    title="{{ user.bad_pwd_count }} bad password attempts">
-                                    <i class="bi bi-lock-fill me-1"></i>Locked
-                                </span>
-                                {% endif %}
-                                {% if user.expired %}
-                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle"
-                                    title="The account could be used until the end of {{ user.expires }} (UTC)">
-                                    <i class="bi bi-calendar-x me-1"></i>Expired
-                                </span>
-                                {% elif user.expires %}
-                                <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle"
-                                    title="The account can be used until the end of this day (UTC)">
-                                    <i class="bi bi-calendar-event me-1"></i>Until {{ user.expires }}
-                                </span>
-                                {% endif %}
-                            </td>
-                            <td class="text-end">
-                                <div class="btn-group btn-group-sm">
-                                    <!-- Toggle button -->
-                                    <form method="post"
-                                        action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/toggle{{ view_qs }}"
-                                        class="d-inline">
-                                        {% if user.enabled %}
-                                        <input type="hidden" name="enable" value="false">
-                                        <button type="submit" class="btn btn-outline-warning btn-sm"
-                                            title="Disable account">
-                                            <i class="bi bi-pause-circle"></i>
-                                        </button>
-                                        {% else %}
-                                        <input type="hidden" name="enable" value="true">
-                                        <button type="submit" class="btn btn-outline-success btn-sm"
-                                            title="Enable account">
-                                            <i class="bi bi-play-circle"></i>
-                                        </button>
-                                        {% endif %}
-                                    </form>
-                                    <!-- Unlock button (only when locked) -->
-                                    {% if user.locked %}
-                                    <form method="post"
-                                        action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/unlock{{ view_qs }}"
-                                        class="d-inline">
-                                        <button type="submit" class="btn btn-outline-warning btn-sm"
-                                            title="Unlock account">
-                                            <i class="bi bi-unlock"></i>
-                                        </button>
-                                    </form>
-                                    {% endif %}
-                                    <!-- Edit button -->
-                                    <button type="button" class="btn btn-outline-secondary btn-sm"
-                                        data-bs-toggle="modal"
-                                        data-bs-target="#editModal{{ loop.index }}"
-                                        title="Edit">
-                                        <i class="bi bi-pencil"></i>
-                                    </button>
-                                    <!-- The rest, in a menu: fixed positioning keeps it from
-                                         being cut off by the scrolling table. -->
-                                    <div class="btn-group btn-group-sm">
-                                        <button type="button" class="btn btn-outline-secondary btn-sm"
-                                            data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}'
-                                            aria-expanded="false" title="More actions" aria-label="More actions for {{ user.username }}">
-                                            <i class="bi bi-three-dots"></i>
-                                        </button>
-                                        <ul class="dropdown-menu dropdown-menu-end">
-                                            <li><button type="button" class="dropdown-item" data-bs-toggle="modal"
-                                                data-bs-target="#resetModal{{ loop.index }}">
-                                                <i class="bi bi-key me-2"></i>Reset password</button></li>
-                                            <li><button type="button" class="dropdown-item js-move-one"
-                                                data-user="{{ user.username }}">
-                                                <i class="bi bi-folder-symlink me-2"></i>Move to another OU</button></li>
-                                            <li><hr class="dropdown-divider"></li>
-                                            <li><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal"
-                                                data-bs-target="#deleteModal{{ loop.index }}">
-                                                <i class="bi bi-trash me-2"></i>Delete</button></li>
-                                        </ul>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
+<tr data-search="{{ user.username }} {{ user.display_name }} {{ user.description }} {{ user.email }} {{ user.title }} {{ user.department }}" data-user="{{ user.username }}" data-first="{{ user.first_name }}" data-last="{{ user.last_name }}" data-email="{{ user.email }}" data-description="{{ user.description }}" data-title="{{ user.title }}" data-department="{{ user.department }}" data-office="{{ user.office }}" data-manager="{{ user.manager }}" data-phone="{{ user.phone }}" data-mobile="{{ user.mobile }}" data-expires="{{ user.expires }}">
+<td><input type="checkbox" class="form-check-input js-select" value="{{ user.username }}" aria-label="Select {{ user.username }}"></td>
+<td class="fw-medium"><i class="bi bi-person-circle me-1 text-secondary"></i>{{ user.username }}
+{% if show_location and user.location %}<div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ user.location }}</div>{% endif %}</td>
+<td>{{ user.display_name }}
+{% if user.title or user.department %}<div class="small text-muted">{{ user.title }}{% if user.title and user.department %} · {% endif %}{{ user.department }}</div>{% endif %}
+{% if user.email %}<div class="small text-muted">{{ user.email }}</div>{% endif %}</td>
+<td class="small text-break">{{ user.description }}</td>
+<td>{% if user.enabled %}<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle me-1"></i>Enabled</span>
+{% else %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle"><i class="bi bi-x-circle me-1"></i>Disabled</span>
+{% endif %}{% if user.locked %}<span class="badge bg-warning-subtle text-warning border border-warning-subtle" title="{{ user.bad_pwd_count }} bad password attempts"><i class="bi bi-lock-fill me-1"></i>Locked</span>
+{% endif %}{% if user.expired %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle" title="The account could be used until the end of {{ user.expires }} (UTC)"><i class="bi bi-calendar-x me-1"></i>Expired</span>
+{% elif user.expires %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle" title="The account can be used until the end of this day (UTC)"><i class="bi bi-calendar-event me-1"></i>Until {{ user.expires }}</span>
+{% endif %}</td>
+<td class="text-end"><div class="btn-group btn-group-sm">
+<form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/toggle{{ view_qs }}" class="d-inline">{% if user.enabled %}<input type="hidden" name="enable" value="false"><button type="submit" class="btn btn-outline-warning btn-sm" title="Disable account"><i class="bi bi-pause-circle"></i></button>{% else %}<input type="hidden" name="enable" value="true"><button type="submit" class="btn btn-outline-success btn-sm" title="Enable account"><i class="bi bi-play-circle"></i></button>{% endif %}</form>
+{% if user.locked %}<form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/unlock{{ view_qs }}" class="d-inline"><button type="submit" class="btn btn-outline-warning btn-sm" title="Unlock account"><i class="bi bi-unlock"></i></button></form>
+{% endif %}<button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#editUserModal" title="Edit"><i class="bi bi-pencil"></i></button>
+<div class="btn-group btn-group-sm"><button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="More actions" aria-label="More actions for {{ user.username }}"><i class="bi bi-three-dots"></i></button>
+<ul class="dropdown-menu dropdown-menu-end"><li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#resetUserModal"><i class="bi bi-key me-2"></i>Reset password</button></li><li><button type="button" class="dropdown-item js-move-one"><i class="bi bi-folder-symlink me-2"></i>Move to another OU</button></li><li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#deleteUserModal"><i class="bi bi-trash me-2"></i>Delete</button></li></ul></div>
+</div></td>
+</tr>
                         {% endfor %}
-                        <tr id="noUserMatch" class="d-none">
+                        <tr class="js-no-match d-none">
                             <td colspan="6" class="text-center text-muted py-4">No users match the search.</td>
                         </tr>
                     </tbody>
@@ -372,42 +284,36 @@
     </div>
 </div>
 
-<!-- ── Per-user Edit and Delete Modals ───────────────────────────────────── -->
-{% for user in users %}
-
-<div class="modal fade" id="editModal{{ loop.index }}" tabindex="-1">
+<!-- ── Edit, Reset password and Delete: one of each, filled from the row ── -->
+<div id="userActions" data-base="/servers/{{ server.id }}/users/" data-qs="{{ view_qs }}">
+<div class="modal fade" id="editUserModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-pencil me-1"></i> Edit — {{ user.username }}
+                    <i class="bi bi-pencil me-1"></i> Edit — <span class="js-who"></span>
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post"
-                action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/edit{{ view_qs }}">
+            <form method="post" data-path="edit">
                 <div class="modal-body">
                     <div class="row">
                         <div class="col mb-3">
                             <label class="form-label">First Name</label>
-                            <input type="text" name="first_name" class="form-control"
-                                value="{{ user.first_name }}">
+                            <input type="text" name="first_name" class="form-control">
                         </div>
                         <div class="col mb-3">
                             <label class="form-label">Last Name</label>
-                            <input type="text" name="last_name" class="form-control"
-                                value="{{ user.last_name }}">
+                            <input type="text" name="last_name" class="form-control">
                         </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Email</label>
-                        <input type="email" name="email" class="form-control"
-                            value="{{ user.email }}">
+                        <input type="email" name="email" class="form-control">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Description</label>
-                        <input type="text" name="description" class="form-control" maxlength="1024"
-                            value="{{ user.description }}">
+                        <input type="text" name="description" class="form-control" maxlength="1024">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">New Password</label>
@@ -418,43 +324,37 @@
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Job Title</label>
-                            <input type="text" name="title" class="form-control" maxlength="128"
-                                value="{{ user.title }}">
+                            <input type="text" name="title" class="form-control" maxlength="128">
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Department</label>
-                            <input type="text" name="department" class="form-control" maxlength="64"
-                                value="{{ user.department }}">
+                            <input type="text" name="department" class="form-control" maxlength="64">
                         </div>
                     </div>
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Office</label>
-                            <input type="text" name="office" class="form-control" maxlength="128"
-                                value="{{ user.office }}">
+                            <input type="text" name="office" class="form-control" maxlength="128">
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Manager</label>
                             <input type="text" name="manager" class="form-control" list="userDirectory"
-                                placeholder="Username" value="{{ user.manager }}">
+                                placeholder="Username">
                         </div>
                     </div>
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Phone</label>
-                            <input type="tel" name="phone" class="form-control" maxlength="64"
-                                value="{{ user.phone }}">
+                            <input type="tel" name="phone" class="form-control" maxlength="64">
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Mobile</label>
-                            <input type="tel" name="mobile" class="form-control" maxlength="64"
-                                value="{{ user.mobile }}">
+                            <input type="tel" name="mobile" class="form-control" maxlength="64">
                         </div>
                     </div>
                     <div class="mb-1">
                         <label class="form-label">Account Expires</label>
-                        <input type="date" name="expires" class="form-control w-auto"
-                            value="{{ user.expires }}">
+                        <input type="date" name="expires" class="form-control w-auto">
                         <div class="form-text">
                             Leave blank for never. The account can be used until the end of this day (UTC).
                         </div>
@@ -469,17 +369,16 @@
     </div>
 </div>
 
-<div class="modal fade" id="resetModal{{ loop.index }}" tabindex="-1">
+<div class="modal fade" id="resetUserModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-key me-1"></i> Reset Password — {{ user.username }}
+                    <i class="bi bi-key me-1"></i> Reset Password — <span class="js-who"></span>
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post"
-                action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/reset-password{{ view_qs }}">
+            <form method="post" data-path="reset-password">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">New Password <span class="text-danger">*</span></label>
@@ -488,8 +387,8 @@
                     </div>
                     <div class="form-check">
                         <input type="checkbox" name="force_change" class="form-check-input"
-                            id="forceChange{{ loop.index }}" checked>
-                        <label class="form-check-label" for="forceChange{{ loop.index }}">
+                            id="forceChange" checked>
+                        <label class="form-check-label" for="forceChange">
                             User must change password at next logon
                         </label>
                     </div>
@@ -503,7 +402,7 @@
     </div>
 </div>
 
-<div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1">
+<div class="modal fade" id="deleteUserModal" tabindex="-1">
     <div class="modal-dialog modal-sm">
         <div class="modal-content">
             <div class="modal-header">
@@ -513,15 +412,13 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                Permanently delete <strong>{{ user.username }}</strong>?
+                Permanently delete <strong class="js-who"></strong>?
                 This cannot be undone.
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm"
                     data-bs-dismiss="modal">Cancel</button>
-                <form method="post"
-                    action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/delete{{ view_qs }}"
-                    class="d-inline">
+                <form method="post" data-path="delete" class="d-inline">
                     <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
             </div>
@@ -529,79 +426,94 @@
     </div>
 </div>
 
-{% endfor %}
+</div>
 
 <script>
-// Narrow the list as you type: name, description, email, title, department.
-const userSearch = document.getElementById('userSearch');
-if (userSearch) {
-    const rows = Array.from(document.querySelectorAll('.js-user-row'));
-    const none = document.getElementById('noUserMatch');
-    userSearch.addEventListener('input', function () {
-        const words = this.value.toLowerCase().split(/\s+/).filter(Boolean);
-        let shown = 0;
-        rows.forEach(function (row) {
-            const text = row.dataset.search.toLowerCase();
-            const hit = words.every(w => text.includes(w));
-            row.classList.toggle('d-none', !hit);
-            if (hit) shown++;
-        });
-        if (none) none.classList.toggle('d-none', shown > 0 || rows.length === 0);
-        // A row the search hides is no longer selected: an action only ever
-        // touches users you can see.
-        rows.forEach(function (row) {
-            const box = row.querySelector('.js-select');
-            if (box && row.classList.contains('d-none')) box.checked = false;
-        });
-        updateBulk();
+// The path of an action on one user. Dots are encoded too, so a name can
+// never read as "." or ".." in the URL.
+const userActions = document.getElementById('userActions');
+function userUrl(user, path) {
+    const name = encodeURIComponent(user).replace(/[.!'()*~]/g,
+        c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+    return userActions.dataset.base + name + '/' + path + userActions.dataset.qs;
+}
+
+// Edit, Reset password and Delete are one dialog each, filled from the row
+// whose button opened it.
+const editFields = {
+    first_name: 'first', last_name: 'last', email: 'email', description: 'description',
+    title: 'title', department: 'department', office: 'office', manager: 'manager',
+    phone: 'phone', mobile: 'mobile', expires: 'expires',
+};
+userActions.querySelectorAll('.modal').forEach(function (modal) {
+    modal.addEventListener('show.bs.modal', function (event) {
+        const row = event.relatedTarget && event.relatedTarget.closest('tr');
+        if (!row) return event.preventDefault();
+        const data = row.dataset;
+        modal.querySelectorAll('.js-who').forEach(e => { e.textContent = data.user; });
+        const form = modal.querySelector('form');
+        form.reset();
+        form.action = userUrl(data.user, form.dataset.path);
+        if (form.dataset.path === 'edit') {
+            Object.entries(editFields).forEach(([name, key]) => { form.elements[name].value = data[key] || ''; });
+        }
     });
-}
+});
 
-// Select users, then act on all of them at once.
-const boxes = Array.from(document.querySelectorAll('.js-select'));
-const selectAll = document.getElementById('selectAll');
-const bulkBar = document.getElementById('bulkBar');
-const bulkForm = document.getElementById('bulkForm');
-let moveUsers = [];
+// Select users, then act on all of them at once. Selected users stay
+// selected from page to page; the search unselects the ones it hides, so
+// an action only ever touches users that match what is on screen.
+EasyTable.ready(function () {
+    const list = EasyTable.get('users');
+    const bulkBar = document.getElementById('bulkBar');
+    if (!list || !bulkBar) return;
+    const box = row => row.querySelector('.js-select');
+    const selectAll = document.getElementById('selectAll');
+    const bulkForm = document.getElementById('bulkForm');
+    const everyone = document.getElementById('selectMatching');
+    let moveUsers = [];
 
-function selected() {
-    return boxes.filter(b => b.checked).map(b => b.value);
-}
+    const selected = () => list.rows.filter(r => box(r).checked).map(r => r.dataset.user);
+    const countText = n => n === 1 ? '1 user' : n.toLocaleString() + ' users';
 
-function countText(n) {
-    return n === 1 ? '1 user' : n + ' users';
-}
+    function update() {
+        const n = selected().length;
+        bulkBar.classList.toggle('d-none', n === 0);
+        document.getElementById('bulkCount').textContent = n.toLocaleString();
+        document.querySelectorAll('.js-bulk-count').forEach(e => { e.textContent = countText(n); });
+        const page = list.shown.map(box);
+        selectAll.checked = page.length > 0 && page.every(b => b.checked);
+        selectAll.indeterminate = !selectAll.checked && page.some(b => b.checked);
+        const more = list.matching.length;
+        everyone.classList.toggle('d-none', !selectAll.checked || n >= more);
+        everyone.textContent = 'Select all ' + countText(more);
+    }
 
-function updateBulk() {
-    if (!bulkBar) return;
-    const n = selected().length;
-    bulkBar.classList.toggle('d-none', n === 0);
-    document.getElementById('bulkCount').textContent = n;
-    document.querySelectorAll('.js-bulk-count').forEach(e => { e.textContent = countText(n); });
-    const shown = boxes.filter(b => !b.closest('tr').classList.contains('d-none'));
-    selectAll.checked = shown.length > 0 && shown.every(b => b.checked);
-    selectAll.indeterminate = n > 0 && !selectAll.checked;
-}
-
-function submitBulk(action, users, target) {
-    bulkForm.elements.action.value = action;
-    bulkForm.elements.users.value = users.join('\n');
-    bulkForm.elements.target.value = target || '';
-    bulkForm.submit();
-}
-
-if (bulkBar) {
-    boxes.forEach(b => b.addEventListener('change', updateBulk));
+    list.on(function () {
+        const keep = new Set(list.matching);
+        list.rows.forEach(r => { if (!keep.has(r)) box(r).checked = false; });
+        update();
+    });
+    list.body.addEventListener('change', e => { if (e.target.classList.contains('js-select')) update(); });
     selectAll.addEventListener('change', function () {
-        boxes.forEach(function (b) {
-            if (!b.closest('tr').classList.contains('d-none')) b.checked = selectAll.checked;
-        });
-        updateBulk();
+        list.shown.forEach(r => { box(r).checked = selectAll.checked; });
+        update();
+    });
+    everyone.addEventListener('click', function () {
+        list.matching.forEach(r => { box(r).checked = true; });
+        update();
     });
     document.getElementById('bulkClear').addEventListener('click', function () {
-        boxes.forEach(b => { b.checked = false; });
-        updateBulk();
+        list.rows.forEach(r => { box(r).checked = false; });
+        update();
     });
+
+    function submitBulk(action, users, target) {
+        bulkForm.elements.action.value = action;
+        bulkForm.elements.users.value = users.join('\n');
+        bulkForm.elements.target.value = target || '';
+        bulkForm.requestSubmit();
+    }
     document.querySelectorAll('.js-bulk').forEach(function (button) {
         button.addEventListener('click', function () {
             const users = selected();
@@ -611,15 +523,15 @@ if (bulkBar) {
         });
     });
 
-    // Bootstrap loads after this script, so the dialog is looked up on click.
     function openMove(users) {
         moveUsers = users;
         document.getElementById('moveWho').textContent = users.length === 1 ? users[0] : countText(users.length);
         bootstrap.Modal.getOrCreateInstance(document.getElementById('moveModal')).show();
     }
     document.querySelector('.js-bulk-move').addEventListener('click', () => openMove(selected()));
-    document.querySelectorAll('.js-move-one').forEach(function (button) {
-        button.addEventListener('click', () => openMove([button.dataset.user]));
+    list.body.addEventListener('click', function (e) {
+        const one = e.target.closest('.js-move-one');
+        if (one) openMove([one.closest('tr').dataset.user]);
     });
     document.getElementById('moveGo').addEventListener('click', function () {
         submitBulk('move', moveUsers, document.getElementById('moveTarget').value);
@@ -628,7 +540,8 @@ if (bulkBar) {
         const group = document.getElementById('groupTarget').value.trim();
         if (group) submitBulk('add_to_group', selected(), group);
     });
-}
+    update();
+});
 </script>
 
 {% endblock %}

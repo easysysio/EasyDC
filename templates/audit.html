@@ -14,7 +14,7 @@
         <h4 class="mb-0"><i class="bi bi-journal-text me-2 text-primary"></i>Audit Log</h4>
         <small class="text-muted">Most recent 500 actions, newest first</small>
     </div>
-    <input type="text" id="auditFilter" class="form-control form-control-sm" style="width:16rem"
+    <input type="search" id="auditFilter" class="form-control form-control-sm" style="width:16rem"
         placeholder="Filter by actor, action, target…">
 </div>
 
@@ -37,7 +37,7 @@
                     <th style="width:8%">Result</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody data-paged="audit" data-search-input="auditFilter">
                 {% for e in entries %}
                 <tr>
                     <td class="text-muted small ts" data-ts="{{ e.ts }}">{{ e.ts }}</td>
@@ -61,6 +61,9 @@
                     </td>
                 </tr>
                 {% endfor %}
+                <tr class="js-no-match d-none">
+                    <td colspan="6" class="text-center text-muted py-4">No action matches.</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -75,17 +78,6 @@ document.querySelectorAll('.ts').forEach(function (el) {
         el.textContent = new Date(ts * 1000).toLocaleString();
     }
 });
-
-// Simple client-side row filter.
-const filter = document.getElementById('auditFilter');
-if (filter) {
-    filter.addEventListener('input', function () {
-        const q = this.value.toLowerCase();
-        document.querySelectorAll('#auditTable tbody tr').forEach(function (row) {
-            row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
-        });
-    });
-}
 </script>
 
 {% endblock %}

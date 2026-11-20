@@ -2047,8 +2047,20 @@ mod users_page_tests {
             r#"<option value="OU=Europe,OU=Sales,DC=example,DC=com">&nbsp;&nbsp;&nbsp;Europe</option>"#
         ));
         assert!(!html.contains(r#"<option value="">"#));
-        assert!(html.contains(r#"class="dropdown-item js-move-one"
-                                                data-user="carol""#), "{html}");
+        assert!(html.contains(r#"data-user="carol""#), "{html}");
+        assert!(html.contains(r#"class="dropdown-item js-move-one""#));
+    }
+
+    #[test]
+    fn one_set_of_dialogs_for_any_number_of_users() {
+        let html = render(&people());
+        // The list is paged and searched in the browser.
+        assert!(html.contains(r#"<tbody data-paged="users" data-search-input="userSearch">"#));
+        // Edit, Reset password and Delete exist once, not once per user.
+        for id in ["editUserModal", "resetUserModal", "deleteUserModal"] {
+            assert_eq!(html.matches(&format!(r#"id="{id}""#)).count(), 1, "{id}");
+        }
+        assert!(!html.contains("editModal1"));
     }
 
     #[test]
@@ -2113,7 +2125,8 @@ mod users_page_tests {
         // Links to other OUs keep "nested" and the status filter.
         assert!(html.contains("ou=OU%3DEurope%2COU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1&amp;status=disabled"), "{html}");
         // An action comes back to the same view.
-        assert!(html.contains("/users/carol/edit?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1&amp;status=disabled"));
+        assert!(html.contains(r#"data-qs="?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1&amp;status=disabled""#), "{html}");
+        assert!(html.contains("/toggle?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1&amp;status=disabled"));
         // And a new user is created in the OU being shown.
         assert!(html.contains("/users/new?ou=OU%3DSales"));
         assert!(html.contains("Created in\n                        <strong>Sales</strong>"));
@@ -2144,8 +2157,7 @@ mod users_page_tests {
         u.description = "Иван Петров".into();
         let html = render(&[u]);
         assert!(html.contains(r#"<td class="small text-break">Иван Петров</td>"#));
-        assert!(html.contains(r#"maxlength="1024"
-                            value="Иван Петров""#));
+        assert!(html.contains(r#"data-description="Иван Петров""#));
         let f: UpdateUserForm =
             serde_urlencoded::from_str("first_name=&last_name=&email=&password=&description=+Ivan+").unwrap();
         assert_eq!(f.profile.as_profile().description, "Ivan");
@@ -2176,9 +2188,8 @@ mod users_page_tests {
         assert!(html.contains("Consultant · IT"));
         assert!(html.contains("Until 2026-12-31"));
         assert!(html.contains("Expired"));
-        assert!(html.contains(r#"name="expires" class="form-control w-auto"
-                            value="2026-12-31""#));
-        assert!(html.contains(r#"value="boss">"#), "manager prefilled");
+        assert!(html.contains(r#"data-expires="2026-12-31""#));
+        assert!(html.contains(r#"data-manager="boss""#), "manager prefilled");
         // One shared list of usernames for the manager field, not one per user.
         assert_eq!(html.matches(r#"<datalist id="userDirectory">"#).count(), 1);
         assert!(html.contains(r#"<option value="boss">boss</option>"#));

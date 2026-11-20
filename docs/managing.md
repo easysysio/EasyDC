@@ -15,8 +15,9 @@ Above the list, **All / Enabled / Disabled / Locked / Expired** filter by accoun
 with a count for each, and the search box narrows the list as you type: it looks in the
 username, display name, description, email, job title and department.
 
-**Several users at once:** tick the users (the box in the header ticks every user shown),
-and a bar appears to **enable**, **disable**, **move** them to another OU or container, or
+**Several users at once:** tick the users (the box in the header ticks the page; then
+**Select all** in the bar picks every user that matches the search and filter), and a bar
+appears to **enable**, **disable**, **move** them to another OU or container, or
 **add them to a group**. If some of them fail, the page says which and why; the others
 are done. Each user's change is a separate line in the audit log.
 
@@ -73,12 +74,17 @@ looking at, or in `Users` when the whole domain or `Builtin` is shown.
 
 When an action is refused, the reason is shown on the page and recorded in the audit log.
 
-## Search
+## Search and pages
 
 Every list (users, groups and a group's members, computers, DNS zones and records,
-Group Policy Objects and OUs) has a search box that narrows it as you type. It
-looks in the columns shown, such as name, description, type, hostname or GUID; with
-several words, a row must contain all of them.
+Group Policy Objects, OUs and the audit log) has a search box that narrows it as you
+type. It looks in the columns shown, such as name, description, type, hostname or GUID;
+with several words, a row must contain all of them.
+
+A list longer than 25 rows is shown a page at a time, with the page numbers and a choice
+of 25, 50, 100 or 250 rows per page under it; your choice is kept for every list. The
+search covers the whole list, not just the page shown. After an action, such as disabling
+a user, the list comes back on the same page with the same search.
 
 ## Computers
 

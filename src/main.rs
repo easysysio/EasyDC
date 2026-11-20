@@ -149,9 +149,12 @@ async fn main() {
             auth::require_auth,
         ));
 
+    // Lists of thousands of users are large HTML pages that shrink about
+    // twenty-fold with gzip.
     let app = Router::new()
         .merge(public)
         .merge(protected)
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);

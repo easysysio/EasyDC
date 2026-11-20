@@ -77,9 +77,9 @@
                     <th class="text-end">Actions</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody data-paged="zones" data-search-input="zoneSearch">
                 {% for zone in zones %}
-                <tr class="js-filter-row" data-search="{{ zone.name }}">
+                <tr data-search="{{ zone.name }}">
                     <td>
                         <i class="bi bi-globe2 me-1 text-warning"></i>
                         <strong>{{ zone.name }}</strong>
@@ -141,23 +141,6 @@ if (zoneInput) {
     reverseCheck.addEventListener('change', updateHelp);
     zoneInput.addEventListener('input', updateHelp);
     updateHelp();
-}
-
-// Narrow the zone list as you type.
-const zoneSearch = document.getElementById('zoneSearch');
-if (zoneSearch) {
-    const rows = Array.from(document.querySelectorAll('.js-filter-row'));
-    const none = document.querySelector('.js-no-match');
-    zoneSearch.addEventListener('input', function () {
-        const q = this.value.trim().toLowerCase();
-        let shown = 0;
-        rows.forEach(function (row) {
-            const hit = row.dataset.search.toLowerCase().includes(q);
-            row.classList.toggle('d-none', !hit);
-            if (hit) shown++;
-        });
-        none.classList.toggle('d-none', shown > 0);
-    });
 }
 
 // Deleting a zone destroys every record in it, and the DNS server keeps

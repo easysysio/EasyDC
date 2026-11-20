@@ -11,6 +11,187 @@
         .hover-card:hover { border-color: #0d6efd !important; box-shadow: 0 0.5rem 1rem rgba(0,0,0,.15) !important; }
         .card { transition: all 0.2s ease; }
     </style>
+    <script>
+    // Long lists, a page at a time. A <tbody data-paged="name"> gets a pager
+    // under its table; its rows are searched by their data-search text (or
+    // their text), from the box named by data-search-input. Pages add their
+    // own filters with EasyTable.ready(), and the search and page survive a
+    // form submitted from the page, so an action brings you back to the same
+    // place.
+    window.EasyTable = (function () {
+        'use strict';
+        const SIZES = [25, 50, 100, 250];
+        const tables = {};
+        const waiting = [];
+        let saved = {};
+
+        function pageSize() {
+            try {
+                const n = parseInt(localStorage.getItem('easydc.pageSize'), 10);
+                if (SIZES.includes(n)) return n;
+            } catch (e) { /* storage blocked: use the default */ }
+            return 50;
+        }
+
+        function number(n) { return n.toLocaleString(); }
+
+        function Table(body) {
+            const t = this;
+            t.key = body.dataset.paged;
+            t.body = body;
+            t.none = body.querySelector(':scope > tr.js-no-match');
+            t.rows = Array.from(body.rows).filter(r => r !== t.none);
+            t.text = new Map(t.rows.map(r => [r, (r.dataset.search || r.textContent).toLowerCase()]));
+            t.filters = {};
+            t.listeners = [];
+            t.matching = t.rows;
+            t.shown = t.rows;
+            t.page = 1;
+            t.size = pageSize();
+            t.search = document.getElementById(body.dataset.searchInput || '');
+
+            const card = body.closest('.card');
+            const after = body.closest('.table-responsive') || body.closest('table');
+            const bar = document.createElement('div');
+            bar.className = (card ? 'card-footer bg-body ' : 'mt-2 ') +
+                'd-flex flex-wrap align-items-center gap-2 small';
+            bar.innerHTML = '<span class="text-muted js-range"></span>' +
+                '<nav class="ms-auto" aria-label="Pages"><ul class="pagination pagination-sm mb-0"></ul></nav>' +
+                '<select class="form-select form-select-sm w-auto" aria-label="Rows per page">' +
+                SIZES.map(n => '<option value="' + n + '">' + n + ' per page</option>').join('') +
+                '</select>';
+            after.after(bar);
+            t.bar = bar;
+            t.top = card || after;
+            t.range = bar.querySelector('.js-range');
+            t.links = bar.querySelector('.pagination');
+            t.select = bar.querySelector('select');
+            t.select.value = String(t.size);
+            t.select.addEventListener('change', function () {
+                const first = (t.page - 1) * t.size;
+                t.size = parseInt(t.select.value, 10);
+                t.page = Math.floor(first / t.size) + 1;
+                try { localStorage.setItem('easydc.pageSize', String(t.size)); } catch (e) { /* ignore */ }
+                t.render();
+            });
+            t.links.addEventListener('click', function (e) {
+                const link = e.target.closest('[data-page]');
+                if (!link) return;
+                e.preventDefault();
+                t.page = parseInt(link.dataset.page, 10);
+                t.render();
+                if (t.top.getBoundingClientRect().top < 0) t.top.scrollIntoView();
+            });
+
+            if (t.search) {
+                t.search.addEventListener('input', () => t.searchFor(t.search.value));
+            }
+            const back = saved[t.key];
+            if (back) {
+                if (t.search && back.q) t.search.value = back.q;
+                t.page = back.page || 1;
+                t.searchFor(t.search ? t.search.value : '', true);
+            } else {
+                t.render();
+            }
+        }
+
+        // Every word must appear somewhere in the row.
+        Table.prototype.searchFor = function (value, keepPage) {
+            const words = value.toLowerCase().split(/\s+/).filter(Boolean);
+            this.setFilter('search', words.length
+                ? row => { const text = this.text.get(row); return words.every(w => text.includes(w)); }
+                : null, keepPage);
+        };
+
+        // A filter is a test on a row; null removes it. Changing one goes back to page 1.
+        Table.prototype.setFilter = function (name, test, keepPage) {
+            if (test) this.filters[name] = test; else delete this.filters[name];
+            const tests = Object.values(this.filters);
+            this.matching = this.rows.filter(r => tests.every(f => f(r)));
+            if (!keepPage) this.page = 1;
+            this.render();
+        };
+
+        Table.prototype.on = function (listener) { this.listeners.push(listener); };
+
+        Table.prototype.render = function () {
+            const total = this.matching.length;
+            const pages = Math.max(1, Math.ceil(total / this.size));
+            this.page = Math.min(Math.max(1, this.page), pages);
+            const start = (this.page - 1) * this.size;
+            this.shown = this.matching.slice(start, start + this.size);
+            const keep = this.shown.slice();
+            if (this.none) {
+                this.none.classList.toggle('d-none', total > 0 || this.rows.length === 0);
+                keep.push(this.none);
+            }
+            this.body.replaceChildren(...keep);
+
+            // Short lists need no pager.
+            this.bar.classList.toggle('d-none', this.rows.length <= SIZES[0]);
+            this.range.textContent = total === 0 ? 'Nothing to show'
+                : number(start + 1) + '–' + number(start + this.shown.length) + ' of ' + number(total) +
+                  (total < this.rows.length ? ' (filtered from ' + number(this.rows.length) + ')' : '');
+            this.links.innerHTML = '';
+            if (pages > 1) {
+                const p = this.page;
+                const want = [1, pages, p - 2, p - 1, p, p + 1, p + 2].filter(n => n >= 1 && n <= pages);
+                const list = Array.from(new Set(want)).sort((a, b) => a - b);
+                const item = (label, page, opts) => {
+                    const li = document.createElement('li');
+                    li.className = 'page-item' + (opts.active ? ' active' : '') + (opts.off ? ' disabled' : '');
+                    const a = document.createElement(opts.off || opts.active ? 'span' : 'a');
+                    a.className = 'page-link';
+                    a.textContent = label;
+                    if (opts.label) a.setAttribute('aria-label', opts.label);
+                    if (opts.active) a.setAttribute('aria-current', 'page');
+                    if (!opts.off && !opts.active) { a.href = '#'; a.dataset.page = page; }
+                    li.appendChild(a);
+                    this.links.appendChild(li);
+                };
+                item('‹', p - 1, { off: p === 1, label: 'Previous page' });
+                list.forEach((n, i) => {
+                    if (i > 0 && n - list[i - 1] > 1) item('…', 0, { off: true });
+                    item(number(n), n, { active: n === p, label: 'Page ' + n });
+                });
+                item('›', p + 1, { off: p === pages, label: 'Next page' });
+            }
+            this.listeners.forEach(f => f(this));
+        };
+
+        document.addEventListener('DOMContentLoaded', function () {
+            try {
+                const back = JSON.parse(sessionStorage.getItem('easydc.lists') || 'null');
+                sessionStorage.removeItem('easydc.lists');
+                if (back && Date.now() - back.at < 60000) saved = back.tables || {};
+            } catch (e) { /* storage blocked: start on page 1 */ }
+            document.querySelectorAll('tbody[data-paged]').forEach(function (body) {
+                tables[body.dataset.paged] = new Table(body);
+            });
+            waiting.splice(0).forEach(f => f());
+        });
+
+        // Remember where each list was when a form leaves the page.
+        document.addEventListener('submit', function (e) {
+            if (e.defaultPrevented) return;
+            const state = {};
+            Object.values(tables).forEach(function (t) {
+                state[t.key] = { page: t.page, q: t.search ? t.search.value : '' };
+            });
+            try {
+                sessionStorage.setItem('easydc.lists', JSON.stringify({ at: Date.now(), tables: state }));
+            } catch (err) { /* ignore */ }
+        });
+
+        return {
+            get: key => tables[key],
+            ready: function (f) {
+                if (document.readyState === 'loading') waiting.push(f); else f();
+            },
+        };
+    })();
+    </script>
 </head>
 <body>
     <nav class="navbar navbar-dark bg-dark navbar-expand-lg">
@@ -33,7 +214,7 @@
             </div>
         </div>
     </nav>
-    <div class="{% block container_class %}container{% endblock %} mt-4">
+    <div class="{% block container_class %}container{% endblock %} mt-4 pb-5">
         {% block content %}{% endblock %}
     </div>
     <div style="position:fixed;bottom:0.75rem;right:1rem;font-size:0.75rem;color:#6c757d;pointer-events:none;">
