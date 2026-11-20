@@ -10,8 +10,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Saving a server on the dashboard signs in to it once and shows whether that worked, so a wrong address or password shows up straight away.
+- Users: **Must change password** and **Password expired** badges, and a *Password to change* filter, for users who cannot sign in with their current password.
 
 ### Fixed
+- A user whose lockout had run out was still shown as Locked until they next signed in.
 - When EasyDC could not reach or sign in to a DC, pages showed raw errors such as "os error 61" or "data 52e". They now say what went wrong and what to change.
 - A server's card said "TLS Disabled" when only the certificate check was off. It now says *Certificate checked*, *Certificate not checked* or *Not encrypted*.
 - A bulk action on more than about 1,300 users ran longer than a reverse proxy waits (60 seconds for Nginx), so the browser showed an error while the work went on unseen. A big selection is now sent 100 users at a time, with a progress bar, and each user takes a quarter less time.

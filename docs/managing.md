@@ -11,7 +11,7 @@ Computers, with how many users each holds. Pick one to see only its users; turn 
 shows everyone. Containers with no users (such as `Computers`) and system ones (such as
 `System`) are left out.
 
-Above the list, **All / Enabled / Disabled / Locked / Expired** filter by account status,
+Above the list, **All / Enabled / Disabled / Locked / Expired / Password to change** filter by account status,
 with a count for each, and the search box narrows the list as you type: it looks in the
 username, display name, description, email, job title and department.
 
@@ -45,9 +45,13 @@ take no time.
   and **Expired** once it has passed. An expired account cannot log in even though it
   is still enabled; set a later date, or clear it, to let the user back in.
 - **Reset password** sets a new password, with *must change password at next logon*
-  checked by default.
+  checked by default. Until the user does, the list shows **Must change password**. A
+  password older than the maximum password age (from the domain policy, or the user's
+  PSO) shows **Password expired**. Either way the user cannot sign in with their old
+  password; on a PC, Windows asks for a new one.
 - **Unlock** clears a lockout. Locked accounts carry a **Locked** badge in the list, with
-  the count of bad password attempts.
+  the count of bad password attempts. When the lockout duration runs out the account
+  unlocks by itself, and the badge goes with it.
 
 !!! note
     Anything that writes a password — creating a user, resetting a password — needs the

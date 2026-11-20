@@ -53,7 +53,7 @@
             <i class="bi bi-people fs-1"></i>
             {% if directory and directory | length > 0 %}
             <p class="mt-3 fs-5">No users here</p>
-            <p class="small">{% if status != "all" %}No {{ status }} accounts in this view.{% else %}This OU or container holds no users.{% if not nested and below > 0 %} Turn on <strong>Include nested OUs</strong> to see the users below it.{% endif %}{% endif %}</p>
+            <p class="small">{% if status == "password" %}No user in this view has a password to change.{% elif status != "all" %}No {{ status }} accounts in this view.{% else %}This OU or container holds no users.{% if not nested and below > 0 %} Turn on <strong>Include nested OUs</strong> to see the users below it.{% endif %}{% endif %}</p>
             {% else %}
             <p class="mt-3 fs-5">No users found</p>
             <p class="small">Click <strong>Add User</strong> to create the first domain user.</p>
@@ -118,6 +118,8 @@
 {% endif %}{% if user.locked %}<span class="badge bg-warning-subtle text-warning border border-warning-subtle" title="{{ user.bad_pwd_count }} bad password attempts"><i class="bi bi-lock-fill me-1"></i>Locked</span>
 {% endif %}{% if user.expired %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle" title="The account could be used until the end of {{ user.expires }} (UTC)"><i class="bi bi-calendar-x me-1"></i>Expired</span>
 {% elif user.expires %}<span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle" title="The account can be used until the end of this day (UTC)"><i class="bi bi-calendar-event me-1"></i>Until {{ user.expires }}</span>
+{% endif %}{% if user.password == "must_change" %}<span class="badge bg-info-subtle text-info-emphasis border border-info-subtle" title="Must set a new password at the next sign-in"><i class="bi bi-key me-1"></i>Must change password</span>
+{% elif user.password == "expired" %}<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle" title="The password is older than the domain's maximum password age"><i class="bi bi-key me-1"></i>Password expired</span>
 {% endif %}</td>
 <td class="text-end"><div class="btn-group btn-group-sm">
 <form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/toggle{{ view_qs }}" class="d-inline">{% if user.enabled %}<input type="hidden" name="enable" value="false"><button type="submit" class="btn btn-outline-warning btn-sm" title="Disable account"><i class="bi bi-pause-circle"></i></button>{% else %}<input type="hidden" name="enable" value="true"><button type="submit" class="btn btn-outline-success btn-sm" title="Enable account"><i class="bi bi-play-circle"></i></button>{% endif %}</form>

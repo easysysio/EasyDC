@@ -29,6 +29,13 @@ pub struct LdapUser {
     /// Last day the account can be used, `YYYY-MM-DD`; empty for never.
     pub expires: String,
     pub expired: bool,
+    /// `must_change` (set a new password at next sign-in), `expired` (older
+    /// than the maximum password age), or empty. Either way the user cannot
+    /// sign in with their current password.
+    pub password: &'static str,
+    /// Whether the DC is asked about `locked` and `password` (internal).
+    #[serde(skip)]
+    pub check: bool,
     pub description: String,
     /// The DN of the OU or container the user is in.
     pub container: String,
@@ -480,6 +487,34 @@ pub async fn group_names(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Ve
 
 // ── list users ────────────────────────────────────────────────────────────────
 
+/// Whether an account is locked out now. lockoutTime keeps the time of the
+/// lockout after the lockout duration has run out, until the user next signs
+/// in, so it alone would show an account as locked that can sign in. The DC
+/// works out the real state in msDS-User-Account-Control-Computed (bit 0x10);
+/// lockoutTime is the fallback for a DC that does not give it.
+fn is_locked(e: &SearchEntry) -> bool {
+    const UF_LOCKOUT: i64 = 0x10;
+    match crate::health::attr_ci(e, "msDS-User-Account-Control-Computed").parse::<i64>() {
+        Ok(computed) => computed & UF_LOCKOUT != 0,
+        Err(_) => attr(e, "lockoutTime").parse::<i64>().unwrap_or(0) != 0,
+    }
+}
+
+/// Whether the user must set a new password before signing in, from the
+/// DC's computed state (bit 0x800000): pwdLastSet 0 means an administrator
+/// asked for a change; otherwise the password has outlived the maximum age.
+fn password_state(e: &SearchEntry) -> &'static str {
+    const UF_PASSWORD_EXPIRED: i64 = 0x80_0000;
+    let computed = crate::health::attr_ci(e, "msDS-User-Account-Control-Computed").parse::<i64>().unwrap_or(0);
+    if computed & UF_PASSWORD_EXPIRED == 0 {
+        ""
+    } else if attr(e, "pwdLastSet") == "0" {
+        "must_change"
+    } else {
+        "expired"
+    }
+}
+
 pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapUser>> {
     let (entries, _) = ldap
         .with_timeout(OP_TIMEOUT)
@@ -495,6 +530,7 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 "mail",
                 "userAccountControl",
                 "lockoutTime",
+                "pwdLastSet",
                 "badPwdCount",
                 "title",
                 "department",
@@ -518,13 +554,12 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
         .map(|e| (e.dn.to_lowercase(), attr(e, "sAMAccountName")))
         .collect();
     let now = unix_to_filetime(crate::health::now_unix());
+    let max_age = shortest_max_password_age(ldap, base_dn).await;
 
     let mut users: Vec<LdapUser> = entries
         .iter()
         .map(|e| {
             let uac: i64 = attr(e, "userAccountControl").parse().unwrap_or(514);
-            // lockoutTime is a FILETIME; any non-zero value means the account
-            // is currently locked out.
             let lockout: i64 = attr(e, "lockoutTime").parse().unwrap_or(0);
             let expires_at: i64 = attr(e, "accountExpires").parse().unwrap_or(0);
             let manager_dn = attr(e, "manager");
@@ -541,7 +576,11 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 display_name: attr(e, "displayName"),
                 email: attr(e, "mail"),
                 enabled: (uac & 2) == 0,
+                // Until the DC confirms (below): lockoutTime may have run out,
+                // and a password's age is not known to be past its limit.
                 locked: lockout != 0,
+                password: "",
+                check: lockout != 0 || password_may_have_expired(e, uac, max_age, now),
                 bad_pwd_count: attr(e, "badPwdCount").parse().unwrap_or(0),
                 title: attr(e, "title"),
                 department: attr(e, "department"),
@@ -559,8 +598,73 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
         .filter(|u| !u.username.is_empty())
         .collect();
 
+    confirm_sign_in_state(ldap, base_dn, &mut users).await;
     users.sort_by_key(|a| a.username.to_lowercase());
     Ok(users)
+}
+
+/// The shortest maximum password age in force, from the domain policy and
+/// any PSO, in FILETIME ticks; `None` when passwords never expire. A PSO that
+/// cannot be read is left out.
+async fn shortest_max_password_age(ldap: &mut ldap3::Ldap, base_dn: &str) -> Option<i64> {
+    let places = [
+        (base_dn.to_string(), Scope::Base, "(objectClass=*)", "maxPwdAge"),
+        (format!("{PSO_CONTAINER},{base_dn}"), Scope::OneLevel, "(objectClass=msDS-PasswordSettings)", "msDS-MaximumPasswordAge"),
+    ];
+    let mut ages = Vec::new();
+    for (base, scope, filter, key) in places {
+        let found = ldap.with_timeout(OP_TIMEOUT).search(&base, scope, filter, vec![key]).await;
+        let entries = found.ok().and_then(|r| r.success().ok()).map(|(es, _)| es).unwrap_or_default();
+        ages.extend(entries.into_iter().filter_map(|e| crate::health::attr_ci(&SearchEntry::construct(e), key).parse::<i64>().ok()));
+    }
+    // Stored as a negative interval; 0 and the most negative value mean never.
+    ages.into_iter().filter(|&a| a < 0 && a != i64::MIN).map(|a| -a).min()
+}
+
+/// Whether a user's password could be past its limit: a change was asked
+/// for, or it is older than the shortest maximum age in force. Only these
+/// users are asked about, since the DC's own answer is slow to work out for
+/// every user.
+fn password_may_have_expired(e: &SearchEntry, uac: i64, max_age: Option<i64>, now: i64) -> bool {
+    const DONT_EXPIRE_PASSWORD: i64 = 0x1_0000;
+    if uac & DONT_EXPIRE_PASSWORD != 0 {
+        return false;
+    }
+    match attr(e, "pwdLastSet").parse::<i64>() {
+        Ok(0) => true,
+        Ok(set) => max_age.is_some_and(|age| set <= now - age),
+        Err(_) => false,
+    }
+}
+
+/// Ask the DC whether the users that may be locked out, or may have to change
+/// their password, really are: it works this out with the lockout duration
+/// and maximum password age that apply to each, PSOs included. They are
+/// looked up by name, a few at a time. If the DC cannot be asked, a user with
+/// a lockout time stays shown as locked.
+async fn confirm_sign_in_state(ldap: &mut ldap3::Ldap, base_dn: &str, users: &mut [LdapUser]) {
+    let wanted: Vec<usize> = (0..users.len()).filter(|&i| users[i].check).collect();
+    for part in wanted.chunks(100) {
+        let names: String = part.iter().map(|&i| format!("(sAMAccountName={})", ldap_escape(&users[i].username))).collect();
+        let filter = format!("(&(objectClass=user)(|{names}))");
+        let attrs = vec!["sAMAccountName", "lockoutTime", "pwdLastSet", "msDS-User-Account-Control-Computed"];
+        let Ok(Ok((entries, _))) =
+            ldap.with_timeout(OP_TIMEOUT).search(base_dn, Scope::Subtree, &filter, attrs).await.map(|r| r.success())
+        else {
+            return;
+        };
+        let found: std::collections::HashMap<String, SearchEntry> = entries
+            .into_iter()
+            .map(SearchEntry::construct)
+            .map(|e| (attr(&e, "sAMAccountName").to_lowercase(), e))
+            .collect();
+        for &i in part {
+            if let Some(e) = found.get(&users[i].username.to_lowercase()) {
+                users[i].locked = is_locked(e);
+                users[i].password = password_state(e);
+            }
+        }
+    }
 }
 
 /// `OU=Europe,OU=Sales,DC=x` below `DC=x` as `Sales › Europe`.
@@ -5017,6 +5121,42 @@ mod timeout_tests {
         // Anything else keeps ldap3's words.
         let text = super::connect_failed("ldaps://dc", wait, io(ErrorKind::ConnectionReset, "reset by peer"));
         assert_eq!(text, "Connection failed: I/O error: reset by peer");
+    }
+
+    #[test]
+    fn a_lockout_that_has_run_out_is_not_shown_as_locked() {
+        let entry = |pairs: &[(&str, &str)]| ldap3::SearchEntry {
+            dn: "CN=x".into(),
+            attrs: pairs.iter().map(|(k, v)| (k.to_string(), vec![v.to_string()])).collect(),
+            bin_attrs: Default::default(),
+        };
+        // Locked: the DC sets bit 0x10.
+        assert!(super::is_locked(&entry(&[("lockoutTime", "134080000000000000"), ("msDS-User-Account-Control-Computed", "16")])));
+        // The lockout ran out: lockoutTime is still set until the next sign-in.
+        assert!(!super::is_locked(&entry(&[("lockoutTime", "134080000000000000"), ("msDS-User-Account-Control-Computed", "0")])));
+        assert!(!super::is_locked(&entry(&[("msds-user-account-control-computed", "8388608")])));
+        // A DC that does not give the computed value: lockoutTime decides.
+        assert!(super::is_locked(&entry(&[("lockoutTime", "134080000000000000")])));
+        assert!(!super::is_locked(&entry(&[("lockoutTime", "0")])));
+
+        assert_eq!(super::password_state(&entry(&[("msDS-User-Account-Control-Computed", "8388608"), ("pwdLastSet", "0")])), "must_change");
+        assert_eq!(
+            super::password_state(&entry(&[("msDS-User-Account-Control-Computed", "8388608"), ("pwdLastSet", "134080000000000000")])),
+            "expired"
+        );
+        assert_eq!(super::password_state(&entry(&[("msDS-User-Account-Control-Computed", "16"), ("pwdLastSet", "0")])), "");
+        assert_eq!(super::password_state(&entry(&[("pwdLastSet", "0")])), "");
+
+        // Only users whose password may be past its limit are asked about.
+        let day = 86_400 * 10_000_000_i64;
+        let now = 1_000 * day;
+        let set = |days_ago: i64| entry(&[("pwdLastSet", &(now - days_ago * day).to_string())]);
+        let may = super::password_may_have_expired;
+        assert!(may(&entry(&[("pwdLastSet", "0")]), 512, None, now));
+        assert!(may(&set(43), 512, Some(42 * day), now));
+        assert!(!may(&set(41), 512, Some(42 * day), now));
+        assert!(!may(&set(400), 512, None, now), "passwords never expire");
+        assert!(!may(&set(43), 512 | 0x1_0000, Some(42 * day), now), "password never expires");
     }
 
     #[test]

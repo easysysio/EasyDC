@@ -1184,16 +1184,17 @@ pub struct ListView {
     pub ou: String,
     /// Non-empty: include users in nested OUs and containers.
     pub sub: String,
-    /// `enabled`, `disabled`, `locked` or `expired`; anything else is all.
+    /// `enabled`, `disabled`, `locked`, `expired` or `password`; anything else is all.
     pub status: String,
 }
 
-const STATUSES: [(&str, &str); 5] = [
+const STATUSES: [(&str, &str); 6] = [
     ("all", "All"),
     ("enabled", "Enabled"),
     ("disabled", "Disabled"),
     ("locked", "Locked"),
     ("expired", "Expired"),
+    ("password", "Password to change"),
 ];
 
 impl ListView {
@@ -1248,6 +1249,7 @@ fn status_matches(u: &ldap::LdapUser, status: &str) -> bool {
         "disabled" => !u.enabled,
         "locked" => u.locked,
         "expired" => u.expired,
+        "password" => !u.password.is_empty(),
         _ => true,
     }
 }
@@ -2176,6 +2178,21 @@ mod users_page_tests {
         let (html, _) = page(&users, &view("", false, "locked"), None);
         assert!(listed(&html).is_empty());
         assert!(html.contains("No locked accounts in this view."));
+        let (html, _) = page(&users, &view("", false, "password"), None);
+        assert!(html.contains("No user in this view has a password to change."), "{html}");
+    }
+
+    #[test]
+    fn a_password_to_change_is_shown_and_filtered() {
+        let mut users = people();
+        users[0].password = "must_change";
+        users[1].password = "expired";
+        let (html, _) = page(&users, &view("", false, ""), None);
+        assert_eq!(html.matches("Must change password</span>").count(), 1);
+        assert_eq!(html.matches("Password expired</span>").count(), 1);
+        let (html, _) = page(&users, &view("", false, "password"), None);
+        assert_eq!(listed(&html).len(), 2);
+        assert!(html.contains("Password to change <span class=\"ms-1 opacity-75\">2</span>"), "{html}");
     }
 
     #[test]
