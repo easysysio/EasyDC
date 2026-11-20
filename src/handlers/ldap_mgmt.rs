@@ -325,31 +325,49 @@ pub async fn remove_member(
 }
 
 pub async fn computers(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
-
-    let mut ctx = Context::new();
-    ctx.insert("server", &server);
-
-    match ldap::open(&server).await {
-        Err(e) => {
-            ctx.insert("error", &e);
-            ctx.insert("computers", &Vec::<ldap::LdapComputer>::new());
-        }
-        Ok((mut conn, base_dn)) => match ldap::list_computers(&mut conn, &base_dn).await {
-            Err(e) => {
-                ctx.insert("error", &e);
-                ctx.insert("computers", &Vec::<ldap::LdapComputer>::new());
-            }
-            Ok(list) => {
-                ctx.insert("computers", &list);
-            }
-        },
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_computers(&state, &server, None).await,
     }
+}
 
+/// The computers page, with `flash_error` when an action on it just failed.
+async fn render_computers(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
+    let list = match ldap::open_after(server, flash_error.as_deref()).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => ldap::list_computers(&mut conn, &base_dn).await,
+    };
+    let ctx = computers_context(server, list, flash_error);
     Html(state.tera.render("computers.html", &ctx).unwrap_or_default()).into_response()
+}
+
+fn computers_context(
+    server: &Server,
+    list: Result<Vec<ldap::LdapComputer>, String>,
+    flash_error: Option<String>,
+) -> Context {
+    let mut ctx = Context::new();
+    ctx.insert("server", server);
+    match list {
+        Ok(list) => ctx.insert("computers", &list),
+        Err(e) => {
+            ctx.insert("computers", &Vec::<ldap::LdapComputer>::new());
+            ctx.insert("error", &e);
+        }
+    }
+    // The action's own failure says more than a list that did not load after it.
+    if let Some(e) = flash_error {
+        ctx.insert("error", &e);
+    }
+    ctx
+}
+
+/// Back to the computers list on success; the list with the reason on failure.
+async fn after_computer_action(state: &AppState, server: &Server, result: Result<(), String>) -> Response {
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/computers", server.id)).into_response(),
+        Err(e) => render_computers(state, server, Some(e)).await,
+    }
 }
 
 pub async fn delete_computer(
@@ -368,8 +386,7 @@ pub async fn delete_computer(
     }
     .await;
     db::log_action(&state.db, &actor, "computer.delete", &name, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/computers", id)).into_response()
+    after_computer_action(&state, &server, result).await
 }
 
 pub async fn toggle_computer(
@@ -391,8 +408,7 @@ pub async fn toggle_computer(
     .await;
     let action = if enable { "computer.enable" } else { "computer.disable" };
     db::log_action(&state.db, &actor, action, &name, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/computers", id)).into_response()
+    after_computer_action(&state, &server, result).await
 }
 
 // ── OU list ───────────────────────────────────────────────────────────────────
@@ -902,31 +918,44 @@ pub async fn dns_edit_record(
 // ── GPO list ──────────────────────────────────────────────────────────────────
 
 pub async fn gpo(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
-
-    let mut ctx = Context::new();
-    ctx.insert("server", &server);
-
-    match ldap::open(&server).await {
-        Err(e) => {
-            ctx.insert("error", &e);
-            ctx.insert("gpos", &Vec::<ldap::LdapGpo>::new());
-        }
-        Ok((mut conn, base_dn)) => match ldap::list_gpos(&mut conn, &base_dn).await {
-            Err(e) => {
-                ctx.insert("error", &e);
-                ctx.insert("gpos", &Vec::<ldap::LdapGpo>::new());
-            }
-            Ok(list) => {
-                ctx.insert("gpos", &list);
-            }
-        },
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_gpo(&state, &server, None).await,
     }
+}
 
+/// The GPO page, with `flash_error` when an action on it just failed.
+async fn render_gpo(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
+    let list = match ldap::open_after(server, flash_error.as_deref()).await {
+        Err(e) => Err(e),
+        Ok((mut conn, base_dn)) => ldap::list_gpos(&mut conn, &base_dn).await,
+    };
+    let ctx = gpo_context(server, list, flash_error);
     Html(state.tera.render("gpo.html", &ctx).unwrap_or_default()).into_response()
+}
+
+fn gpo_context(server: &Server, list: Result<Vec<ldap::LdapGpo>, String>, flash_error: Option<String>) -> Context {
+    let mut ctx = Context::new();
+    ctx.insert("server", server);
+    match list {
+        Ok(list) => ctx.insert("gpos", &list),
+        Err(e) => {
+            ctx.insert("gpos", &Vec::<ldap::LdapGpo>::new());
+            ctx.insert("error", &e);
+        }
+    }
+    if let Some(e) = flash_error {
+        ctx.insert("error", &e);
+    }
+    ctx
+}
+
+/// Back to the GPO list on success; the list with the reason on failure.
+async fn after_gpo_action(state: &AppState, server: &Server, result: Result<(), String>) -> Response {
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/gpo", server.id)).into_response(),
+        Err(e) => render_gpo(state, server, Some(e)).await,
+    }
 }
 
 // ── create GPO ────────────────────────────────────────────────────────────────
@@ -953,8 +982,7 @@ pub async fn gpo_create(
     }
     .await;
     db::log_action(&state.db, &actor, "gpo.create", &form.display_name, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/gpo", id)).into_response()
+    after_gpo_action(&state, &server, result).await
 }
 
 // ── update GPO ────────────────────────────────────────────────────────────────
@@ -983,8 +1011,7 @@ pub async fn gpo_update(
     }
     .await;
     db::log_action(&state.db, &actor, "gpo.update", &form.display_name, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/gpo", id)).into_response()
+    after_gpo_action(&state, &server, result).await
 }
 
 // ── delete GPO ────────────────────────────────────────────────────────────────
@@ -1006,8 +1033,7 @@ pub async fn gpo_delete(
     }
     .await;
     db::log_action(&state.db, &actor, "gpo.delete", &guid, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/gpo", id)).into_response()
+    after_gpo_action(&state, &server, result).await
 }
 
 // ── GPO links page ────────────────────────────────────────────────────────────
@@ -1016,46 +1042,80 @@ pub async fn gpo_links(
     State(state): State<AppState>,
     Path((id, guid)): Path<(i64, String)>,
 ) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_gpo_links(&state, &server, &guid, None).await,
+    }
+}
 
+/// What the links page shows: the GPO's name, its links, and the OUs it can be linked to.
+struct GpoLinks {
+    name: String,
+    links: Vec<ldap::GpoLink>,
+    ous: Vec<ldap::LdapOu>,
+}
+
+/// The links page of one GPO, with `flash_error` when an action on it just failed.
+async fn render_gpo_links(state: &AppState, server: &Server, guid: &str, flash_error: Option<String>) -> Response {
+    let loaded: Result<GpoLinks, String> = async {
+        let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
+        let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
+        // The name is only for show: the GUID stands in if it cannot be read.
+        let name = ldap::list_gpos(&mut conn, &base_dn)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|g| g.guid_url.eq_ignore_ascii_case(guid))
+            .map(|g| g.display_name)
+            .unwrap_or_else(|| guid.to_string());
+        let links = ldap::list_gpo_links(&mut conn, &base_dn, &gpo_dn).await?;
+        let ous = ldap::list_ous(&mut conn, &base_dn).await?;
+        Ok(GpoLinks { name, links, ous })
+    }
+    .await;
+    let ctx = gpo_links_context(server, guid, loaded, flash_error);
+    Html(state.tera.render("gpo_links.html", &ctx).unwrap_or_default()).into_response()
+}
+
+fn gpo_links_context(
+    server: &Server,
+    guid: &str,
+    loaded: Result<GpoLinks, String>,
+    flash_error: Option<String>,
+) -> Context {
     let mut ctx = Context::new();
-    ctx.insert("server", &server);
-    ctx.insert("guid", &guid);
-
-    match ldap::open(&server).await {
+    ctx.insert("server", server);
+    ctx.insert("guid", guid);
+    match loaded {
+        Ok(page) => {
+            ctx.insert("gpo_name", &page.name);
+            ctx.insert("links", &page.links);
+            ctx.insert("ous", &page.ous);
+        }
         Err(e) => {
-            ctx.insert("error", &e);
-            ctx.insert("gpo_name", &guid);
+            ctx.insert("gpo_name", guid);
             ctx.insert("links", &Vec::<ldap::GpoLink>::new());
             ctx.insert("ous", &Vec::<ldap::LdapOu>::new());
-        }
-        Ok((mut conn, base_dn)) => {
-            let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
-
-            // Load GPO name for display
-            let gpo_name = ldap::list_gpos(&mut conn, &base_dn)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .find(|g| g.guid_url.to_uppercase() == guid.to_uppercase())
-                .map(|g| g.display_name)
-                .unwrap_or_else(|| guid.clone());
-            ctx.insert("gpo_name", &gpo_name);
-
-            let links = ldap::list_gpo_links(&mut conn, &base_dn, &gpo_dn)
-                .await
-                .unwrap_or_default();
-            ctx.insert("links", &links);
-
-            let ous = ldap::list_ous(&mut conn, &base_dn).await.unwrap_or_default();
-            ctx.insert("ous", &ous);
+            ctx.insert("error", &e);
         }
     }
+    if let Some(e) = flash_error {
+        ctx.insert("error", &e);
+    }
+    ctx
+}
 
-    Html(state.tera.render("gpo_links.html", &ctx).unwrap_or_default()).into_response()
+/// Back to the GPO's links on success; its links with the reason on failure.
+async fn after_gpo_link_action(
+    state: &AppState,
+    server: &Server,
+    guid: &str,
+    result: Result<(), String>,
+) -> Response {
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/gpo/{}/links", server.id, path_segment(guid))).into_response(),
+        Err(e) => render_gpo_links(state, server, guid, Some(e)).await,
+    }
 }
 
 // ── add GPO link ──────────────────────────────────────────────────────────────
@@ -1084,8 +1144,7 @@ pub async fn gpo_link_add(
     .await;
     let target = format!("{} → {}", guid, form.ou_dn);
     db::log_action(&state.db, &actor, "gpo.link", &target, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/gpo/{}/links", id, guid)).into_response()
+    after_gpo_link_action(&state, &server, &guid, result).await
 }
 
 // ── remove GPO link ───────────────────────────────────────────────────────────
@@ -1109,8 +1168,7 @@ pub async fn gpo_link_remove(
     .await;
     let target = format!("{} ✕ {}", guid, form.ou_dn);
     db::log_action(&state.db, &actor, "gpo.unlink", &target, Some(id), &result).await;
-
-    Redirect::to(&format!("/servers/{}/gpo/{}/links", id, guid)).into_response()
+    after_gpo_link_action(&state, &server, &guid, result).await
 }
 
 // ── user management ───────────────────────────────────────────────────────────
@@ -2537,5 +2595,121 @@ mod groups_page_tests {
         assert_eq!(f.scope.as_deref(), Some("universal"));
         let f: AddMemberForm = serde_urlencoded::from_str("username=yariv").unwrap();
         assert_eq!(f.member, "yariv");
+    }
+}
+
+#[cfg(test)]
+mod computer_gpo_page_tests {
+    use super::{computers_context, gpo_context, gpo_links_context, GpoLinks};
+    use crate::ldap::{GpoLink, LdapComputer, LdapGpo, LdapOu};
+    use crate::models::Server;
+    use tera::{Context, Tera};
+
+    fn tera() -> Tera {
+        let mut t = Tera::new("templates/**/*.html").expect("templates parse");
+        t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
+            Ok(tera::Value::String("test".to_string()))
+        });
+        t
+    }
+
+    fn render(page: &str, c: &Context) -> String {
+        tera().render(page, c).map_err(|e| format!("{e:?}")).unwrap()
+    }
+
+    fn server() -> Server {
+        Server {
+            id: 1,
+            name: "DC1".to_string(),
+            ldap_url: "ldaps://dc1.example.com".to_string(),
+            bind_dn: "CN=Administrator,CN=Users,DC=example,DC=com".to_string(),
+            bind_password: "secret".to_string(),
+            skip_tls: true,
+        }
+    }
+
+    fn computer(name: &str) -> LdapComputer {
+        LdapComputer {
+            dn: format!("CN={name},CN=Computers,DC=example,DC=com"),
+            name: name.to_string(),
+            sam_account: format!("{name}$"),
+            dns_hostname: format!("{}.example.com", name.to_lowercase()),
+            os: "Windows 11 Pro".to_string(),
+            os_version: "10.0".to_string(),
+            enabled: true,
+        }
+    }
+
+    const GUID: &str = "31B2F340-016D-11D2-945F-00C04FB984F9";
+
+    fn gpo(name: &str) -> LdapGpo {
+        LdapGpo {
+            dn: format!("CN={{{GUID}}},CN=Policies,CN=System,DC=example,DC=com"),
+            guid: format!("{{{GUID}}}"),
+            guid_url: GUID.to_string(),
+            display_name: name.to_string(),
+            flags: 0,
+            version: 1,
+            file_sys_path: String::new(),
+            status_label: "Enabled".to_string(),
+        }
+    }
+
+    const REFUSED: &str = "Insufficient access rights";
+    const SILENT: &str = "Connection failed: the domain controller did not answer within 10 seconds";
+
+    #[test]
+    fn a_failed_computer_action_is_shown_above_the_list() {
+        let c = computers_context(&server(), Ok(vec![computer("PC-01")]), Some(REFUSED.into()));
+        let html = render("computers.html", &c);
+        assert!(html.contains(REFUSED));
+        assert!(html.contains("PC-01"));
+    }
+
+    #[test]
+    fn the_computers_page_renders_when_the_list_did_not_load() {
+        let html = render("computers.html", &computers_context(&server(), Err(SILENT.into()), None));
+        assert!(html.contains(SILENT));
+        // And the action's reason wins over the list's.
+        let c = computers_context(&server(), Err(SILENT.into()), Some(REFUSED.into()));
+        assert!(render("computers.html", &c).contains(REFUSED));
+    }
+
+    #[test]
+    fn a_failed_gpo_action_is_shown_above_the_list() {
+        let c = gpo_context(&server(), Ok(vec![gpo("Desktop Policy")]), Some(REFUSED.into()));
+        let html = render("gpo.html", &c);
+        assert!(html.contains(REFUSED));
+        assert!(html.contains("Desktop Policy"));
+    }
+
+    #[test]
+    fn the_gpo_page_renders_when_the_list_did_not_load() {
+        let html = render("gpo.html", &gpo_context(&server(), Err(SILENT.into()), None));
+        assert!(html.contains(SILENT));
+    }
+
+    #[test]
+    fn a_failed_link_change_is_shown_above_the_links() {
+        let page = GpoLinks {
+            name: "Desktop Policy".to_string(),
+            links: vec![GpoLink {
+                ou_dn: "OU=Sales,DC=example,DC=com".to_string(),
+                ou_name: "Sales".to_string(),
+                link_flags: 0,
+                link_status: "Enabled".to_string(),
+            }],
+            ous: vec![LdapOu { dn: "OU=Sales,DC=example,DC=com".to_string(), name: "Sales".to_string() }],
+        };
+        let html = render("gpo_links.html", &gpo_links_context(&server(), GUID, Ok(page), Some(REFUSED.into())));
+        assert!(html.contains(REFUSED));
+        assert!(html.contains("OU=Sales,DC=example,DC=com"));
+    }
+
+    #[test]
+    fn the_links_page_renders_when_the_links_did_not_load() {
+        let html = render("gpo_links.html", &gpo_links_context(&server(), GUID, Err(SILENT.into()), None));
+        assert!(html.contains(SILENT));
+        assert!(html.contains(GUID));
     }
 }

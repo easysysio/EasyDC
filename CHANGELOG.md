@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - A DC that stopped answering left the page loading forever. EasyDC now waits up to 10 seconds to connect and 30 seconds for each answer, then says the DC did not answer and that a change may still be made once it is free.
 - The Users page came out blank when the DC could not be reached, instead of saying why.
+- A failed change on the Computers or GPO pages was only recorded in the audit log; the page now shows the reason.
 - Adding many users to a group at once slowed down as the group grew: 2,000 users took nearly 3 minutes, and now take about 15 seconds.
 
 ## [0.4.4] - 2026-11-20
