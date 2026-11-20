@@ -375,15 +375,25 @@ pub async fn toggle_computer(
 // ── OU list ───────────────────────────────────────────────────────────────────
 
 pub async fn ous(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let server = match get_server(&state, id).await {
-        None => return redirect_home(),
-        Some(s) => s,
-    };
+    match get_server(&state, id).await {
+        None => redirect_home(),
+        Some(server) => render_ous(&state, &server, None).await,
+    }
+}
 
+/// Back to the OU list on success; the list with the reason on failure.
+async fn after_ou_action(state: &AppState, server: &Server, result: Result<(), String>) -> Response {
+    match result {
+        Ok(()) => Redirect::to(&format!("/servers/{}/ous", server.id)).into_response(),
+        Err(e) => render_ous(state, server, Some(e)).await,
+    }
+}
+
+async fn render_ous(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
     let mut ctx = Context::new();
-    ctx.insert("server", &server);
+    ctx.insert("server", server);
 
-    match ldap::open(&server).await {
+    match ldap::open(server).await {
         Err(e) => {
             ctx.insert("error", &e);
             ctx.insert("ou_nodes", &Vec::<ldap::LdapOuNode>::new());
@@ -414,6 +424,9 @@ pub async fn ous(State(state): State<AppState>, Path(id): Path<i64>) -> Response
         }
     }
 
+    if let Some(e) = flash_error {
+        ctx.insert("error", &e);
+    }
     Html(state.tera.render("ous.html", &ctx).unwrap_or_default()).into_response()
 }
 
@@ -445,7 +458,7 @@ pub async fn ou_create(
     let target = format!("OU={},{}", ldap::dn_escape(&form.name), form.parent_dn);
     db::log_action(&state.db, &actor, "ou.create", &target, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+    after_ou_action(&state, &server, result).await
 }
 
 // ── rename OU ─────────────────────────────────────────────────────────────────
@@ -475,7 +488,7 @@ pub async fn ou_rename(
     let target = format!("{} → {}", form.ou_dn, form.new_name);
     db::log_action(&state.db, &actor, "ou.rename", &target, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+    after_ou_action(&state, &server, result).await
 }
 
 // ── delete OU ─────────────────────────────────────────────────────────────────
@@ -503,7 +516,7 @@ pub async fn ou_delete(
     .await;
     db::log_action(&state.db, &actor, "ou.delete", &form.ou_dn, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+    after_ou_action(&state, &server, result).await
 }
 
 // ── move object to OU ─────────────────────────────────────────────────────────
@@ -533,7 +546,7 @@ pub async fn ou_move_object(
     let target = format!("{} → {}", form.sam_account, form.target_ou_dn);
     db::log_action(&state.db, &actor, "ou.move_object", &target, Some(id), &result).await;
 
-    Redirect::to(&format!("/servers/{}/ous", id)).into_response()
+    after_ou_action(&state, &server, result).await
 }
 
 // ── DNS zone list ─────────────────────────────────────────────────────────────
@@ -1156,6 +1169,8 @@ fn status_matches(u: &ldap::LdapUser, status: &str) -> bool {
 
 #[derive(Serialize)]
 struct TreeLink {
+    /// Empty for the domain itself.
+    dn: String,
     name: String,
     depth: usize,
     is_ou: bool,
@@ -1199,6 +1214,7 @@ fn users_context(
     let page = |v: &UsersView| format!("/servers/{}/users{}", server.id, v.query());
 
     let mut links = vec![TreeLink {
+        dn: String::new(),
         name: ldap::base_dn_to_domain(base_dn),
         depth: 0,
         is_ou: false,
@@ -1207,6 +1223,7 @@ fn users_context(
         active: view.ou.is_empty(),
     }];
     links.extend(tree.iter().map(|c| TreeLink {
+        dn: c.dn.clone(),
         name: c.name.clone(),
         depth: c.depth,
         is_ou: c.is_ou,
@@ -1258,11 +1275,15 @@ async fn render_users(
         let (mut conn, base_dn) = ldap::open(server).await?;
         let users = ldap::list_users(&mut conn, &base_dn).await?;
         let tree = ldap::list_user_containers(&mut conn, &base_dn, &users).await?;
-        Ok((base_dn, users, tree))
+        let groups = ldap::group_names(&mut conn, &base_dn).await?;
+        Ok((base_dn, users, tree, groups))
     }
     .await;
     let load_error = match loaded {
-        Ok((base_dn, users, tree)) => users_context(&mut ctx, server, &base_dn, &users, &tree, view),
+        Ok((base_dn, users, tree, groups)) => {
+            ctx.insert("group_names", &groups);
+            users_context(&mut ctx, server, &base_dn, &users, &tree, view)
+        }
         Err(e) => {
             ctx.insert("users", &Vec::<ldap::LdapUser>::new());
             Some(e)
@@ -1440,6 +1461,8 @@ pub async fn delete_user(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        let (_, is_bind) = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
+        refuse_bind_account(is_bind, &username, "deleting")?;
         ldap::delete_user(&mut conn, &base_dn, &username).await
     }
     .await;
@@ -1470,6 +1493,10 @@ pub async fn toggle_user(
     let enable = form.enable == "true";
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        if !enable {
+            let (_, is_bind) = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
+            refuse_bind_account(is_bind, &username, "disabling")?;
+        }
         ldap::set_user_enabled(&mut conn, &base_dn, &username, enable).await
     }
     .await;
@@ -1512,6 +1539,137 @@ pub async fn reset_password(
     db::log_action(&state.db, &actor, "user.reset_password", &username, Some(id), &result).await;
 
     after_user_action(&state, &server, &view, result).await
+}
+
+/// EasyDC signs in to the DC with one account. Disabling, deleting or moving
+/// it would lock EasyDC out, so those are refused with a way forward.
+fn refuse_bind_account(is_bind: bool, username: &str, doing: &str) -> Result<(), String> {
+    if is_bind {
+        Err(format!(
+            "EasyDC signs in to the DC as {username}, so {doing} it would lock EasyDC out. \
+             Change the server's bind account in Settings first."
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+// ── several users at once ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct BulkUsersForm {
+    /// `enable`, `disable`, `move` or `add_to_group`.
+    pub action: String,
+    /// The selected usernames, one per line.
+    pub users: String,
+    /// The OU or container DN to move to, or the group to add to.
+    #[serde(default)]
+    pub target: String,
+}
+
+/// Each selected name once, in the order given.
+fn selected_names(users: &str) -> Vec<&str> {
+    let mut seen = std::collections::HashSet::new();
+    users
+        .lines()
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && seen.insert(n.to_lowercase()))
+        .collect()
+}
+
+/// One sentence for a bulk action that did not fully work.
+fn bulk_summary(verb: &str, place: &str, total: usize, failed: &[String]) -> String {
+    let done = total - failed.len();
+    let users = if total == 1 { "user" } else { "users" };
+    format!("{verb} {done} of {total} {users}{place}. Not done: {}", failed.join("; "))
+}
+
+pub async fn bulk_users(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path(id): Path<i64>,
+    Query(view): Query<UsersView>,
+    Form(form): Form<BulkUsersForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+    let names = selected_names(&form.users);
+    let target = form.target.trim();
+    let action = form.action.as_str();
+
+    let result: Result<(), String> = async {
+        let (verb, audit) = match action {
+            "enable" => ("Enabled", "user.enable"),
+            "disable" => ("Disabled", "user.disable"),
+            "move" => ("Moved", "user.move"),
+            "add_to_group" => ("Added", "group.add_member"),
+            other => return Err(format!("Unknown action '{other}'")),
+        };
+        if names.is_empty() {
+            return Err("No users were selected".to_string());
+        }
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        // Checked once, not once per user.
+        let place = match action {
+            "move" => {
+                if target.is_empty() {
+                    return Err("Pick an OU or container to move to".to_string());
+                }
+                let container = ldap::container_name(&mut conn, &base_dn, target).await?;
+                format!(" to {container}")
+            }
+            "add_to_group" => {
+                if target.is_empty() {
+                    return Err("Enter the group to add to".to_string());
+                }
+                format!(" to {}", ldap::find_group(&mut conn, &base_dn, target).await?.name)
+            }
+            _ => String::new(),
+        };
+
+        let mut failed = Vec::new();
+        for name in &names {
+            let r = bulk_one(&mut conn, &base_dn, &server.bind_dn, action, name, target).await;
+            let logged = if target.is_empty() { name.to_string() } else { format!("{name} → {target}") };
+            db::log_action(&state.db, &actor, audit, &logged, Some(id), &r).await;
+            if let Err(e) = r {
+                failed.push(format!("{name} ({e})"));
+            }
+        }
+        if failed.is_empty() { Ok(()) } else { Err(bulk_summary(verb, &place, names.len(), &failed)) }
+    }
+    .await;
+
+    after_user_action(&state, &server, &view, result).await
+}
+
+async fn bulk_one(
+    conn: &mut ldap3::Ldap,
+    base_dn: &str,
+    bind: &str,
+    action: &str,
+    name: &str,
+    target: &str,
+) -> Result<(), String> {
+    let (dn, is_bind) = ldap::find_user_for_change(conn, base_dn, name, bind).await?;
+    match action {
+        "enable" => ldap::set_user_enabled(conn, base_dn, name, true).await,
+        "disable" => {
+            refuse_bind_account(is_bind, name, "disabling")?;
+            ldap::set_user_enabled(conn, base_dn, name, false).await
+        }
+        "move" => {
+            // A bind account given as a DN stops working when the DN changes.
+            refuse_bind_account(bind.trim().eq_ignore_ascii_case(&dn), name, "moving")?;
+            ldap::move_entry(conn, base_dn, &dn, target).await
+        }
+        _ => match ldap::add_group_member(conn, base_dn, target, name).await {
+            Err(e) if ldap::is_already_member(&e) => Ok(()),
+            other => other,
+        },
+    }
 }
 
 // ── unlock account ─────────────────────────────────────────────────────────────
@@ -1793,6 +1951,61 @@ mod users_page_tests {
         let (html, _) = page(&users, &view("", false, "locked"), None);
         assert!(listed(&html).is_empty());
         assert!(html.contains("No locked accounts in this view."));
+    }
+
+    #[test]
+    fn users_can_be_selected_and_moved() {
+        let (html, _) = page(&people(), &view("OU=Sales", true, ""), None);
+        assert!(html.contains(r#"class="form-check-input js-select" value="bob""#));
+        // The bulk form comes back to the same view.
+        assert!(html.contains("/users/bulk?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1"));
+        // Move targets: every OU and container, not the domain itself.
+        assert!(html.contains(r#"<option value="OU=Sales,DC=example,DC=com">Sales</option>"#), "{html}");
+        assert!(html.contains(
+            r#"<option value="OU=Europe,OU=Sales,DC=example,DC=com">&nbsp;&nbsp;&nbsp;Europe</option>"#
+        ));
+        assert!(!html.contains(r#"<option value="">"#));
+        assert!(html.contains(r#"data-user="carol" title="Move to another OU""#));
+    }
+
+    #[test]
+    fn group_names_are_suggested() {
+        let users = people();
+        let tree = ldap::user_tree(BASE, vec![], &users);
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("group_names", &vec!["Domain Admins", "<Sales>"]);
+        users_context(&mut c, &server(), BASE, &users, &tree, &UsersView::default());
+        let html = tera().render("users.html", &c).unwrap();
+        assert!(html.contains(r#"<option value="Domain Admins">"#));
+        assert!(html.contains(r#"<option value="&lt;Sales&gt;">"#), "escaped");
+    }
+
+    #[test]
+    fn selected_names_are_trimmed_and_unique() {
+        assert_eq!(super::selected_names("bob\r\n alice \n\nBOB\ncarol"), ["bob", "alice", "carol"]);
+        assert!(super::selected_names("\n \n").is_empty());
+    }
+
+    #[test]
+    fn a_partial_bulk_action_says_what_failed() {
+        let failed = vec!["bob (Sales already holds an object named Bob)".to_string()];
+        assert_eq!(
+            super::bulk_summary("Moved", " to Sales", 3, &failed),
+            "Moved 2 of 3 users to Sales. Not done: bob (Sales already holds an object named Bob)"
+        );
+        assert_eq!(
+            super::bulk_summary("Disabled", "", 1, &["admin (no)".into()]),
+            "Disabled 0 of 1 user. Not done: admin (no)"
+        );
+    }
+
+    #[test]
+    fn the_bind_account_is_protected() {
+        assert!(super::refuse_bind_account(false, "bob", "disabling").is_ok());
+        let e = super::refuse_bind_account(true, "Administrator", "disabling").unwrap_err();
+        assert!(e.contains("EasyDC signs in to the DC as Administrator"));
+        assert!(e.contains("disabling it would lock EasyDC out"));
     }
 
     #[test]

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Users: select several users to enable, disable, move to an OU, or add to a group at once.
+- Users: a Move button on each user, to move them to another OU or container.
+
+### Changed
+- EasyDC refuses to disable, delete or move the account it signs in to the DC with, since that would lock it out.
+
+### Fixed
+- Creating, renaming, deleting or moving on the OUs page reported nothing when it failed. The reason is shown now.
+- Move Object on the OUs page failed for names with a comma, and for a computer given without its `$`, as the form suggests.
+
 ## [0.4.2] - 2026-11-20
 
 ### Added

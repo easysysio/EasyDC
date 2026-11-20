@@ -241,6 +241,55 @@ async fn find_user_dn(
         .ok_or_else(|| format!("User '{}' not found", username))
 }
 
+/// A user's DN, and whether it is the account EasyDC signs in to the DC with
+/// (`bind`, as the server entry gives it: a DN, `user@domain` or `DOMAIN\\user`).
+pub async fn find_user_for_change(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    username: &str,
+    bind: &str,
+) -> LdapResult<(String, bool)> {
+    let filter = format!("(&(objectClass=user)(sAMAccountName={}))", ldap_escape(username));
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "userPrincipalName"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let e = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("User '{}' not found", username))?;
+    let is_bind = is_bind_account(bind, &e.dn, &attr(&e, "userPrincipalName"), &attr(&e, "sAMAccountName"));
+    Ok((e.dn, is_bind))
+}
+
+pub(crate) fn is_bind_account(bind: &str, dn: &str, upn: &str, sam: &str) -> bool {
+    let bind = bind.trim();
+    !bind.is_empty()
+        && (bind.eq_ignore_ascii_case(dn)
+            || (!upn.is_empty() && bind.eq_ignore_ascii_case(upn))
+            || bind.rsplit_once('\\').is_some_and(|(_, user)| user.eq_ignore_ascii_case(sam)))
+}
+
+/// Every group's name, sorted: the suggestions for "Add to group".
+pub async fn group_names(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<String>> {
+    let (entries, _) = ldap
+        .search(base_dn, Scope::Subtree, "(objectClass=group)", vec!["sAMAccountName"])
+        .await
+        .map_err(|e| e.to_string())?
+        .success()
+        .map_err(|e| e.to_string())?;
+    let mut names: Vec<String> = entries
+        .into_iter()
+        .map(|e| attr(&SearchEntry::construct(e), "sAMAccountName"))
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    Ok(names)
+}
+
 // ── list users ────────────────────────────────────────────────────────────────
 
 pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<LdapUser>> {
@@ -1024,7 +1073,7 @@ async fn search_groups(
     Ok(groups)
 }
 
-async fn find_group(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<LdapGroup> {
+pub(crate) async fn find_group(ldap: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResult<LdapGroup> {
     let filter = format!("(sAMAccountName={})", ldap_escape(name));
     search_groups(ldap, base_dn, &filter)
         .await?
@@ -1404,6 +1453,13 @@ pub(crate) fn check_nesting(parent: &LdapGroup, child: &LdapGroup) -> LdapResult
     Ok(())
 }
 
+const ALREADY_MEMBER: &str = "is already a member of";
+
+/// Whether an error from [`add_group_member`] only says the member was there.
+pub(crate) fn is_already_member(error: &str) -> bool {
+    error.contains(ALREADY_MEMBER)
+}
+
 /// Add a user, computer or group to a group, by its sAMAccountName. A
 /// computer can be given without its trailing `$`.
 pub async fn add_group_member(
@@ -1461,7 +1517,7 @@ pub async fn add_group_member(
     let res = ldap.modify(&target.dn, mods).await.map_err(|e| e.to_string())?;
     match res.rc {
         0 => Ok(()),
-        20 | 68 => Err(format!("{} is already a member of {}", attr(&entry, "sAMAccountName"), target.name)),
+        20 | 68 => Err(format!("{} {ALREADY_MEMBER} {}", attr(&entry, "sAMAccountName"), target.name)),
         _ => Err(format!("Failed to add member: {}", res)),
     }
 }
@@ -2230,36 +2286,70 @@ pub async fn move_object_to_ou(
     sam_account: &str,
     target_ou_dn: &str,
 ) -> LdapResult<()> {
-    // Find the object by sAMAccountName
-    let filter = format!("(sAMAccountName={})", ldap_escape(sam_account));
+    // A computer's account name ends in `$`; the form says to leave it off.
+    let filter = format!(
+        "(|(sAMAccountName={0})(sAMAccountName={0}$))",
+        ldap_escape(sam_account)
+    );
     let (entries, _) = ldap
-        .search(base_dn, Scope::Subtree, &filter, vec!["cn"])
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName"])
         .await
         .map_err(|e| e.to_string())?
         .success()
         .map_err(|e| e.to_string())?;
-
+    let mut entries: Vec<SearchEntry> = entries.into_iter().map(SearchEntry::construct).collect();
+    entries.sort_by_key(|e| !attr(e, "sAMAccountName").eq_ignore_ascii_case(sam_account));
     let entry = entries
         .into_iter()
         .next()
-        .map(SearchEntry::construct)
         .ok_or_else(|| format!("Object '{}' not found", sam_account))?;
+    move_entry(ldap, base_dn, &entry.dn, target_ou_dn).await
+}
 
-    // Extract the RDN (first component of DN, e.g. "CN=JohnDoe")
-    let rdn = entry
-        .dn
-        .split(',')
-        .next()
-        .ok_or_else(|| "Invalid DN".to_string())?
-        .to_string();
-
-    ldap.modifydn(&entry.dn, &rdn, true, Some(target_ou_dn))
+/// The name of the OU or container at `dn`, after checking it is one and is
+/// in this domain: somewhere users and computers can be moved to.
+pub async fn container_name(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapResult<String> {
+    if !is_within(dn, base_dn) {
+        return Err(format!("{dn} is not in this domain"));
+    }
+    let res = ldap
+        .search(dn, Scope::Base, "(|(objectClass=organizationalUnit)(objectClass=container))", vec!["dn"])
         .await
-        .map_err(|e| e.to_string())?
-        .success()
-        .map_err(|e| format!("Failed to move object: {}", e))?;
+        .map_err(|e| e.to_string())?;
+    match res.1.rc {
+        0 if !res.0.is_empty() => Ok(first_rdn_value(dn)),
+        0 => Err(format!("{} is not an OU or container", first_rdn_value(dn))),
+        32 => Err(format!("{dn} does not exist")),
+        _ => Err(format!("Could not read {dn}: {}", res.1)),
+    }
+}
 
-    Ok(())
+/// Move the object at `dn` into the OU or container `target`, keeping its
+/// name. Nothing happens when it is already there.
+pub async fn move_entry(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    dn: &str,
+    target: &str,
+) -> LdapResult<()> {
+    if !is_within(target, base_dn) {
+        return Err(format!("{target} is not in this domain"));
+    }
+    if parent_dn(dn).eq_ignore_ascii_case(target) {
+        return Ok(());
+    }
+    let rdn = dn_parts(dn).first().copied().ok_or_else(|| format!("Invalid DN: {dn}"))?;
+    let res = ldap
+        .modifydn(dn, rdn, true, Some(target))
+        .await
+        .map_err(|e| e.to_string())?;
+    let (name, place) = (first_rdn_value(rdn), first_rdn_value(target));
+    match res.rc {
+        0 => Ok(()),
+        68 => Err(format!("{place} already holds an object named {name}")),
+        32 => Err(format!("{target} does not exist")),
+        _ => Err(format!("Failed to move {name}: {res}")),
+    }
 }
 
 // ── GPO list ──────────────────────────────────────────────────────────────────
@@ -4504,6 +4594,17 @@ mod user_tree_tests {
         assert!(is_within(BASE, BASE));
         assert!(!is_within(r"OU=a\,OU=Sales,DC=example,DC=com", "OU=Sales,DC=example,DC=com"));
         assert!(!is_within("OU=Sales,DC=other,DC=com", BASE));
+    }
+
+    #[test]
+    fn the_bind_account_is_recognised_in_every_form() {
+        let (dn, upn, sam) = ("CN=Administrator,CN=Users,DC=x,DC=com", "administrator@x.com", "Administrator");
+        assert!(is_bind_account("cn=administrator,cn=users,dc=x,dc=com", dn, upn, sam));
+        assert!(is_bind_account("Administrator@X.com", dn, upn, sam));
+        assert!(is_bind_account(r"X\administrator", dn, upn, sam));
+        assert!(!is_bind_account("CN=bob,CN=Users,DC=x,DC=com", dn, upn, sam));
+        assert!(!is_bind_account("", dn, "", sam));
+        assert!(!is_bind_account("bob@x.com", dn, "", sam), "no UPN on the account");
     }
 
     #[test]

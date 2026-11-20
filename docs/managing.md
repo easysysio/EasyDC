@@ -15,6 +15,15 @@ Above the list, **All / Enabled / Disabled / Locked / Expired** filter by accoun
 with a count for each, and the search box narrows the list as you type: it looks in the
 username, display name, description, email, job title and department.
 
+**Several users at once:** tick the users (the box in the header ticks every user shown),
+and a bar appears to **enable**, **disable**, **move** them to another OU or container, or
+**add them to a group**. If some of them fail, the page says which and why; the others
+are done. Each user's change is a separate line in the audit log.
+
+- **Move** (the folder button) moves one user to another OU or container. The user keeps
+  their name, groups and settings.
+- EasyDC will not disable, delete or move the account it signs in to the DC with, since
+  that would lock it out. Change the server's bind account first.
 - **Create** a user with a username, first and last name, email and initial password. The
   user is created in the OU or container you are looking at, or in `Users` when the whole
   domain is shown.

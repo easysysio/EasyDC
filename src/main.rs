@@ -109,6 +109,7 @@ async fn main() {
         .route("/servers/:id/policy/pso/:name/unapply", post(handlers::policy::pso_unapply))
         .route("/servers/:id/users", get(handlers::ldap_mgmt::users))
         .route("/servers/:id/users/new", post(handlers::ldap_mgmt::create_user))
+        .route("/servers/:id/users/bulk", post(handlers::ldap_mgmt::bulk_users))
         .route("/servers/:id/users/:username/edit", post(handlers::ldap_mgmt::update_user))
         .route("/servers/:id/users/:username/delete", post(handlers::ldap_mgmt::delete_user))
         .route("/servers/:id/users/:username/toggle", post(handlers::ldap_mgmt::toggle_user))
