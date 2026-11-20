@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-20
+
 ### Added
 - Users: browse by OU or container, with or without the OUs below, and create a user in the OU you are looking at.
 - Users: filter by status (enabled, disabled, locked, expired), and search by name, description or email.
