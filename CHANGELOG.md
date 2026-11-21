@@ -6,31 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## [0.4.5] - 2026-11-21
 
-### Changed
-- The Audit Log searches and pages through the whole log, with a Failures only switch. It used to show only the latest 500 entries, so one big bulk action hid everything before it.
-- A group's members page is half the size for large groups.
-
 ### Added
-- Saving a server on the dashboard signs in to it once and shows whether that worked, so a wrong address or password shows up straight away.
-- Users: **Must change password** and **Password expired** badges, and a *Password to change* filter, for users who cannot sign in with their current password.
+- Saving a server signs in to it once and shows whether that worked.
+- Users: *Must change password* and *Password expired* badges, and a filter for them.
+- The Audit Log searches and pages through the whole log, with a *Failures only* switch.
 
 ### Fixed
-- With a bind account that may not make a change, editing users and groups, unlocking, moving, deleting, members, DNS zones and password policies showed the DC's raw "insufficientAccessRights" error. They now say the account EasyDC signs in with is not allowed to make that change.
-- A second user with the same first and last name in the same place (two John Smiths) could not be created. Their directory entry now also carries the username.
-- An OU name such as `semi;colon` showed as `semi3Bcolon` in the tree and in users' locations.
-- Spaces around a new username or OU name were kept. A username or group name with a character Samba refuses, or a name already in use, now gets a plain message, as does deleting an OU that is not empty.
-- A user whose lockout had run out was still shown as Locked until they next signed in.
-- When EasyDC could not reach or sign in to a DC, pages showed raw errors such as "os error 61" or "data 52e". They now say what went wrong and what to change.
-- Just after a second DC joined, the Replication page said *All links healthy* while the first DC received from no one, then showed its new links as *Failing* before they had run. New links now show *Not run yet*, a DC with no partners counts as a problem, and both say this is normal for about 10 minutes after a join.
-- The Replication page showed some common errors only as a number, such as "Windows error 1225" when Samba was stopped on the partner DC. These are now in words.
-- After deleting a DNS zone, the notice said the DNS server would stop answering for it. Until samba is restarted it still answers that no name in the zone exists; the notice and the confirm prompt now say so.
-- A server's card said "TLS Disabled" when only the certificate check was off. It now says *Certificate checked*, *Certificate not checked* or *Not encrypted*.
-- A bulk action on more than about 1,300 users ran longer than a reverse proxy waits (60 seconds for Nginx), so the browser showed an error while the work went on unseen. A big selection is now sent 100 users at a time, with a progress bar, and each user takes a quarter less time.
-- A DC that stopped answering left the page loading forever. EasyDC now waits up to 10 seconds to connect and 30 seconds for each answer, then says the DC did not answer and that a change may still be made once it is free.
-- The Users page came out blank when the DC could not be reached, instead of saying why.
-- A failed change on the Computers or GPO pages was only recorded in the audit log; the page now shows the reason, in plain words instead of the DC's error codes.
-- Linking a GPO that had been deleted added a link to nothing; it is now refused.
-- Adding many users to a group at once slowed down as the group grew: 2,000 users took nearly 3 minutes, and now take about 15 seconds.
+- A DC that is down or slow no longer leaves pages loading forever, and connection, sign-in and permission errors are in plain words.
+- Big bulk actions go 100 users at a time with a progress bar, so a reverse proxy no longer cuts them off. Adding 2,000 users to a group takes 15 seconds instead of 3 minutes.
+- Awkward names work: two John Smiths, OU names such as `semi;colon`, spaces around names, and characters Samba refuses.
+- A user whose lockout has run out is no longer shown as Locked.
+- Replication: a newly joined DC is no longer shown as healthy or failing while it settles, and partner errors are in words.
+- Smaller fixes on the Computers, GPO and DNS pages and the server cards.
 
 ## [0.4.4] - 2026-11-20
 
