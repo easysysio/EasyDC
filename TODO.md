@@ -2,38 +2,43 @@
 
 Everything below is planned for **0.5.0**.
 
-## Roles for EasyDC accounts
+## Permissions for EasyDC accounts
 
-Three roles:
+When adding an EasyDC account, an admin sets each area to **View** or **Edit**:
 
-- **Viewer**: sees everything, changes nothing.
-- **Editor**: adds, edits and deletes users, groups, computers and DNS records. Cannot
-  touch OUs or GPOs, and cannot add EasyDC accounts.
-- **Admin**: everything, including EasyDC accounts, password policies (domain and per
-  group), the health check's fixes, and creating or deleting DNS zones.
+| Area | Edit covers |
+|---|---|
+| Users | add, edit, delete, enable or disable, reset password, unlock, move to another OU |
+| Groups | add, edit, delete, members (also from the Users page and a user's Edit dialog) |
+| Computers | enable or disable, delete, move to another OU |
+| DNS records | add, edit, delete |
+| DNS zones | create, delete |
+| GPOs | create, edit, delete, link to OUs |
+| OUs | create, rename, delete |
+| Password policies | the domain policy and per-group policies |
+| Sites and subnets | add, edit, delete (once that page exists) |
 
-| Area | Viewer | Editor | Admin |
-|---|:-:|:-:|:-:|
-| See every page (including replication, the health check and the audit log) | ✅ | ✅ | ✅ |
-| Users: add, edit, delete, enable or disable, reset password, unlock, move | — | ✅ | ✅ |
-| Groups: add, edit, delete, members | — | ✅ | ✅ |
-| Computers: enable or disable, delete, move | — | ✅ | ✅ |
-| DNS records: add, edit, delete | — | ✅ | ✅ |
-| DNS zones: create, delete | — | — | ✅ |
-| OUs: create, rename, delete, move objects | — | — | ✅ |
-| GPOs: create, edit, delete, link | — | — | ✅ |
-| Password policies (domain-wide and per group) | — | — | ✅ |
-| Health check fixes | — | — | ✅ |
-| EasyDC accounts: add and remove, assign roles | — | — | ✅ |
-
-Every refused action needs a clear message on the page and a line in the audit log.
+- **Edit all** and **View all** buttons set every area at once; single areas can then be changed.
+- **Admin** is a separate tick box. It ticks and locks every area, and also covers what only
+  admins do: EasyDC accounts, server connections, Settings and the health check's fixes.
+  Admin is stored on its own, so areas added later reach admins without editing them, and an
+  account with every area on Edit is still not an admin.
+- An action needs Edit on what it changes: adding a user to a group needs Groups, moving a
+  user needs Users, linking a GPO needs GPOs.
+- Everyone can view every page, including replication, the health check and the audit log.
+  There is no hidden level.
+- In a View area the buttons are greyed out, with a note on who can change that.
+- Every action is checked on the server. A refused one gets a clear message on the page and
+  a line in the audit log.
+- Stored as one row per account and area, so a new area needs no database change.
+- On upgrade, existing EasyDC accounts become admins, so nothing stops working.
 
 ## Two kinds of EasyDC accounts
 
-An admin adds both kinds in EasyDC and gives each a role. No groups in AD.
+An admin adds both kinds in EasyDC and sets their permissions. No groups in AD.
 
 - **Local**: username and password stored in EasyDC's own database, as today.
-- **From the domain**: added by domain username, with a role, like a local account. There
+- **From the domain**: added by domain username, with permissions, like a local account. There
   is no password in EasyDC: signing in checks the password against the DC. A domain
   account that is disabled, expired or locked in AD cannot sign in to EasyDC either.
 
@@ -42,8 +47,8 @@ Keep at least one local admin, so EasyDC can still be reached when the DC is dow
 Decided:
 
 - EasyDC makes every change in AD with the server's bind account, after checking the
-  person's role. The audit log records who did it. People need no rights in AD.
-- A role applies to every server EasyDC manages, not one server at a time.
+  person's permissions. The audit log records who did it. People need no rights in AD.
+- Permissions apply to every server EasyDC manages, not one server at a time.
 
 ## Next features
 
