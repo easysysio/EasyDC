@@ -38,14 +38,7 @@ mod tests {
         t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| {
             Ok(tera::Value::String("test".to_string()))
         });
-        let count = |s: &str| dcs.iter().flat_map(|d| d.links.iter()).filter(|l| l.status == s).count();
-        let report = Report {
-            ok: count("ok"),
-            warn: count("warn"),
-            fail: count("fail"),
-            unreachable: dcs.iter().filter(|d| d.error.is_some()).count(),
-            dcs,
-        };
+        let report = Report { dcs, ..Default::default() }.tally();
         let mut c = Context::new();
         c.insert("server", &Server {
             id: 1,
@@ -105,7 +98,20 @@ mod tests {
         assert!(html.contains("the RPC server is unavailable"));
         assert!(html.contains("Could not read this DC: ldaps:"), "Tera escapes the slashes");
         assert!(html.contains("No inbound replication partners"));
+        assert!(html.contains("1 DC receives from no one"));
         assert!(!html.contains("links healthy"));
+    }
+
+    #[test]
+    fn a_dc_with_no_partners_is_not_called_healthy() {
+        let html = render(vec![
+            dc("DC1", vec![], None),
+            dc("DC2", vec![link("Domain", "DC1", "ok", ""), link("Schema", "DC1", "ok", "")], None),
+        ]);
+        assert!(!html.contains("links healthy"), "{html}");
+        assert!(html.contains("1 DC receives from no one"));
+        assert!(html.contains("2 healthy"));
+        assert!(html.contains("about 10 minutes"), "a DC that has just joined is explained");
     }
 
     #[test]

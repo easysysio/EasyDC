@@ -39,7 +39,7 @@
 {% else %}
 
 <div class="d-flex flex-wrap gap-2 mb-4">
-    {% if report.fail == 0 and report.warn == 0 and report.unreachable == 0 %}
+    {% if report.fail == 0 and report.warn == 0 and report.unreachable == 0 and report.isolated == 0 %}
     <span class="badge bg-success-subtle text-success border border-success-subtle fs-6">
         <i class="bi bi-check-circle me-1"></i>All {{ report.ok }} links healthy
     </span>
@@ -57,6 +57,11 @@
     {% if report.unreachable > 0 %}
     <span class="badge bg-danger-subtle text-danger border border-danger-subtle fs-6">
         <i class="bi bi-plug me-1"></i>{{ report.unreachable }} DC{% if report.unreachable > 1 %}s{% endif %} not reachable
+    </span>
+    {% endif %}
+    {% if report.isolated > 0 %}
+    <span class="badge bg-danger-subtle text-danger border border-danger-subtle fs-6">
+        <i class="bi bi-x-circle me-1"></i>{{ report.isolated }} DC{% if report.isolated > 1 %}s{% endif %} receive{% if report.isolated == 1 %}s{% endif %} from no one
     </span>
     {% endif %}
     <span class="badge bg-success-subtle text-success border border-success-subtle fs-6">
@@ -90,6 +95,8 @@
     <div class="card-body text-danger small">
         <i class="bi bi-x-circle me-1"></i>No inbound replication partners: this DC receives no changes from
         any other, so it will drift apart. Check <code>samba-tool drs showrepl</code> on it.
+        <div class="text-muted mt-1">Just after a DC joins, this is normal for about 10 minutes: Samba adds the
+        links from the new DC by itself, then runs them.</div>
     </div>
     {% else %}
     <div class="table-responsive">

@@ -746,7 +746,11 @@ async fn check_replication(server: &Server, conn: &mut ldap3::Ldap, ctx: &Ctx) -
                 format!("No inbound replication on {}", silent.join(", "))
             },
         )
-        .fix("Open the Replication page for each link's error. `samba-tool drs showrepl` on the DC shows the same; a DC that stops replicating silently drifts apart from the others.")
+        .fix(if silent.is_empty() {
+            "Open the Replication page for each link's error. `samba-tool drs showrepl` on the DC shows the same; a DC that stops replicating silently drifts apart from the others."
+        } else {
+            "Just after a DC joins, this is normal for about 10 minutes, until Samba adds the links from the new DC by itself. Otherwise run `samba-tool drs showrepl` on that DC: a DC that receives from no one silently drifts apart from the others."
+        })
     } else if report.warn > 0 || report.unreachable > 0 {
         c.set(
             WARN,

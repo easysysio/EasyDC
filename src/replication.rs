@@ -142,6 +142,10 @@ pub fn assess(r: &RepsFrom, now: i64) -> (&'static str, String) {
         );
     }
     let Some(last) = r.last_success else {
+        // No failure, no error and no success: a new link that has not run yet.
+        if r.result == 0 {
+            return ("warn", "Not run yet. Samba runs a new link within a few minutes".to_string());
+        }
         return ("fail", "Never replicated successfully".to_string());
     };
     let age = now - last;
@@ -214,15 +218,18 @@ pub struct Report {
     pub fail: usize,
     /// DCs that could not be read.
     pub unreachable: usize,
+    /// DCs that were read but receive from no one.
+    pub isolated: usize,
 }
 
 impl Report {
-    fn tally(mut self) -> Self {
+    pub(crate) fn tally(mut self) -> Self {
         let links = || self.dcs.iter().flat_map(|d| d.links.iter());
         self.ok = links().filter(|l| l.status == "ok").count();
         self.warn = links().filter(|l| l.status == "warn").count();
         self.fail = links().filter(|l| l.status == "fail").count();
         self.unreachable = self.dcs.iter().filter(|d| d.error.is_some()).count();
+        self.isolated = self.dcs.iter().filter(|d| d.error.is_none() && d.links.is_empty()).count();
         self
     }
 }
@@ -470,7 +477,10 @@ mod tests {
         assert!(note.starts_with("3 failed attempts in a row: the RPC server is unavailable"), "{note}");
         assert!(note.contains("last success 2 h ago"), "{note}");
 
+        // A link the KCC has just added, as testdc showed it after testdc2 joined.
         let (r, now) = link(0, 0, None, 0);
+        assert_eq!(assess(&r, now), ("warn", "Not run yet. Samba runs a new link within a few minutes".to_string()));
+        let (r, now) = link(0, 8524, None, 0);
         assert_eq!(assess(&r, now).0, "fail");
         let (r, now) = link(0, 0, Some(2 * 86_400), 0);
         assert!(assess(&r, now).1.contains("2 days"));
