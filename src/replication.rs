@@ -98,9 +98,12 @@ pub fn error_text(code: u32) -> &'static str {
     match code {
         0 => "success",
         5 => "access denied",
+        1225 => "the partner refused the connection: Samba may be stopped there",
         1256 => "the remote system is not available",
         1396 => "the target account name is incorrect (a Kerberos/SPN problem)",
+        1460 => "the partner did not answer in time",
         1722 => "the RPC server is unavailable: the partner is down, or a firewall blocks it",
+        1727 => "the call to the partner failed: it may have stopped or restarted",
         1753 => "no endpoint is listening on the partner",
         1908 => "the domain controller could not be found",
         8333 => "a directory object was not found",
@@ -490,6 +493,12 @@ mod tests {
         assert!(assess(&r, now).1.contains("disabled"));
         let (r, now) = link(1, 99_999, Some(60), 0);
         assert!(assess(&r, now).1.contains("Windows error 99999 (0x1869F)"));
+        // What testdc showed while testdc2's Samba was stopped.
+        let (r, now) = link(1, 1225, Some(120), 0);
+        assert_eq!(
+            assess(&r, now).1,
+            "1 failed attempt in a row: the partner refused the connection: Samba may be stopped there (error 1225); last success 2 min ago"
+        );
     }
 
     #[test]

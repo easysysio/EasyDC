@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
 - A user whose lockout had run out was still shown as Locked until they next signed in.
 - When EasyDC could not reach or sign in to a DC, pages showed raw errors such as "os error 61" or "data 52e". They now say what went wrong and what to change.
 - Just after a second DC joined, the Replication page said *All links healthy* while the first DC received from no one, then showed its new links as *Failing* before they had run. New links now show *Not run yet*, a DC with no partners counts as a problem, and both say this is normal for about 10 minutes after a join.
+- The Replication page showed some common errors only as a number, such as "Windows error 1225" when Samba was stopped on the partner DC. These are now in words.
 - After deleting a DNS zone, the notice said the DNS server would stop answering for it. Until samba is restarted it still answers that no name in the zone exists; the notice and the confirm prompt now say so.
 - A server's card said "TLS Disabled" when only the certificate check was off. It now says *Certificate checked*, *Certificate not checked* or *Not encrypted*.
 - A bulk action on more than about 1,300 users ran longer than a reverse proxy waits (60 seconds for Nginx), so the browser showed an error while the work went on unseen. A big selection is now sent 100 users at a time, with a progress bar, and each user takes a quarter less time.
