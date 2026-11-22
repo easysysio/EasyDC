@@ -16,7 +16,7 @@
         <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#moveObjectModal">
             <i class="bi bi-arrow-left-right me-1"></i> Move Object
         </button>
-        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createOuModal">
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createOuModal" data-needs="ous">
             <i class="bi bi-plus-circle me-1"></i> New OU
         </button>
     </div>
@@ -60,7 +60,7 @@
                     </td>
                     <td class="text-muted small">{{ ou.description }}</td>
                     <td class="font-monospace small text-muted text-break d-none d-lg-table-cell">{{ ou.dn }}</td>
-                    <td class="text-end">
+                    <td class="text-end" data-needs="ous">
                         <button type="button" class="btn btn-outline-secondary btn-sm"
                             data-bs-toggle="modal"
                             data-bs-target="#renameModal{{ loop.index }}"

@@ -122,7 +122,7 @@
                     {% endif %}
 
                     {% for fix in c.fixes %}
-                    <form method="post" action="/servers/{{ server.id }}/health/fix"
+                    <form method="post" action="/servers/{{ server.id }}/health/fix" data-needs="admin"
                         class="mt-2 p-3 rounded border border-primary-subtle">
                         <input type="hidden" name="kind" value="{{ fix.kind }}">
                         <input type="hidden" name="stage" value="preview">

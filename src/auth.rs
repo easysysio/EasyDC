@@ -1,12 +1,16 @@
 use axum::{
-    extract::{FromRequestParts, Request, State},
-    http::{header, request::Parts, HeaderMap, HeaderValue},
+    extract::{FromRequestParts, MatchedPath, Request, State},
+    http::{header, request::Parts, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
+    Json,
 };
 use sqlx::Row;
 
-use crate::{db, AppState};
+use crate::{
+    access::{self, Need},
+    db, AppState,
+};
 
 // ── session lifetime ────────────────────────────────────────────────────────────
 
@@ -89,7 +93,7 @@ pub async fn require_auth(
     let Some(token) = extract_session_cookie(request.headers()) else {
         return Redirect::to("/login").into_response();
     };
-    let row = sqlx::query("SELECT created_at, last_seen FROM sessions WHERE token = ?")
+    let row = sqlx::query("SELECT created_at, last_seen, username FROM sessions WHERE token = ?")
         .bind(&token)
         .fetch_optional(&state.db)
         .await
@@ -100,37 +104,110 @@ pub async fn require_auth(
 
     let created: i64 = row.get("created_at");
     let seen: i64 = row.get::<Option<i64>, _>("last_seen").unwrap_or(created);
+    let username: String = row.get::<Option<String>, _>("username").unwrap_or_default();
     let now = db::unix_now();
-    match session_state(created, seen, now) {
-        SessionState::Valid { touch } => {
-            if touch {
-                let _ = sqlx::query("UPDATE sessions SET last_seen = ? WHERE token = ?")
-                    .bind(now)
-                    .bind(&token)
-                    .execute(&state.db)
-                    .await;
-            }
-            next.run(request).await
-        }
-        SessionState::Expired => {
-            let _ = sqlx::query("DELETE FROM sessions WHERE token = ?")
-                .bind(&token)
-                .execute(&state.db)
-                .await;
-            let mut response = Redirect::to("/login?expired=1").into_response();
-            response
-                .headers_mut()
-                .insert(header::SET_COOKIE, clear_session_cookie(via_https(request.headers())));
-            response
+    // An account removed since sign-in has no permissions left.
+    let access = match session_state(created, seen, now) {
+        SessionState::Valid { .. } => db::access_for(&state.db, &username).await.ok().flatten(),
+        SessionState::Expired => None,
+    };
+    let Some(access) = access else {
+        let _ = sqlx::query("DELETE FROM sessions WHERE token = ?")
+            .bind(&token)
+            .execute(&state.db)
+            .await;
+        let mut response = Redirect::to("/login?expired=1").into_response();
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, clear_session_cookie(via_https(request.headers())));
+        return response;
+    };
+    if let SessionState::Valid { touch: true } = session_state(created, seen, now) {
+        let _ = sqlx::query("UPDATE sessions SET last_seen = ? WHERE token = ?")
+            .bind(now)
+            .bind(&token)
+            .execute(&state.db)
+            .await;
+    }
+
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let need = access::need(request.method(), &route);
+    if !access.allows(need) {
+        return refuse(&state, &access.username, request.headers(), request.uri().path(), need).await;
+    }
+    access::scope(access, next.run(request)).await
+}
+
+/// Answer a change the account may not make: a line in the audit log, and
+/// the reason on the page it came from — or, to a script that asked for
+/// JSON, `{"error": reason}`.
+pub async fn refuse(state: &AppState, actor: &str, headers: &HeaderMap, path: &str, need: Need) -> Response {
+    let reason = access::refusal(need);
+    let server_id = path
+        .strip_prefix("/servers/")
+        .and_then(|r| r.split('/').next())
+        .and_then(|id| id.parse::<i64>().ok());
+    db::log_action(&state.db, actor, "access.refused", path, server_id, &Err(reason.clone())).await;
+
+    let wants_json = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/json"));
+    if wants_json {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": reason }))).into_response();
+    }
+    let mut response = Redirect::to(&back_to(headers)).into_response();
+    if let Ok(v) = HeaderValue::from_str(&flash_cookie(&reason, via_https(headers))) {
+        response.headers_mut().insert(header::SET_COOKIE, v);
+    }
+    response
+}
+
+/// The page a form was sent from, when the browser says and it is this site;
+/// otherwise the dashboard.
+pub fn back_to(headers: &HeaderMap) -> String {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    let referer = headers.get(header::REFERER).and_then(|v| v.to_str().ok());
+    let (Some(host), Some(referer)) = (host, referer) else { return "/".to_string() };
+    let Some((_, rest)) = referer.split_once("://") else { return "/".to_string() };
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if authority.eq_ignore_ascii_case(host) && !path.starts_with("//") {
+        path.split('#').next().unwrap_or("/").to_string()
+    } else {
+        "/".to_string()
+    }
+}
+
+/// A one-minute cookie the next page shows as a notice and then clears. Not
+/// HttpOnly, since the page's script reads it; it only ever holds a message.
+pub fn flash_cookie(message: &str, secure: bool) -> String {
+    let mut encoded = String::new();
+    for b in message.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
         }
     }
+    let mut c = format!("easydc_flash={encoded}; Path=/; Max-Age=60; SameSite=Strict");
+    if secure {
+        c.push_str("; Secure");
+    }
+    c
 }
 
 // ── current user extractor ──────────────────────────────────────────────────────
 
 /// The username behind the request's session, for audit attribution.
-/// Always succeeds (routes are already guarded by `require_auth`); falls back
-/// to "unknown" if the session has no recorded username (legacy sessions).
+/// Always succeeds: routes are already guarded by `require_auth`, which
+/// knows the account.
 pub struct CurrentUser(pub String);
 
 #[axum::async_trait]
@@ -138,16 +215,11 @@ impl FromRequestParts<AppState> for CurrentUser {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
+        _parts: &mut Parts,
+        _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let username = match extract_session_cookie(&parts.headers) {
-            Some(token) => db::username_for_token(&state.db, &token)
-                .await
-                .unwrap_or_else(|| "unknown".to_string()),
-            None => "unknown".to_string(),
-        };
-        Ok(CurrentUser(username))
+        let name = access::current().username;
+        Ok(CurrentUser(if name.is_empty() { "unknown".to_string() } else { name }))
     }
 }
 
@@ -201,6 +273,23 @@ mod tests {
         assert!(!via_https(&headers(&[("x-forwarded-proto", "http, https")])));
         assert!(via_https(&headers(&[("forwarded", "for=192.0.2.1;proto=https;host=dc")])));
         assert!(!via_https(&headers(&[("forwarded", "for=192.0.2.1;proto=http")])));
+    }
+
+    #[test]
+    fn a_refused_change_goes_back_to_its_page() {
+        let h = |host: &'static str, referer: &'static str| headers(&[("host", host), ("referer", referer)]);
+        assert_eq!(back_to(&h("easydc:3000", "http://easydc:3000/servers/2/users?q=1#x")), "/servers/2/users?q=1");
+        assert_eq!(back_to(&h("easydc:3000", "https://evil.example/servers/2/users")), "/");
+        assert_eq!(back_to(&h("easydc:3000", "http://easydc:3000//evil.example/")), "/");
+        assert_eq!(back_to(&h("easydc:3000", "http://easydc:3000")), "/");
+        assert_eq!(back_to(&headers(&[("host", "easydc")])), "/");
+    }
+
+    #[test]
+    fn the_notice_cookie_holds_only_safe_characters() {
+        let c = flash_cookie("You can view Users; not \"change\" them.", false);
+        assert_eq!(c, "easydc_flash=You%20can%20view%20Users%3B%20not%20%22change%22%20them.; Path=/; Max-Age=60; SameSite=Strict");
+        assert!(flash_cookie("x", true).ends_with("; Secure"));
     }
 
     #[test]

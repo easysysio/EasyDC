@@ -1,4 +1,5 @@
-//! EasyDC's own settings: the administrator accounts that sign in to EasyDC.
+//! EasyDC's own settings: the accounts that sign in to EasyDC, and what each
+//! may change.
 //!
 //! Nothing here touches a domain controller — these are the local accounts in
 //! EasyDC's SQLite database, not directory users. Every change is written to
@@ -10,10 +11,12 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use tera::Context;
 
 use crate::{
+    access::{self, Area, AREAS},
     auth::{extract_session_cookie, CurrentUser},
     db, AppState,
 };
@@ -37,8 +40,9 @@ pub struct SettingsQuery {
 fn done_message(code: &str) -> Option<&'static str> {
     match code {
         "password" => Some("Password changed. Your other sessions have been signed out."),
-        "created" => Some("Administrator added."),
-        "deleted" => Some("Administrator removed and signed out."),
+        "created" => Some("Account added."),
+        "deleted" => Some("Account removed and signed out."),
+        "permissions" => Some("Permissions saved. They apply from that account's next click."),
         _ => None,
     }
 }
@@ -53,7 +57,8 @@ async fn render(
 ) -> Response {
     let mut ctx = Context::new();
     ctx.insert("actor", actor);
-    ctx.insert("admins", &db::list_admins(&state.db).await.unwrap_or_default());
+    ctx.insert("accounts", &db::list_accounts(&state.db).await.unwrap_or_default());
+    ctx.insert("areas", &area_rows());
     ctx.insert("min_password_len", &MIN_PASSWORD_LEN);
     if let Some(e) = error {
         ctx.insert("error", &e);
@@ -61,7 +66,7 @@ async fn render(
     if let Some(d) = done {
         ctx.insert("done", d);
     }
-    Html(state.tera.render("settings.html", &ctx).unwrap_or_default()).into_response()
+    Html(access::render(&state.tera, "settings.html", &ctx)).into_response()
 }
 
 pub async fn settings(
@@ -158,21 +163,51 @@ pub async fn change_password(
     Redirect::to("/settings?done=password").into_response()
 }
 
-// ── administrator accounts ────────────────────────────────────────────────────
+// ── EasyDC accounts ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct AreaRow {
+    key: &'static str,
+    label: &'static str,
+    covers: &'static str,
+}
+
+fn area_rows() -> Vec<AreaRow> {
+    AREAS.iter().map(|a| AreaRow { key: a.key(), label: a.label(), covers: a.covers() }).collect()
+}
+
+/// The permission fields of a form: `admin=on`, and `area_<key>=edit` for
+/// each area to edit. An area left out, or set to anything else, is View.
+fn read_permissions(fields: &HashMap<String, String>) -> (bool, BTreeSet<Area>) {
+    let admin = fields.get("admin").is_some_and(|v| v == "on");
+    let edit = AREAS
+        .into_iter()
+        .filter(|a| fields.get(&format!("area_{}", a.key())).is_some_and(|v| v == "edit"))
+        .collect();
+    (admin, edit)
+}
+
+/// What an account may change, for the audit log.
+fn described(admin: bool, edit: &BTreeSet<Area>) -> String {
+    access::Access { admin, edit: edit.clone(), ..Default::default() }.summary()
+}
 
 #[derive(Deserialize)]
-pub struct NewAdminForm {
+pub struct NewAccountForm {
     pub username: String,
     pub password: String,
     pub confirm_password: String,
+    #[serde(flatten)]
+    pub permissions: HashMap<String, String>,
 }
 
-pub async fn create_admin(
+pub async fn create_account(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
-    Form(form): Form<NewAdminForm>,
+    Form(form): Form<NewAccountForm>,
 ) -> Response {
     let username = form.username.trim().to_string();
+    let (admin, edit) = read_permissions(&form.permissions);
 
     let error = if username.is_empty() {
         Some("Username is required.".to_string())
@@ -184,14 +219,14 @@ pub async fn create_admin(
         Some(format!("Password must be at least {} characters.", MIN_PASSWORD_LEN))
     } else if form.password != form.confirm_password {
         Some("Passwords do not match.".to_string())
-    } else if db::admin_name_taken(&state.db, &username).await {
-        Some(format!("An administrator named '{}' already exists.", username))
+    } else if db::account_name_taken(&state.db, &username).await {
+        Some(format!("An account named '{}' already exists.", username))
     } else {
         None
     };
 
     if let Some(e) = error {
-        db::log_action(&state.db, &actor, "settings.admin_create", &username, None, &Err(e.clone())).await;
+        db::log_action(&state.db, &actor, "settings.account_create", &username, None, &Err(e.clone())).await;
         return render(&state, &actor, Some(e), None).await;
     }
 
@@ -199,15 +234,16 @@ pub async fn create_admin(
         Ok(h) => h,
         Err(e) => {
             let msg = format!("Could not hash the password: {}", e);
-            db::log_action(&state.db, &actor, "settings.admin_create", &username, None, &Err(msg.clone())).await;
+            db::log_action(&state.db, &actor, "settings.account_create", &username, None, &Err(msg.clone())).await;
             return render(&state, &actor, Some(msg), None).await;
         }
     };
 
-    let result = db::create_admin(&state.db, &username, &hash)
+    let result = db::create_account(&state.db, &username, &hash, admin, &edit)
         .await
         .map_err(|e| e.to_string());
-    db::log_action(&state.db, &actor, "settings.admin_create", &username, None, &result).await;
+    let target = format!("{username} ({})", described(admin, &edit));
+    db::log_action(&state.db, &actor, "settings.account_create", &target, None, &result).await;
 
     match result {
         Err(e) => render(&state, &actor, Some(e), None).await,
@@ -215,36 +251,68 @@ pub async fn create_admin(
     }
 }
 
-pub async fn delete_admin(
+pub async fn update_permissions(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path(username): Path<String>,
+    Form(fields): Form<HashMap<String, String>>,
+) -> Response {
+    let (admin, edit) = read_permissions(&fields);
+    let target = format!("{username} ({})", described(admin, &edit));
+    // Changing your own would let a slip of the mouse lock you out of
+    // Settings; another admin can do it.
+    let error = if username == actor {
+        Some("You cannot change your own permissions. Another admin can.".to_string())
+    } else if !db::account_exists(&state.db, &username).await {
+        Some(format!("No account named '{}'.", username))
+    } else {
+        None
+    };
+    let result = match error {
+        Some(e) => Err(e),
+        None => match db::set_permissions(&state.db, &username, admin, &edit).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!("{username} is the last admin, so stays one. Make another account an admin first.")),
+            Err(e) => Err(e.to_string()),
+        },
+    };
+    db::log_action(&state.db, &actor, "settings.account_permissions", &target, None, &result).await;
+    match result {
+        Err(e) => render(&state, &actor, Some(e), None).await,
+        Ok(()) => Redirect::to("/settings?done=permissions").into_response(),
+    }
+}
+
+pub async fn delete_account(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path(username): Path<String>,
 ) -> Response {
     // Two guards, both of which would otherwise lock everyone out: deleting the
-    // account you are using, and deleting the last one that exists.
-    // The last-administrator rule is enforced inside db::delete_admin, in the
-    // same statement as the delete; these checks only pick the message.
+    // account you are using, and deleting the last admin.
+    // The last-admin rule is enforced inside db::delete_account, in the same
+    // statement as the delete; these checks only pick the message.
     let error = if username == actor {
         Some("You cannot delete the account you are signed in as.".to_string())
-    } else if !db::admin_exists(&state.db, &username).await {
-        Some(format!("No administrator named '{}'.", username))
+    } else if !db::account_exists(&state.db, &username).await {
+        Some(format!("No account named '{}'.", username))
     } else {
         None
     };
 
     if let Some(e) = error {
-        db::log_action(&state.db, &actor, "settings.admin_delete", &username, None, &Err(e.clone())).await;
+        db::log_action(&state.db, &actor, "settings.account_delete", &username, None, &Err(e.clone())).await;
         return render(&state, &actor, Some(e), None).await;
     }
 
-    let result = match db::delete_admin(&state.db, &username).await {
+    let result = match db::delete_account(&state.db, &username).await {
         Ok(true) => Ok(()),
         // The account existed a moment ago, so nothing deleted means it was the
-        // last one — or it vanished in between; either way, report it.
-        Ok(false) => Err("At least one administrator must remain.".to_string()),
+        // last admin — or it vanished in between; either way, report it.
+        Ok(false) => Err("At least one admin must remain.".to_string()),
         Err(e) => Err(e.to_string()),
     };
-    db::log_action(&state.db, &actor, "settings.admin_delete", &username, None, &result).await;
+    db::log_action(&state.db, &actor, "settings.account_delete", &username, None, &result).await;
 
     match result {
         Err(e) => render(&state, &actor, Some(e), None).await,
@@ -268,41 +336,94 @@ mod tests {
         t
     }
 
-    fn ctx(actor: &str, admins: &[&str]) -> Context {
+    use crate::access::{Access, Area};
+    use crate::db::Account;
+
+    fn account(name: &str, admin: bool, edit: &[Area]) -> Account {
+        let a = Access { username: name.to_string(), admin, edit: edit.iter().copied().collect() };
+        Account {
+            username: name.to_string(),
+            admin,
+            edit: a.edit.iter().map(|x| x.key()).collect(),
+            summary: a.summary(),
+        }
+    }
+
+    fn ctx_for(actor: &str, me: Access, accounts: &[Account]) -> Context {
         let mut c = Context::new();
         c.insert("actor", actor);
-        c.insert("admins", admins);
+        c.insert("accounts", accounts);
+        c.insert("areas", &super::area_rows());
         c.insert("min_password_len", &super::MIN_PASSWORD_LEN);
+        c.insert("access", &me.view());
         c
     }
 
+    /// Signed in as alice, an admin.
+    fn ctx(actor: &str, names: &[&str]) -> Context {
+        let accounts: Vec<Account> = names.iter().map(|n| account(n, true, &[])).collect();
+        ctx_for(actor, Access { username: actor.into(), admin: true, ..Default::default() }, &accounts)
+    }
+
     #[test]
-    fn lists_administrators_and_marks_the_current_one() {
+    fn lists_accounts_and_marks_the_current_one() {
         let html = tera()
             .render("settings.html", &ctx("alice", &["alice", "bob"]))
             .expect("renders");
         assert!(html.contains("alice"));
         assert!(html.contains("bob"));
         assert!(html.contains(">you<"));
+        assert!(html.contains("Admin: changes everything"));
     }
 
-    /// The two lock-yourself-out cases the handler refuses must not be offered
+    /// The lock-yourself-out cases the handler refuses must not be offered
     /// in the UI either.
     #[test]
-    fn offers_no_delete_for_your_own_account() {
+    fn offers_nothing_for_your_own_account() {
         let html = tera()
             .render("settings.html", &ctx("alice", &["alice", "bob"]))
             .expect("renders");
-        assert!(html.contains("/settings/admins/bob/delete"));
-        assert!(!html.contains("/settings/admins/alice/delete"));
+        assert!(html.contains("/settings/accounts/bob/delete"));
+        assert!(html.contains("/settings/accounts/bob/permissions"));
+        assert!(!html.contains("/settings/accounts/alice/"));
     }
 
     #[test]
-    fn offers_no_delete_for_the_last_administrator() {
-        let html = tera()
-            .render("settings.html", &ctx("alice", &["alice"]))
-            .expect("renders");
-        assert!(!html.contains("/delete"));
+    fn offers_no_delete_for_the_last_admin() {
+        let accounts = [account("alice", true, &[]), account("bob", true, &[]), account("helpdesk", false, &[])];
+        let me = Access { username: "alice".into(), admin: true, ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("alice", me.clone(), &accounts)).unwrap();
+        assert!(html.contains("/settings/accounts/bob/delete"), "two admins: either may go");
+
+        let accounts = [account("alice", true, &[]), account("helpdesk", false, &[Area::Users])];
+        let html = tera().render("settings.html", &ctx_for("alice", me, &accounts)).unwrap();
+        assert!(html.contains("/settings/accounts/helpdesk/delete"), "not an admin, so it can go");
+        assert!(html.contains("Edit: Users"));
+    }
+
+    #[test]
+    fn the_permission_grid_shows_what_an_account_may_change() {
+        let accounts = [account("alice", true, &[]), account("helpdesk", false, &[Area::Users, Area::DnsRecords])];
+        let me = Access { username: "alice".into(), admin: true, ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("alice", me, &accounts)).unwrap();
+        // The new-account form, and helpdesk's dialog with its two Edit areas.
+        assert!(html.contains(r#"name="area_users" value="edit"
+                            id="acct2-users-edit" checked"#), "{html}");
+        assert!(html.contains(r#"id="acct2-dns_records-edit" checked"#));
+        assert!(html.contains(r#"id="acct2-groups-view" checked"#));
+        assert!(html.contains(r#"id="new-users-view" checked"#), "a new account starts on View");
+        assert!(html.contains("Add account"));
+        assert!(html.contains("DNS zones") && html.contains("create and delete zones"));
+    }
+
+    #[test]
+    fn someone_who_is_not_an_admin_only_sees_the_list() {
+        let accounts = [account("alice", true, &[]), account("helpdesk", false, &[Area::Users])];
+        let me = Access { username: "helpdesk".into(), edit: [Area::Users].into(), ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("helpdesk", me, &accounts)).unwrap();
+        assert!(!html.contains("/settings/accounts/"), "no add, change or remove");
+        assert!(html.contains("Your permissions: Edit: Users."));
+        assert!(html.contains("/settings/password"), "but they can change their own password");
     }
 
     #[test]
@@ -334,9 +455,20 @@ mod tests {
             .render("settings.html", &ctx("alice", &["alice", "o'brien", "a/b"]))
             .expect("renders");
         assert!(!html.contains("onsubmit="), "no inline handlers");
-        assert!(html.contains("/settings/admins/o%27brien/delete"));
-        assert!(html.contains("/settings/admins/a%2Fb/delete"));
-        assert!(html.contains(r#"data-admin="o&#x27;brien""#));
+        assert!(html.contains("/settings/accounts/o%27brien/delete"));
+        assert!(html.contains("/settings/accounts/a%2Fb/delete"));
+        assert!(html.contains(r#"data-account="o&#x27;brien""#));
+    }
+
+    #[test]
+    fn permission_fields_are_read_from_the_form() {
+        let f = |pairs: &[(&str, &str)]| {
+            super::read_permissions(&pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+        };
+        assert_eq!(f(&[]), (false, Default::default()));
+        let (admin, edit) = f(&[("area_users", "edit"), ("area_gpos", "view"), ("area_bogus", "edit"), ("admin", "on")]);
+        assert!(admin);
+        assert_eq!(edit, [Area::Users].into());
     }
 
     #[test]
@@ -354,6 +486,7 @@ mod tests {
         assert!(super::done_message("password").is_some());
         assert!(super::done_message("created").is_some());
         assert!(super::done_message("deleted").is_some());
+        assert!(super::done_message("permissions").is_some());
         // An unknown or hand-typed code shows no banner rather than echoing it.
         assert!(super::done_message("<script>").is_none());
     }

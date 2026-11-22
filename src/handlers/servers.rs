@@ -35,7 +35,7 @@ pub async fn audit(State(state): State<AppState>, Query(view): Query<AuditView>)
         Err(e) => error = Some(format!("The audit log could not be read: {e}")),
     }
     let ctx = audit_context(&view, failures, wanted, entries, total, error);
-    Html(state.tera.render("audit.html", &ctx).unwrap_or_default())
+    Html(crate::access::render(&state.tera, "audit.html", &ctx))
 }
 
 fn audit_context(
@@ -113,7 +113,7 @@ pub async fn dashboard(State(state): State<AppState>, Query(view): Query<Dashboa
         Some(server) => Some((server.name.clone(), crate::ldap::open(server).await.map(|(_, base_dn)| base_dn))),
         None => None,
     };
-    Html(state.tera.render("dashboard.html", &dashboard_context(&servers, checked)).unwrap_or_default())
+    Html(crate::access::render(&state.tera, "dashboard.html", &dashboard_context(&servers, checked)))
 }
 
 fn dashboard_context(servers: &[Server], checked: Option<(String, Result<String, String>)>) -> Context {
@@ -152,7 +152,7 @@ pub async fn server_detail(
         Some(server) => {
             let mut ctx = Context::new();
             ctx.insert("server", &server);
-            Html(state.tera.render("server_detail.html", &ctx).unwrap_or_default()).into_response()
+            Html(crate::access::render(&state.tera, "server_detail.html", &ctx)).into_response()
         }
     }
 }
@@ -287,7 +287,7 @@ mod dashboard_tests {
         assert!(html.contains("Saved LAB, but EasyDC could not sign in to it. Sign-in to the DC failed: wrong."));
 
         let html = render(None);
-        assert!(!html.contains("alert-dismissible"));
+        assert!(!html.contains("EasyDC signed in to") && !html.contains("could not sign in"));
         assert!(!html.contains("secret"), "the bind password never reaches the page");
     }
 

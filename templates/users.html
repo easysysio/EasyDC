@@ -16,7 +16,7 @@
         <i class="bi bi-people me-2 text-primary"></i>Users{% if selected %}
         <span class="text-muted fw-normal">in {{ selected }}</span>{% endif %}
     </h4>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal" data-needs="users">
         <i class="bi bi-person-plus me-1"></i> Add User
     </button>
 </div>
@@ -60,7 +60,7 @@
             {% endif %}
         </div>
         {% else %}
-        <div id="bulkBar" class="alert alert-primary py-2 px-3 mb-3 d-none">
+        <div id="bulkBar" class="alert alert-primary py-2 px-3 mb-3 d-none" data-needs="users">
             <div class="d-flex flex-wrap align-items-center gap-2">
                 <strong class="me-2"><span id="bulkCount">0</span> selected</strong>
                 <button type="button" class="btn btn-sm btn-outline-success js-bulk" data-action="enable">
@@ -73,11 +73,11 @@
                     <i class="bi bi-folder-symlink me-1"></i>Move…
                 </button>
                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
-                    data-bs-target="#addToGroupModal">
+                    data-bs-target="#addToGroupModal" data-needs="groups">
                     <i class="bi bi-people me-1"></i>Add to group…
                 </button>
-                <button type="button" class="btn btn-sm btn-link d-none" id="selectMatching"></button>
-                <button type="button" class="btn btn-sm btn-link ms-auto" id="bulkClear">Clear selection</button>
+                <button type="button" class="btn btn-sm btn-link d-none" id="selectMatching" data-needs=""></button>
+                <button type="button" class="btn btn-sm btn-link ms-auto" id="bulkClear" data-needs="">Clear selection</button>
             </div>
         </div>
         <form id="bulkForm" method="post" action="/servers/{{ server.id }}/users/bulk{{ view_qs }}" class="d-none">
@@ -121,10 +121,10 @@
 {% endif %}{% if user.password == "must_change" %}<span class="badge bg-info-subtle text-info-emphasis border border-info-subtle" title="Must set a new password at the next sign-in"><i class="bi bi-key me-1"></i>Must change password</span>
 {% elif user.password == "expired" %}<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle" title="The password is older than the domain's maximum password age"><i class="bi bi-key me-1"></i>Password expired</span>
 {% endif %}</td>
-<td class="text-end"><div class="btn-group btn-group-sm">
+<td class="text-end" data-needs="users"><div class="btn-group btn-group-sm">
 <form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/toggle{{ view_qs }}" class="d-inline">{% if user.enabled %}<input type="hidden" name="enable" value="false"><button type="submit" class="btn btn-outline-warning btn-sm" title="Disable account"><i class="bi bi-pause-circle"></i></button>{% else %}<input type="hidden" name="enable" value="true"><button type="submit" class="btn btn-outline-success btn-sm" title="Enable account"><i class="bi bi-play-circle"></i></button>{% endif %}</form>
 {% if user.locked %}<form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/unlock{{ view_qs }}" class="d-inline"><button type="submit" class="btn btn-outline-warning btn-sm" title="Unlock account"><i class="bi bi-unlock"></i></button></form>
-{% endif %}<button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#editUserModal" title="Edit"><i class="bi bi-pencil"></i></button>
+{% endif %}<button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#editUserModal" title="Edit" data-needs=""><i class="bi bi-pencil"></i></button>
 <div class="btn-group btn-group-sm"><button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="More actions" aria-label="More actions for {{ user.username }}"><i class="bi bi-three-dots"></i></button>
 <ul class="dropdown-menu dropdown-menu-end"><li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#resetUserModal"><i class="bi bi-key me-2"></i>Reset password</button></li><li><button type="button" class="dropdown-item js-move-one"><i class="bi bi-folder-symlink me-2"></i>Move to another OU</button></li><li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#deleteUserModal"><i class="bi bi-trash me-2"></i>Delete</button></li></ul></div>
 </div></td>
@@ -313,7 +313,7 @@
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" data-path="edit">
+            <form method="post" data-path="edit" data-needs="users">
                 <div class="modal-body">
                     <div class="row">
                         <div class="col mb-3">
@@ -576,7 +576,7 @@ EasyTable.ready(function () {
             const part = users.slice(sent, sent + PART);
             const body = new URLSearchParams({ action: action, users: part.join('\n'), target: target, part: '1' });
             try {
-                const answer = await (await fetch(bulkUrl, { method: 'POST', body: body })).json();
+                const answer = await (await fetch(bulkUrl, { method: 'POST', body: body, headers: { Accept: 'application/json' } })).json();
                 if (answer.error) {
                     stopped = answer.error;
                 } else {

@@ -16,7 +16,7 @@
         <h4 class="mb-0"><i class="bi bi-globe2 me-2 text-warning"></i>{{ zone_name }}</h4>
         <small class="text-muted">DNS Zone Records</small>
     </div>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRecordModal">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRecordModal" data-needs="dns_records">
         <i class="bi bi-plus-circle me-1"></i> Add Record
     </button>
 </div>
@@ -92,9 +92,9 @@
                     </td>
                     <td class="font-monospace small text-break">{{ record.value }}</td>
                     <td class="text-muted small">{{ record.ttl }}s</td>
-                    <td class="text-end">
+                    <td class="text-end" data-needs="dns_records">
                         {% if record.record_type != "SOA" %}
-                        <button type="button" class="btn btn-outline-secondary btn-sm" title="Edit record"
+                        <button type="button" class="btn btn-outline-secondary btn-sm" title="Edit record" data-needs=""
                             data-bs-toggle="modal" data-bs-target="#editRecordModal"
                             data-node="{{ node.name }}" data-type="{{ record.record_type }}"
                             data-value="{{ record.value }}" data-ttl="{{ record.ttl }}"
@@ -185,7 +185,7 @@
                 <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Edit DNS Record</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" action="/servers/{{ server.id }}/dns/{{ zone_name }}/edit">
+            <form method="post" action="/servers/{{ server.id }}/dns/{{ zone_name }}/edit" data-needs="dns_records">
                 <input type="hidden" name="node_name" id="editNode">
                 <input type="hidden" name="raw_hex" id="editRaw">
                 <div class="modal-body">

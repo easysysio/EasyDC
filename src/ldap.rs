@@ -2782,12 +2782,20 @@ pub async fn delete_ou(ldap: &mut ldap3::Ldap, ou_dn: &str) -> LdapResult<()> {
 
 // ── move object to OU ─────────────────────────────────────────────────────────
 
-pub async fn move_object_to_ou(
+/// What kind of object an account name is, for the permission moving it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectKind {
+    User,
+    Group,
+    Computer,
+}
+
+/// The entry behind an account name (a computer's without its `$`), and its kind.
+pub async fn find_movable(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     sam_account: &str,
-    target_ou_dn: &str,
-) -> LdapResult<()> {
+) -> LdapResult<(String, ObjectKind)> {
     // A computer's account name ends in `$`; the form says to leave it off.
     let filter = format!(
         "(|(sAMAccountName={0})(sAMAccountName={0}$))",
@@ -2795,7 +2803,7 @@ pub async fn move_object_to_ou(
     );
     let (entries, _) = ldap
         .with_timeout(OP_TIMEOUT)
-        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName"])
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "objectClass"])
         .await
         .map_err(ldap_err)?
         .success()
@@ -2806,7 +2814,29 @@ pub async fn move_object_to_ou(
         .into_iter()
         .next()
         .ok_or_else(|| format!("Object '{}' not found", sam_account))?;
-    move_entry(ldap, base_dn, &entry.dn, target_ou_dn).await
+    Ok((entry.dn.clone(), object_kind(&entry)))
+}
+
+/// A computer is also a user in AD, so it is checked first.
+fn object_kind(e: &SearchEntry) -> ObjectKind {
+    let classes = e.attrs.get("objectClass").cloned().unwrap_or_default();
+    let is = |c: &str| classes.iter().any(|x| x.eq_ignore_ascii_case(c));
+    if is("computer") {
+        ObjectKind::Computer
+    } else if is("group") {
+        ObjectKind::Group
+    } else {
+        ObjectKind::User
+    }
+}
+
+pub async fn move_object_to_ou(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    dn: &str,
+    target_ou_dn: &str,
+) -> LdapResult<()> {
+    move_entry(ldap, base_dn, dn, target_ou_dn).await
 }
 
 /// The name of the OU or container at `dn`, after checking it is one and is

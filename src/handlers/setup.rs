@@ -44,10 +44,8 @@ pub async fn post_setup(
     }
 
     let hash = bcrypt::hash(&form.password, bcrypt::DEFAULT_COST).unwrap();
-    sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
-        .bind(&form.username)
-        .bind(&hash)
-        .execute(&state.db)
+    // The first account is an admin: someone has to be able to add the rest.
+    db::create_account(&state.db, &form.username, &hash, true, &Default::default())
         .await
         .unwrap();
 

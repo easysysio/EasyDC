@@ -28,7 +28,7 @@ pub async fn health_check(State(state): State<AppState>, Path(id): Path<i64>) ->
         Err(e) => ctx.insert("error", &e),
     }
 
-    Html(state.tera.render("health.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "health.html", &ctx)).into_response()
 }
 
 // ── guided fixes ──────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ pub async fn health_fix(
     ctx.insert("keys", &keys);
 
     let render = |ctx: &Context| {
-        Html(state.tera.render("health_fix.html", ctx).unwrap_or_default()).into_response()
+        Html(crate::access::render(&state.tera, "health_fix.html", ctx)).into_response()
     };
 
     if !remediate::known_kind(&kind) {

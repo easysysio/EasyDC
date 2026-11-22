@@ -12,7 +12,7 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h4 class="mb-0"><i class="bi bi-shield-lock me-2 text-warning"></i>Group Policy Objects</h4>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createGpoModal">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createGpoModal" data-needs="gpos">
         <i class="bi bi-plus-circle me-1"></i> New GPO
     </button>
 </div>
@@ -74,10 +74,10 @@
                         <button type="button" class="btn btn-outline-primary btn-sm"
                             data-bs-toggle="modal"
                             data-bs-target="#editModal{{ loop.index }}"
-                            title="Edit">
+                            title="Edit" data-needs="">
                             <i class="bi bi-pencil"></i>
                         </button>
-                        <button type="button" class="btn btn-outline-danger btn-sm"
+                        <button type="button" class="btn btn-outline-danger btn-sm" data-needs="gpos"
                             data-bs-toggle="modal" data-bs-target="#deleteGpoModal"
                             data-name="{{ gpo.display_name }}"
                             data-url="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/delete"
@@ -134,7 +134,7 @@
                 <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Edit GPO</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" action="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/edit">
+            <form method="post" action="/servers/{{ server.id }}/gpo/{{ gpo.guid_url }}/edit" data-needs="gpos">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Display Name <span class="text-danger">*</span></label>

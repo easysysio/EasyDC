@@ -24,7 +24,7 @@ pub async fn replication(State(state): State<AppState>, Path(id): Path<i64>) -> 
         Ok(r) => ctx.insert("report", &r),
         Err(e) => ctx.insert("error", &e),
     }
-    Html(state.tera.render("replication.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "replication.html", &ctx)).into_response()
 }
 
 #[cfg(test)]

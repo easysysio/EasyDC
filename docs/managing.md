@@ -198,7 +198,7 @@ and does not hold up the rest of the page. To force a sync, run
 
 **Password Policy** on a server edits the domain-wide settings that
 `samba-tool domain passwordsettings` manages — they apply to every account in the domain,
-unlike [Settings](#easydc-administrators), which covers EasyDC's own logins.
+unlike [Settings](#easydc-accounts), which covers EasyDC's own logins.
 
 | Setting | Notes |
 |---|---|
@@ -242,24 +242,55 @@ newer on every DC). On an older domain the section explains how to raise it inst
 Changes are recorded in the audit log as `pso.create`, `pso.update`, `pso.delete`,
 `pso.apply` and `pso.unapply`.
 
-## EasyDC administrators
+## EasyDC accounts
 
 **Settings** in the top bar manages the accounts that sign in to *EasyDC* — not domain
-users. The first one is created by the setup wizard.
+users. The first one is created by the setup wizard and is an admin.
 
 - **Change your password** — needs your current one. Your other sessions are signed out,
   so a changed password actually ends access anywhere else you were signed in.
-- **Add an administrator** — so each person signs in as themselves and the audit log
-  names who made a change. Every administrator has full access; there are no roles yet.
-- **Remove an administrator** — their sessions are dropped immediately.
+- **Add an account** — so each person signs in as themselves and the audit log names who
+  made a change. Choose what they may change (below).
+- **Change permissions** — the shield button next to an account. It applies from that
+  person's next click.
+- **Remove an account** — their sessions are dropped immediately.
 
-Usernames may contain letters, digits and `. _ - @`. You cannot delete the account you are
-signed in as, and at least one administrator always remains — even when two administrators
-remove each other at the same moment.
+Only admins can add, change or remove accounts. Usernames may contain letters, digits and
+`. _ - @`. You cannot change or delete the account you are signed in as, and at least one
+admin always remains — even when two admins remove each other at the same moment.
+
+### Permissions
+
+Everyone can view every page, including Replication, the Health Check and the Audit Log.
+For each area, an account is set to **View** or **Edit**:
+
+| Area | Edit allows |
+|---|---|
+| Users | add, edit, delete, enable or disable, reset passwords, unlock, move |
+| Groups | add, edit, delete, members |
+| Computers | enable or disable, delete, move |
+| DNS records | add, edit, delete records |
+| DNS zones | create and delete zones |
+| GPOs | create, edit, delete, link to OUs |
+| OUs | create, rename, delete |
+| Password policies | the domain policy and per-group policies |
+
+**View all** and **Edit all** set every area at once. An **Admin** may change everything,
+and is the only one who can manage EasyDC accounts, add, edit or remove servers, and apply
+the Health Check's fixes.
+
+An action needs Edit on what it changes: adding users to a group needs Groups, and moving a
+group or computer to another OU needs Groups or Computers. What an account may not change is
+greyed out; clicking it says why. A refused change is also recorded in the audit log as
+`access.refused`.
+
+When upgrading from a version without permissions, every existing account becomes an admin.
 
 !!! note "Separate from the directory"
-    These accounts live in EasyDC's own database, with bcrypt-hashed passwords. Resetting a
-    *domain* user's password is under [Users](#users).
+    These accounts live in EasyDC's own database, with bcrypt-hashed passwords. EasyDC makes
+    every change with the server's bind account, after checking the person's permissions, so
+    people need no rights in the domain. Resetting a *domain* user's password is under
+    [Users](#users).
 
 ## Audit log
 
@@ -270,6 +301,6 @@ actor, action, target, server or error and press Enter; an entry must contain al
 them. **Failures only** shows just the changes that did not work.
 
 Each entry records the time, the EasyDC user who acted, the action (for example
-`user.reset_password`, `dns.zone_create` or `settings.admin_create`), its target, the server, and **success** or
+`user.reset_password`, `dns.zone_create` or `settings.account_create`), its target, the server, and **success** or
 **failure**. Failures keep the error the server returned, so a rejected change can be
 diagnosed after the fact.

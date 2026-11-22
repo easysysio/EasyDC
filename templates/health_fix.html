@@ -42,7 +42,7 @@
 {% if skipped > 0 %}
 <p class="small text-muted">{{ skipped }} selected item(s) no longer need fixing and will be left alone.</p>
 {% endif %}
-<form method="post" action="/servers/{{ server.id }}/health/fix" class="d-flex gap-2">
+<form method="post" action="/servers/{{ server.id }}/health/fix" class="d-flex gap-2" data-needs="admin">
     <input type="hidden" name="kind" value="{{ kind }}">
     <input type="hidden" name="stage" value="apply">
     {% for k in keys %}

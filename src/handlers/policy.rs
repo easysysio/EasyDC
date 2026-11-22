@@ -85,7 +85,7 @@ async fn render_checked(
         },
     }
 
-    Html(state.tera.render("policy.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "policy.html", &ctx)).into_response()
 }
 
 #[derive(Deserialize)]

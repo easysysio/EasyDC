@@ -2,36 +2,10 @@
 
 Everything below is planned for **0.5.0**, except the last section.
 
-## Permissions for EasyDC accounts
+## ~~Permissions for EasyDC accounts~~ — done
 
-When adding an EasyDC account, an admin sets each area to **View** or **Edit**:
-
-| Area | Edit covers |
-|---|---|
-| Users | add, edit, delete, enable or disable, reset password, unlock, move to another OU |
-| Groups | add, edit, delete, members (also from the Users page and a user's Edit dialog) |
-| Computers | enable or disable, delete, move to another OU |
-| DNS records | add, edit, delete |
-| DNS zones | create, delete |
-| GPOs | create, edit, delete, link to OUs |
-| OUs | create, rename, delete |
-| Password policies | the domain policy and per-group policies |
-| Sites and subnets | add, edit, delete (once that page exists) |
-
-- **Edit all** and **View all** buttons set every area at once; single areas can then be changed.
-- **Admin** is a separate tick box. It ticks and locks every area, and also covers what only
-  admins do: EasyDC accounts, server connections, Settings and the health check's fixes.
-  Admin is stored on its own, so areas added later reach admins without editing them, and an
-  account with every area on Edit is still not an admin.
-- An action needs Edit on what it changes: adding a user to a group needs Groups, moving a
-  user needs Users, linking a GPO needs GPOs.
-- Everyone can view every page, including replication, the health check and the audit log.
-  There is no hidden level.
-- In a View area the buttons are greyed out, with a note on who can change that.
-- Every action is checked on the server. A refused one gets a clear message on the page and
-  a line in the audit log.
-- Stored as one row per account and area, so a new area needs no database change.
-- On upgrade, existing EasyDC accounts become admins, so nothing stops working.
+Per-area View or Edit and a separate Admin, as described in `docs/managing.md`. When the
+Sites and subnets page lands, add it as an area (`src/access.rs`).
 
 ## Two kinds of EasyDC accounts
 

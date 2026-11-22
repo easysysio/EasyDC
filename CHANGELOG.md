@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Permissions for EasyDC accounts: for each area (users, groups, computers, DNS records, DNS zones, GPOs, OUs, password policies) an account may view or edit, and an admin may change everything, including EasyDC accounts and servers. What an account may not change is greyed out, and a refused change says why and is in the audit log. Existing accounts become admins.
+
 ## [0.4.5] - 2026-11-21
 
 ### Added

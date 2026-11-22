@@ -11,6 +11,30 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Migration: an admin flag. The accounts that exist when it is added were
+    // all full administrators, so they stay admins; accounts added later get
+    // what the admin who adds them chooses.
+    if sqlx::query("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await
+        .is_ok()
+    {
+        sqlx::query("UPDATE users SET is_admin = 1").execute(pool).await?;
+    }
+
+    // What each account may change: a row per area it may edit. An area
+    // without a row is View.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS permissions (
+            username TEXT NOT NULL,
+            area TEXT NOT NULL,
+            level TEXT NOT NULL,
+            PRIMARY KEY (username, area)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS servers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,6 +201,7 @@ pub async fn search_audit(
 // ── session ↔ user lookup ──────────────────────────────────────────────────────
 
 /// Resolve the username that owns a given session token, if any.
+#[cfg(test)]
 pub async fn username_for_token(pool: &SqlitePool, token: &str) -> Option<String> {
     use sqlx::Row;
     sqlx::query("SELECT username FROM sessions WHERE token = ?")
@@ -196,19 +221,67 @@ pub async fn has_users(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     Ok(row.get::<i64, _>("count") > 0)
 }
 
-// ── EasyDC administrator accounts ─────────────────────────────────────────────
+// ── EasyDC accounts ──────────────────────────────────────────────────────────
 
-/// Every administrator username, alphabetically.
-pub async fn list_admins(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+/// One account as the Settings page lists it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Account {
+    pub username: String,
+    pub admin: bool,
+    /// The keys of the areas it may edit.
+    pub edit: Vec<&'static str>,
+    pub summary: String,
+}
+
+/// Every account, alphabetically, with its permissions.
+pub async fn list_accounts(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
     use sqlx::Row;
     let rows = sqlx::query("SELECT username FROM users ORDER BY username COLLATE NOCASE")
         .fetch_all(pool)
         .await?;
-    Ok(rows.iter().map(|r| r.get::<String, _>("username")).collect())
+    let mut out = Vec::new();
+    for r in rows {
+        let username: String = r.get("username");
+        let a = access_for(pool, &username).await?.unwrap_or_default();
+        out.push(Account {
+            admin: a.admin,
+            edit: a.edit.iter().map(|x| x.key()).collect(),
+            summary: a.summary(),
+            username,
+        });
+    }
+    Ok(out)
+}
+
+/// An account's permissions, or None when there is no such account.
+pub async fn access_for(
+    pool: &SqlitePool,
+    username: &str,
+) -> Result<Option<crate::access::Access>, sqlx::Error> {
+    use sqlx::Row;
+    let Some(row) = sqlx::query("SELECT is_admin FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let rows = sqlx::query("SELECT area FROM permissions WHERE username = ? AND level = 'edit'")
+        .bind(username)
+        .fetch_all(pool)
+        .await?;
+    Ok(Some(crate::access::Access {
+        username: username.to_string(),
+        admin: row.get::<i64, _>("is_admin") != 0,
+        edit: rows
+            .iter()
+            .filter_map(|r| crate::access::Area::from_key(&r.get::<String, _>("area")))
+            .collect(),
+    }))
 }
 
 /// Exact match, the same comparison login and delete use.
-pub async fn admin_exists(pool: &SqlitePool, username: &str) -> bool {
+pub async fn account_exists(pool: &SqlitePool, username: &str) -> bool {
     sqlx::query("SELECT 1 FROM users WHERE username = ?")
         .bind(username)
         .fetch_optional(pool)
@@ -221,7 +294,7 @@ pub async fn admin_exists(pool: &SqlitePool, username: &str) -> bool {
 /// Case-insensitive, used only to refuse a new name that differs from an
 /// existing one by case alone — "Alice" beside "alice" is a trap for whoever
 /// types the name next.
-pub async fn admin_name_taken(pool: &SqlitePool, username: &str) -> bool {
+pub async fn account_name_taken(pool: &SqlitePool, username: &str) -> bool {
     sqlx::query("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE")
         .bind(username)
         .fetch_optional(pool)
@@ -255,34 +328,101 @@ pub async fn set_password_hash(
         .map(|_| ())
 }
 
-pub async fn create_admin(
+/// Write the areas an account may edit, replacing what it had.
+async fn write_areas(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    username: &str,
+    edit: &std::collections::BTreeSet<crate::access::Area>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM permissions WHERE username = ?")
+        .bind(username)
+        .execute(&mut **tx)
+        .await?;
+    for area in edit {
+        sqlx::query("INSERT INTO permissions (username, area, level) VALUES (?, ?, 'edit')")
+            .bind(username)
+            .bind(area.key())
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn create_account(
     pool: &SqlitePool,
     username: &str,
     hash: &str,
+    admin: bool,
+    edit: &std::collections::BTreeSet<crate::access::Area>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)")
         .bind(username)
         .bind(hash)
-        .execute(pool)
-        .await
-        .map(|_| ())
+        .bind(admin as i64)
+        .execute(&mut *tx)
+        .await?;
+    write_areas(&mut tx, username, edit).await?;
+    tx.commit().await
 }
 
-/// Delete an administrator unless they are the last one, in a single
-/// statement. Returns whether a row was removed.
+/// Change an account's permissions. Returns false, changing nothing, when
+/// that would leave no admin. The count is part of the same statement, so
+/// two admins removing each other's admin at the same moment cannot both
+/// succeed.
+pub async fn set_permissions(
+    pool: &SqlitePool,
+    username: &str,
+    admin: bool,
+    edit: &std::collections::BTreeSet<crate::access::Area>,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let changed = sqlx::query(
+        "UPDATE users SET is_admin = ? WHERE username = ? AND \
+         (? = 1 OR (SELECT COUNT(*) FROM users WHERE is_admin = 1 AND username != ?) > 0)",
+    )
+    .bind(admin as i64)
+    .bind(username)
+    .bind(admin as i64)
+    .bind(username)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+    if !changed {
+        return Ok(false);
+    }
+    write_areas(&mut tx, username, edit).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Delete an account unless it is the last admin, in a single statement.
+/// Returns whether a row was removed.
 ///
 /// The count is part of the DELETE rather than a check before it: two
-/// administrators deleting each other at the same moment would otherwise both
-/// see a count of two, both succeed, and leave no accounts — at which point
-/// /setup is open to anyone.
-pub async fn delete_admin(pool: &SqlitePool, username: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query(
-        "DELETE FROM users WHERE username = ? AND (SELECT COUNT(*) FROM users) > 1",
+/// admins deleting each other at the same moment would otherwise both see a
+/// count of two, both succeed, and leave no admin.
+pub async fn delete_account(pool: &SqlitePool, username: &str) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let removed = sqlx::query(
+        "DELETE FROM users WHERE username = ? AND \
+         (is_admin = 0 OR (SELECT COUNT(*) FROM users WHERE is_admin = 1 AND username != ?) > 0)",
     )
     .bind(username)
-    .execute(pool)
-    .await
-    .map(|r| r.rows_affected() > 0)
+    .bind(username)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+    if removed {
+        sqlx::query("DELETE FROM permissions WHERE username = ?")
+            .bind(username)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(removed)
 }
 
 /// Drop an account's sessions, optionally sparing one token. Used to sign a
@@ -359,15 +499,83 @@ mod tests {
     }
 
     async fn add(pool: &SqlitePool, name: &str) {
-        create_admin(pool, name, "hash").await.unwrap();
+        create_account(pool, name, "hash", true, &Default::default()).await.unwrap();
+    }
+
+    fn areas(list: &[crate::access::Area]) -> std::collections::BTreeSet<crate::access::Area> {
+        list.iter().copied().collect()
     }
 
     #[tokio::test]
-    async fn the_last_administrator_cannot_be_deleted() {
+    async fn the_last_admin_cannot_be_deleted() {
         let pool = pool().await;
         add(&pool, "alice").await;
-        assert!(!delete_admin(&pool, "alice").await.unwrap());
-        assert!(admin_exists(&pool, "alice").await);
+        create_account(&pool, "viewer", "hash", false, &Default::default()).await.unwrap();
+        assert!(!delete_account(&pool, "alice").await.unwrap());
+        assert!(account_exists(&pool, "alice").await);
+        // An account that is not an admin can go, even with a single admin.
+        assert!(delete_account(&pool, "viewer").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_last_admin_cannot_lose_admin() {
+        use crate::access::Area;
+        let pool = pool().await;
+        add(&pool, "alice").await;
+        assert!(!set_permissions(&pool, "alice", false, &areas(&[Area::Users])).await.unwrap());
+        let a = access_for(&pool, "alice").await.unwrap().unwrap();
+        assert!(a.admin && a.edit.is_empty(), "nothing changed: {a:?}");
+
+        add(&pool, "bob").await;
+        assert!(set_permissions(&pool, "alice", false, &areas(&[Area::Users, Area::Gpos])).await.unwrap());
+        let a = access_for(&pool, "alice").await.unwrap().unwrap();
+        assert!(!a.admin);
+        assert_eq!(a.edit, areas(&[Area::Users, Area::Gpos]));
+        assert!(!set_permissions(&pool, "bob", false, &Default::default()).await.unwrap(), "bob is the last admin now");
+    }
+
+    #[tokio::test]
+    async fn permissions_are_kept_and_go_with_the_account() {
+        use crate::access::Area;
+        let pool = pool().await;
+        add(&pool, "alice").await;
+        create_account(&pool, "helpdesk", "hash", false, &areas(&[Area::Users, Area::Groups])).await.unwrap();
+        let listed = list_accounts(&pool).await.unwrap();
+        let h = listed.iter().find(|a| a.username == "helpdesk").unwrap();
+        assert_eq!((h.admin, h.edit.clone(), h.summary.as_str()), (false, vec!["users", "groups"], "Edit: Users, Groups"));
+        assert_eq!(access_for(&pool, "nobody").await.unwrap(), None);
+
+        assert!(delete_account(&pool, "helpdesk").await.unwrap());
+        // A new account with the same name starts from nothing.
+        create_account(&pool, "helpdesk", "hash", false, &Default::default()).await.unwrap();
+        assert!(access_for(&pool, "helpdesk").await.unwrap().unwrap().edit.is_empty());
+    }
+
+    /// Before permissions, every account was a full administrator; upgrading
+    /// must not take that away from anyone, nor hand it to later accounts.
+    #[tokio::test]
+    async fn existing_accounts_stay_admins_on_upgrade() {
+        let path = std::env::temp_dir().join(format!("easydc-test-{}.db", uuid::Uuid::new_v4()));
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users (username, password_hash) VALUES ('alice', 'h'), ('bob', 'h')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        init_tables(&pool).await.unwrap();
+        for name in ["alice", "bob"] {
+            assert!(access_for(&pool, name).await.unwrap().unwrap().admin, "{name}");
+        }
+        // Starting again does not make a later account an admin.
+        create_account(&pool, "carol", "h", false, &Default::default()).await.unwrap();
+        init_tables(&pool).await.unwrap();
+        assert!(!access_for(&pool, "carol").await.unwrap().unwrap().admin);
     }
 
     /// The race the review found: two administrators deleting each other at
@@ -379,9 +587,9 @@ mod tests {
         for round in 0..25 {
             add(&pool, "alice").await;
             add(&pool, "bob").await;
-            let (a, b) = tokio::join!(delete_admin(&pool, "bob"), delete_admin(&pool, "alice"));
+            let (a, b) = tokio::join!(delete_account(&pool, "bob"), delete_account(&pool, "alice"));
             let removed = [a.unwrap(), b.unwrap()].iter().filter(|r| **r).count();
-            let left = list_admins(&pool).await.unwrap();
+            let left = list_accounts(&pool).await.unwrap();
             assert_eq!(removed, 1, "round {}: exactly one deletion may succeed", round);
             assert_eq!(left.len(), 1, "round {}: one administrator must remain, got {:?}", round, left);
             sqlx::query("DELETE FROM users").execute(&pool).await.unwrap();
@@ -395,11 +603,11 @@ mod tests {
         let pool = pool().await;
         add(&pool, "alice").await;
         add(&pool, "bob").await;
-        assert!(!admin_exists(&pool, "Alice").await);
-        assert!(admin_name_taken(&pool, "Alice").await);
+        assert!(!account_exists(&pool, "Alice").await);
+        assert!(account_name_taken(&pool, "Alice").await);
         // A differently-cased delete removes nothing, and says so.
-        assert!(!delete_admin(&pool, "Alice").await.unwrap());
-        assert!(admin_exists(&pool, "alice").await);
+        assert!(!delete_account(&pool, "Alice").await.unwrap());
+        assert!(account_exists(&pool, "alice").await);
     }
 
     /// Sessions from before usernames were recorded cannot be ended by a

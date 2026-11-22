@@ -7,7 +7,13 @@ use serde::{Deserialize, Serialize};
 use tera::Context;
 
 use super::path_segment;
-use crate::{auth::CurrentUser, db, ldap, models::Server, AppState};
+use crate::{
+    access::{self, Area},
+    auth::CurrentUser,
+    db, ldap,
+    models::Server,
+    AppState,
+};
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
@@ -60,7 +66,7 @@ async fn render_groups(
         ctx.insert("error", &e);
     }
 
-    Html(state.tera.render("groups.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "groups.html", &ctx)).into_response()
 }
 
 /// Back to the same view of the groups on success; with the reason on failure.
@@ -246,7 +252,7 @@ async fn render_group(
         ctx.insert("error", &e);
     }
 
-    Html(state.tera.render("group_members.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "group_members.html", &ctx)).into_response()
 }
 
 pub async fn group_members(
@@ -338,7 +344,7 @@ async fn render_computers(state: &AppState, server: &Server, flash_error: Option
         Ok((mut conn, base_dn)) => ldap::list_computers(&mut conn, &base_dn).await,
     };
     let ctx = computers_context(server, list, flash_error);
-    Html(state.tera.render("computers.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "computers.html", &ctx)).into_response()
 }
 
 fn computers_context(
@@ -466,7 +472,7 @@ async fn render_ous(state: &AppState, server: &Server, flash_error: Option<Strin
     if let Some(e) = flash_error {
         ctx.insert("error", &e);
     }
-    Html(state.tera.render("ous.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "ous.html", &ctx)).into_response()
 }
 
 // ── create OU ─────────────────────────────────────────────────────────────────
@@ -577,12 +583,24 @@ pub async fn ou_move_object(
         Some(s) => s,
     };
 
+    let target = format!("{} → {}", form.sam_account, form.target_ou_dn);
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        ldap::move_object_to_ou(&mut conn, &base_dn, &form.sam_account, &form.target_ou_dn).await
+        let (dn, kind) = ldap::find_movable(&mut conn, &base_dn, &form.sam_account).await?;
+        // Moving needs Edit on what is moved.
+        let area = match kind {
+            ldap::ObjectKind::User => Area::Users,
+            ldap::ObjectKind::Group => Area::Groups,
+            ldap::ObjectKind::Computer => Area::Computers,
+        };
+        if !access::current().can_edit(area) {
+            let reason = access::refusal(access::Need::Edit(area));
+            db::log_action(&state.db, &actor, "access.refused", &target, Some(id), &Err(reason.clone())).await;
+            return Err(reason);
+        }
+        ldap::move_object_to_ou(&mut conn, &base_dn, &dn, &form.target_ou_dn).await
     }
     .await;
-    let target = format!("{} → {}", form.sam_account, form.target_ou_dn);
     db::log_action(&state.db, &actor, "ou.move_object", &target, Some(id), &result).await;
 
     after_ou_action(&state, &server, result).await
@@ -622,7 +640,7 @@ async fn render_dns(
         },
     }
 
-    Html(state.tera.render("dns.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "dns.html", &ctx)).into_response()
 }
 
 // ── create a zone ─────────────────────────────────────────────────────────────
@@ -760,7 +778,7 @@ async fn render_dns_zone(
         ctx.insert("nodes", &Vec::<ldap::DnsNode>::new());
     }
 
-    Html(state.tera.render("dns_zone.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "dns_zone.html", &ctx)).into_response()
 }
 
 // ── DNS records in zone ───────────────────────────────────────────────────────
@@ -931,7 +949,7 @@ async fn render_gpo(state: &AppState, server: &Server, flash_error: Option<Strin
         Ok((mut conn, base_dn)) => ldap::list_gpos(&mut conn, &base_dn).await,
     };
     let ctx = gpo_context(server, list, flash_error);
-    Html(state.tera.render("gpo.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "gpo.html", &ctx)).into_response()
 }
 
 fn gpo_context(server: &Server, list: Result<Vec<ldap::LdapGpo>, String>, flash_error: Option<String>) -> Context {
@@ -1074,7 +1092,7 @@ async fn render_gpo_links(state: &AppState, server: &Server, guid: &str, flash_e
     }
     .await;
     let ctx = gpo_links_context(server, guid, loaded, flash_error);
-    Html(state.tera.render("gpo_links.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "gpo_links.html", &ctx)).into_response()
 }
 
 fn gpo_links_context(
@@ -1438,7 +1456,7 @@ async fn render_users(
         ctx.insert("error", &e);
     }
 
-    Html(state.tera.render("users.html", &ctx).unwrap_or_default()).into_response()
+    Html(crate::access::render(&state.tera, "users.html", &ctx)).into_response()
 }
 
 /// Back to the same view on success; the view with the reason on failure.
@@ -1767,6 +1785,16 @@ pub async fn bulk_users(
         None => return redirect_home(),
         Some(s) => s,
     };
+    // The route needs Edit on Users; adding them to a group changes the group.
+    if form.action == "add_to_group" && !access::current().can_edit(Area::Groups) {
+        let reason = access::refusal(access::Need::Edit(Area::Groups));
+        let target = format!("{} users → {}", selected_names(&form.users).len(), form.target.trim());
+        db::log_action(&state.db, &actor, "access.refused", &target, Some(id), &Err(reason.clone())).await;
+        if form.part == "1" {
+            return axum::Json(serde_json::json!({ "error": reason })).into_response();
+        }
+        return after_user_action(&state, &server, &view, Err(reason)).await;
+    }
     let outcome = run_bulk(&state, &actor, &server, &form).await;
     if form.part == "1" {
         return match outcome {

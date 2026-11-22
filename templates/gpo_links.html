@@ -16,7 +16,7 @@
         <h4 class="mb-0"><i class="bi bi-link-45deg me-2 text-warning"></i>{{ gpo_name }}</h4>
         <small class="text-muted font-monospace">{{ guid }}</small>
     </div>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLinkModal">
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLinkModal" data-needs="gpos">
         <i class="bi bi-plus-circle me-1"></i> Link to OU
     </button>
 </div>
@@ -62,7 +62,7 @@
                         {% endif %}
                     </td>
                     <td class="text-end">
-                        <button type="button" class="btn btn-outline-danger btn-sm"
+                        <button type="button" class="btn btn-outline-danger btn-sm" data-needs="gpos"
                             data-bs-toggle="modal" data-bs-target="#unlinkModal"
                             data-name="{{ link.ou_name }}" data-dn="{{ link.ou_dn }}"
                             title="Remove link">

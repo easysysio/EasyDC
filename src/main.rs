@@ -1,3 +1,4 @@
+mod access;
 mod assets;
 mod auth;
 mod db;
@@ -91,8 +92,9 @@ async fn main() {
         .route("/audit", get(handlers::servers::audit))
         .route("/settings", get(handlers::settings::settings))
         .route("/settings/password", post(handlers::settings::change_password))
-        .route("/settings/admins/new", post(handlers::settings::create_admin))
-        .route("/settings/admins/:username/delete", post(handlers::settings::delete_admin))
+        .route("/settings/accounts/new", post(handlers::settings::create_account))
+        .route("/settings/accounts/:username/permissions", post(handlers::settings::update_permissions))
+        .route("/settings/accounts/:username/delete", post(handlers::settings::delete_account))
         .route("/logout", post(handlers::auth_handlers::logout))
         .route("/servers/new", post(handlers::servers::create_server))
         .route("/servers/:id", get(handlers::servers::server_detail))

@@ -200,6 +200,110 @@
     // from the button that opened it. data-fill="x" takes the button's data-x
     // (as text, or as the value of an input or select), and a <form data-fill-action>
     // posts to the button's data-url.
+    // What this account may not change: the buttons inside an element marked
+    // data-needs="<area>" (or "admin") are greyed out, and a click on one says
+    // why instead. The server refuses such a change anyway; this only saves
+    // the trip.
+    window.EasyDC = (function () {
+        'use strict';
+        let access = null;
+
+        // Shown at the top of the page, or of the dialog the click was in.
+        function notice(text, kind, from) {
+            const modal = from && from.closest && from.closest('.modal');
+            let place = document.getElementById('easydcNotice');
+            if (modal) {
+                place = modal.querySelector('.js-modal-notice');
+                if (!place) {
+                    place = document.createElement('div');
+                    place.className = 'js-modal-notice px-3 pt-3';
+                    const content = modal.querySelector('.modal-header') || modal.querySelector('.modal-content');
+                    content.after(place);
+                }
+            }
+            if (!place) return;
+            const box = document.createElement('div');
+            box.className = 'alert alert-' + (kind || 'warning') + ' alert-dismissible d-flex align-items-start';
+            const icon = document.createElement('i');
+            icon.className = 'bi bi-shield-lock me-2 mt-1';
+            const body = document.createElement('div');
+            body.textContent = text;
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'btn-close';
+            close.setAttribute('data-bs-dismiss', 'alert');
+            close.setAttribute('aria-label', 'Close');
+            box.append(icon, body, close);
+            place.replaceChildren(box);
+            place.scrollIntoView({ block: 'nearest' });
+        }
+
+        // An empty data-needs marks something inside a locked area that anyone
+        // may use, such as the dialog that shows a user's details.
+        function allowed(need) {
+            if (!access || !need) return true;
+            if (access.admin) return true;
+            return need !== 'admin' && access.edit[need] === true;
+        }
+
+        function why(need) {
+            return need === 'admin' || !access.labels[need]
+                ? 'Only an EasyDC admin can do this.'
+                : 'You can view ' + access.labels[need] + ' but not change them. An EasyDC admin can give you Edit on ' +
+                  access.labels[need] + ' in Settings.';
+        }
+
+        // Checked at the moment of the click, not marked once: a long list
+        // keeps the rows of other pages out of the page until they are shown.
+        const FREE = '[data-bs-toggle=dropdown], [data-bs-toggle=collapse], [data-bs-dismiss], [data-needs=""], ' +
+            'a[href]:not([data-bs-toggle])';
+        function blocked(target) {
+            const el = target && target.closest && target.closest('[data-needs]');
+            return el && !allowed(el.dataset.needs) ? el.dataset.needs : null;
+        }
+
+        // Capture, so the click is stopped before Bootstrap opens a dialog.
+        document.addEventListener('click', function (e) {
+            const need = blocked(e.target);
+            // Links that only open a page stay open, as do menus and Close;
+            // buttons and the dialogs they open do not.
+            if (!need || !e.target.closest('button, [type=submit], .dropdown-item, [data-bs-toggle=modal]')) return;
+            if (e.target.closest(FREE)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            notice(why(need), 'warning', e.target);
+        }, true);
+        document.addEventListener('submit', function (e) {
+            const need = blocked(e.submitter || e.target);
+            if (!need) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            notice(why(need), 'warning', e.target);
+        }, true);
+
+        document.addEventListener('DOMContentLoaded', function () {
+            try { access = JSON.parse(document.body.dataset.access || 'null'); } catch (e) { access = null; }
+            if (access && !access.admin) {
+                // Grey out what may not be changed, in every row, shown or not yet.
+                const off = Object.keys(access.edit).filter(k => !access.edit[k]).concat(['admin']);
+                const style = document.createElement('style');
+                style.textContent = off.map(k =>
+                    '[data-needs="' + k + '"] :is(.btn, .dropdown-item, [type=submit]):not(' + FREE + '),' +
+                    ' :is(.btn, .dropdown-item)[data-needs="' + k + '"]').join(',\n') +
+                    ' { opacity: .45; cursor: not-allowed; }';
+                document.head.appendChild(style);
+            }
+            // A change the server refused, carried over from the page it was sent from.
+            const m = document.cookie.match(/(?:^|; )easydc_flash=([^;]*)/);
+            if (m) {
+                document.cookie = 'easydc_flash=; Path=/; Max-Age=0; SameSite=Strict';
+                try { notice(decodeURIComponent(m[1])); } catch (e) { /* ignore */ }
+            }
+        });
+
+        return { allowed: allowed, notice: notice };
+    })();
+
     document.addEventListener('show.bs.modal', function (e) {
         const modal = e.target;
         if (!modal.classList.contains('js-row-dialog')) return;
@@ -213,7 +317,7 @@
     });
     </script>
 </head>
-<body>
+<body{% if access %} data-access="{{ access | json_encode }}"{% endif %}>
     <nav class="navbar navbar-dark bg-dark navbar-expand-lg">
         <div class="container-fluid">
             <a class="navbar-brand fw-bold" href="/">
@@ -235,6 +339,7 @@
         </div>
     </nav>
     <div class="{% block container_class %}container{% endblock %} mt-4 pb-5">
+        <div id="easydcNotice"></div>
         {% block content %}{% endblock %}
     </div>
     <div style="position:fixed;bottom:0.75rem;right:1rem;font-size:0.75rem;color:#6c757d;pointer-events:none;">

@@ -32,7 +32,7 @@
         <i class="bi bi-plus-circle me-2 text-warning"></i><strong>Add a zone</strong>
     </div>
     <div class="card-body">
-        <form method="post" action="/servers/{{ server.id }}/dns-zones/new" class="row g-2 align-items-start">
+        <form method="post" action="/servers/{{ server.id }}/dns-zones/new" class="row g-2 align-items-start" data-needs="dns_zones">
             <div class="col-md-6">
                 <input type="text" name="zone" class="form-control" required
                     placeholder="example.com" id="zoneInput" autocomplete="off">
@@ -91,7 +91,7 @@
                         </a>
                         {% if domain and zone.name != domain %}
                         <form method="post" action="/servers/{{ server.id }}/dns-zones/{{ zone.name }}/delete"
-                            class="d-inline js-delete-zone" data-zone="{{ zone.name }}">
+                            class="d-inline js-delete-zone" data-zone="{{ zone.name }}" data-needs="dns_zones">
                             <button type="submit" class="btn btn-outline-danger btn-sm">
                                 <i class="bi bi-trash"></i>
                             </button>
