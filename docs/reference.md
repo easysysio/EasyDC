@@ -27,7 +27,7 @@ few minutes; the audit log records it as failed, with the reason.
 |---|---|
 | **Directory** | Samba Active Directory domain controller, reachable over LDAP (389) or LDAPS (636) |
 | **Bind account** | Read/write access to the partitions you manage; Domain Admins for full use |
-| **EasyDC host** | Linux x86_64 or arm64 — `.deb` and `.rpm` packages, or the bare binary |
+| **EasyDC host** | Linux x86_64 or arm64 — `.deb` and `.rpm` packages, a Docker image, or the bare binary |
 | **Browser** | Any current browser |
 
 ## Files and ports
@@ -35,7 +35,7 @@ few minutes; the audit log records it as failed, with the reason.
 | | |
 |---|---|
 | **Web UI** | HTTP on `0.0.0.0:3000`, or `--port` / `EASYDC_PORT` |
-| **Database** | `/var/lib/easydc/easydc.db` when installed from a package; `easydc.db` in the working directory otherwise |
+| **Database** | `/var/lib/easydc/easydc.db` when installed from a package; `/data/easydc.db` in the Docker image; `easydc.db` in the working directory otherwise |
 | **Outbound** | LDAP / LDAPS to each domain controller you add |
 
 ## Security notes

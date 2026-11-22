@@ -2,7 +2,7 @@
 
 EasyDC is packaged for the **Debian** and **Red Hat** families on **x86_64** and
 **arm64**. Install it from the EasySYS package repository so upgrades arrive through your
-package manager. Nothing is installed on your domain controllers — EasyDC reaches them
+package manager, or run it [with Docker](#docker) on any system. Nothing is installed on your domain controllers — EasyDC reaches them
 over LDAP/LDAPS.
 
 The binary is **statically linked**, so it depends on no system library and runs on any
@@ -210,6 +210,63 @@ EASYDC_PORT=8080 ./easydc
 `./easydc --help` lists the options, and `./easydc --version` prints the version. For a permanent install without a package, the
 [unit the package ships](https://github.com/easysysio/EasyDC/blob/main/packaging/easydc.service)
 is a good starting point.
+
+## Docker
+
+EasyDC is also a container image for **x86_64** and **arm64**,
+`ghcr.io/easysysio/easydc`, published with each release and tagged with its version
+(`0.5.0`), its minor version (`0.5`) and `latest`. It runs anywhere Docker or Podman
+does.
+
+=== "docker run"
+
+    ```bash
+    docker run -d --name easydc --restart unless-stopped \
+      -p 3000:3000 -v easydc-data:/data \
+      ghcr.io/easysysio/easydc:latest
+    ```
+
+=== "Docker Compose"
+
+    Save this as `compose.yaml` (it is also
+    [in the repository](https://github.com/easysysio/EasyDC/blob/main/compose.yaml)),
+    then run `docker compose up -d`:
+
+    ```yaml
+    services:
+      easydc:
+        image: ghcr.io/easysysio/easydc:latest
+        restart: unless-stopped
+        ports:
+          - "3000:3000"
+        volumes:
+          - easydc-data:/data
+
+    volumes:
+      easydc-data:
+    ```
+
+Then open `http://<host>:3000/` to create the admin account.
+
+- **Your data** is one file, `easydc.db`, in the `/data` volume: the EasyDC accounts,
+  the servers with their bind passwords, and the audit log. Back up the volume. To use a
+  host folder instead of a named volume, make it owned by the container's user and
+  private: `sudo install -d -o 10001 -g 10001 -m 0700 /srv/easydc`, then
+  `-v /srv/easydc:/data`.
+- **Upgrading** is pulling the new image and recreating the container:
+  `docker compose pull && docker compose up -d`, or `docker pull` and `docker run` again
+  with the same volume. The database is updated on first start, as with the packages.
+  Use a version tag such as `:0.5` instead of `:latest` to choose when to move.
+- **Another port**: publish a different one, such as `-p 8080:3000`.
+- **Finding the DCs**: the container uses the host's DNS. If the DCs' names are only in
+  the domain's own DNS, add `--dns <DC address>` (or `dns:` in Compose), so that an
+  `ldaps://dc.example.com` URL resolves and matches the DC's certificate.
+- **Trusting the DCs' certificates**: Samba makes its own certificate, which the image
+  does not trust. Either turn on *Skip TLS verify* for the server, or mount the domain's
+  CA certificate and point `SSL_CERT_FILE` at it:
+  `-v ./domain-ca.pem:/certs/domain-ca.pem:ro -e SSL_CERT_FILE=/certs/domain-ca.pem`.
+- **Building the image yourself**: `docker build -t easydc .` in a checkout of the
+  repository.
 
 ## Put TLS in front of it
 

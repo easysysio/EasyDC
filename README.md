@@ -39,7 +39,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 
 - A running Samba AD Domain Controller accessible over LDAP/LDAPS
 - The bind account needs read/write access to the relevant AD partitions
-- Linux x86_64 or ARM64 — `.deb` and `.rpm` packages, or the bare binary
+- Linux x86_64 or ARM64 — `.deb` and `.rpm` packages, a Docker image, or the bare binary
 
 ## Installation
 
@@ -55,8 +55,15 @@ sudo apt update && sudo apt install easydc
 sudo systemctl enable --now easydc
 ```
 
+Or with Docker, on any system:
+
+```bash
+docker run -d --name easydc --restart unless-stopped \
+  -p 3000:3000 -v easydc-data:/data ghcr.io/easysysio/easydc:latest
+```
+
 The [installation guide](https://easydc.easysys.io/install/) covers RHEL / Fedora,
-openSUSE, air-gapped hosts, moving from a manual install, and running the bare binary.
+openSUSE, Docker, air-gapped hosts, moving from a manual install, and running the bare binary.
 
 The web interface is then at `http://<server-ip>:3000`, where the first visit creates the
 admin account. The database is `/var/lib/easydc/easydc.db`.

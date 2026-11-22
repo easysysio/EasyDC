@@ -76,6 +76,7 @@ Get started
 <span>Debian / Ubuntu</span>
 <span>RHEL / Fedora</span>
 <span>openSUSE / SLES</span>
+<span>Docker</span>
 <span>Air-gapped .deb / .rpm</span>
 <span class="es-mono">x86_64 · arm64</span>
 </div>

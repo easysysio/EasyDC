@@ -1,0 +1,21 @@
+# EasyDC with Docker Compose:  docker compose up -d
+# Then open http://<host>:3000/ to create the admin account.
+# Upgrade:                     docker compose pull && docker compose up -d
+services:
+  easydc:
+    image: ghcr.io/easysysio/easydc:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # easydc.db: accounts, servers (with their bind passwords) and the audit log.
+      - easydc-data:/data
+      # To check the DCs' LDAPS certificates against your domain's CA instead of
+      # turning on "Skip TLS verify", mount the CA certificate here and
+      # uncomment SSL_CERT_FILE below.
+      # - ./domain-ca.pem:/certs/domain-ca.pem:ro
+    # environment:
+    #   SSL_CERT_FILE: /certs/domain-ca.pem
+
+volumes:
+  easydc-data:

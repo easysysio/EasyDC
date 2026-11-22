@@ -1,6 +1,6 @@
 # Release pipeline: on a v* tag, build .deb + .rpm for x86_64 and arm64, then
 # publish a GitHub Release whose body is the matching CHANGELOG section, with
-# the packages attached.
+# the packages attached, and a container image on ghcr.io.
 #
 # The binary is linked statically against musl, so it needs no glibc at all and
 # the same package runs on any Linux distribution — RHEL 8 included. It is
@@ -131,6 +131,60 @@ jobs:
           name: packages-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
+
+  # The same static binaries, as a container image for amd64 and arm64 on
+  # GitHub's registry: ghcr.io/<owner>/easydc:<version>, :<major>.<minor> and
+  # :latest. Nothing is compiled here; the Dockerfile's release stage copies
+  # each architecture's binary in.
+  docker:
+    name: Publish container image
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: packages
+          merge-multiple: true
+
+      - name: Lay out one binary per architecture
+        run: |
+          install -D -m 0755 packages/easydc-linux-x86_64 dist/linux-amd64/easydc
+          install -D -m 0755 packages/easydc-linux-arm64 dist/linux-arm64/easydc
+          ls -lR dist
+
+      # The runtime stage runs apk and adduser for arm64 too.
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/easydc
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   release:
     name: Publish GitHub Release

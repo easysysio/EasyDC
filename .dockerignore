@@ -1,0 +1,10 @@
+# Kept out of the build context. dist/ stays in: the release image copies its binaries from there.
+target/
+site/
+.git/
+.github/
+.claude/
+*.db
+*.db-*
+*.log
+.DS_Store

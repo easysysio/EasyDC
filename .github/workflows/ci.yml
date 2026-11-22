@@ -1,7 +1,7 @@
 # Continuous integration: every push to main and every pull request runs the
-# tests, clippy, the packaging script's tests, a dependency audit and a strict
-# docs build — so a regression is found when it is pushed, not when a release
-# is tagged. release.yml stays responsible for building and publishing.
+# tests, clippy, the packaging script's tests, a Docker build, a dependency
+# audit and a strict docs build — so a regression is found when it is pushed,
+# not when a release is tagged. release.yml stays responsible for building and publishing.
 #
 # The audit also runs weekly on its own: advisories are published against code
 # that has not changed, and 0.3.2's eight were all found that way.
@@ -48,6 +48,49 @@ jobs:
       # /bin/sh on the runner is dash, the shell Debian runs package scripts with.
       - name: Test the legacy-install migration
         run: sh packaging/tests/migrate-legacy.sh
+
+  # Build the image from source, as `docker build .` does for anyone, start it,
+  # and check it answers and keeps its database in the volume.
+  docker:
+    name: Docker image
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: easydc:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start it and check it answers
+        run: |
+          docker volume create easydc-ci
+          docker run -d --name easydc -p 3000:3000 -v easydc-ci:/data easydc:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/login || true)
+            [ "$code" = "200" ] || [ "$code" = "303" ] && break
+            sleep 1
+          done
+          echo "GET /login: $code"
+          [ "$code" = "200" ] || [ "$code" = "303" ] || { docker logs easydc; exit 1; }
+          # A fresh install sends the first visitor to /setup.
+          curl -s -o /dev/null -w 'GET /: %{http_code} -> %{redirect_url}\n' http://127.0.0.1:3000/
+          docker exec easydc sh -c 'id; ls -la /data; test -f /data/easydc.db'
+          docker exec easydc sh -c 'test "$(stat -c %a /data)" = 700'
+          # The health check passes once the start period is over.
+          for i in $(seq 1 20); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' easydc)
+            [ "$state" = "healthy" ] && break
+            sleep 3
+          done
+          echo "health: $state"
+          [ "$state" = "healthy" ] || { docker inspect easydc; exit 1; }
 
   audit:
     name: Dependency audit
