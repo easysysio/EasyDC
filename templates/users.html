@@ -16,9 +16,22 @@
         <i class="bi bi-people me-2 text-primary"></i>Users{% if selected %}
         <span class="text-muted fw-normal">in {{ selected }}</span>{% endif %}
     </h4>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal" data-needs="users">
-        <i class="bi bi-person-plus me-1"></i> Add User
-    </button>
+    <div class="d-flex flex-wrap gap-2">
+        {% if users | length > 0 %}
+        <a class="btn btn-outline-secondary" href="/servers/{{ server.id }}/users/export{{ view_qs }}"
+            title="Download the users in this view as a CSV file, for a spreadsheet">
+            <i class="bi bi-download me-1"></i> Export
+        </a>
+        {% endif %}
+        {% if tree %}
+        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#importModal" data-needs="users">
+            <i class="bi bi-upload me-1"></i> Import
+        </button>
+        {% endif %}
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal" data-needs="users">
+            <i class="bi bi-person-plus me-1"></i> Add User
+        </button>
+    </div>
 </div>
 
 {% if error %}
@@ -479,6 +492,63 @@
 
 </div>
 
+<!-- ── Import Modal: check a CSV file, then create its users ──────────────── -->
+<div class="modal fade" id="importModal" tabindex="-1" data-url="/servers/{{ server.id }}/users/import"
+    data-back="/servers/{{ server.id }}/users{{ view_qs }}">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-upload me-1"></i> Import Users</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger d-none js-import-error"></div>
+                <div class="js-import-choose">
+                    <div class="mb-3">
+                        <label class="form-label" for="importFile">CSV file</label>
+                        <input type="file" id="importFile" class="form-control" accept=".csv,.txt,text/csv">
+                        <div class="form-text">
+                            One user per row, under a first line naming the columns:
+                            <strong>Username</strong> (needed), First name, Last name, Email, Password,
+                            Description, Job title, Department, Office, Phone, Mobile, Manager,
+                            Account expires (YYYY-MM-DD) and OU. <strong>Export</strong> gives a file
+                            with these columns. Users already in the domain are left as they are.
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="importOu">Create them in</label>
+                        <select id="importOu" class="form-select">
+                            {% for node in tree | default(value=[]) %}{% if node.dn %}
+                            <option value="{{ node.dn }}"{% if node.dn == create_in_dn %} selected{% endif %}>{% for i in range(end=node.depth - 1) %}&nbsp;&nbsp;&nbsp;{% endfor %}{{ node.name }}</option>
+                            {% endif %}{% endfor %}
+                        </select>
+                        <div class="form-text">A row with an OU (a path such as <code>Sales/Europe</code>, or a DN) goes there instead.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="importPassword">Password for rows without one</label>
+                        <input type="password" id="importPassword" class="form-control" autocomplete="new-password">
+                        <div class="form-text">Leave it empty when the file has a Password column for every row. Requires LDAPS, like any password.</div>
+                    </div>
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="importMustChange" checked>
+                        <label class="form-check-label" for="importMustChange">Users must change their password at first sign-in</label>
+                    </div>
+                </div>
+                <div class="js-import-result d-none">
+                    <p class="fw-medium js-import-summary"></p>
+                    <div class="js-import-lists"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-outline-secondary d-none js-import-back">Back</button>
+                <button type="button" class="btn btn-primary js-import-check">Check file</button>
+                <button type="button" class="btn btn-primary d-none js-import-go"></button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% set move_hint = "Users keep their name, groups and settings." %}
 {% include "bulk.html" %}
 
@@ -695,6 +765,163 @@ userActions.querySelectorAll('.modal').forEach(function (modal) {
     modal.querySelector('.js-password-tab').addEventListener('show.bs.tab', function () {
         say(null);
         load();
+    });
+})();
+
+// Import: the file is checked first (nothing changes), the dialog lists what
+// would happen, then the users are created in parts with the progress
+// dialog from bulk.html, and the page reloads with what was done.
+(function () {
+    const modal = document.getElementById('importModal');
+    if (!modal) return;
+    const url = modal.dataset.url;
+    const q = sel => modal.querySelector(sel);
+    // A new user is three changes, the password the slow one: about 3 a
+    // second, so a part of 25 takes a few seconds, well inside a proxy's limit.
+    const PART = 25;
+    const LISTED = 20;
+    let plan = null;
+
+    function say(text) {
+        q('.js-import-error').textContent = text || '';
+        q('.js-import-error').classList.toggle('d-none', !text);
+    }
+    function step(result) {
+        q('.js-import-choose').classList.toggle('d-none', result);
+        q('.js-import-result').classList.toggle('d-none', !result);
+        q('.js-import-check').classList.toggle('d-none', result);
+        q('.js-import-back').classList.toggle('d-none', !result);
+        q('.js-import-go').classList.toggle('d-none', !result || !plan || plan.rows.length === 0);
+    }
+    const users = n => n === 1 ? '1 user' : n.toLocaleString() + ' users';
+    const rows = n => n === 1 ? '1 row' : n.toLocaleString() + ' rows';
+
+    // Excel saves "CSV" in the computer's code page unless told UTF-8.
+    async function readText(file) {
+        const bytes = await file.arrayBuffer();
+        try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch (e) { return new TextDecoder('windows-1252').decode(bytes); }
+    }
+
+    function list(title, notes, css) {
+        if (notes.length === 0) return;
+        const h = document.createElement('p');
+        h.className = 'small fw-medium mb-1 ' + css;
+        h.textContent = title;
+        const ul = document.createElement('ul');
+        ul.className = 'small mb-3';
+        notes.forEach(function (n) {
+            const li = document.createElement('li');
+            li.textContent = 'Line ' + n.line + (n.username ? ' (' + n.username + ')' : '') + ': ' + n.reason;
+            ul.appendChild(li);
+        });
+        q('.js-import-lists').append(h, ul);
+    }
+
+    function show() {
+        q('.js-import-lists').replaceChildren();
+        const n = plan.rows.length;
+        const where = document.getElementById('importOu');
+        q('.js-import-summary').textContent = n === 0
+            ? 'No users to create.'
+            : users(n) + ' will be created' + (plan.rows.every(r => !r.ou) ? ' in ' + where.options[where.selectedIndex].text.trim() : '') + '.';
+        const one = n => n === 1;
+        list(rows(plan.problems.length) + (one(plan.problems.length) ? ' cannot be imported as it is, and is' : ' cannot be imported as they are, and are') + ' left out:', plan.problems, 'text-danger');
+        list(users(plan.skipped.length) + (one(plan.skipped.length) ? ' is' : ' are') + ' already in the domain, and left unchanged:', plan.skipped, 'text-muted');
+        if (plan.ignored.length) {
+            const p = document.createElement('p');
+            p.className = 'small text-muted';
+            p.textContent = 'Columns not read: ' + plan.ignored.join(', ') + '.';
+            q('.js-import-lists').appendChild(p);
+        }
+        q('.js-import-go').textContent = 'Create ' + users(n);
+        step(true);
+    }
+
+    q('.js-import-check').addEventListener('click', async function () {
+        say(null);
+        const file = document.getElementById('importFile').files[0];
+        if (!file) return say('Pick a CSV file first.');
+        const button = this;
+        button.disabled = true;
+        try {
+            const body = new URLSearchParams({
+                csv: await readText(file),
+                default_password: document.getElementById('importPassword').value ? '1' : '',
+            });
+            const r = await fetch(url + '/check', { method: 'POST', body: body, headers: { Accept: 'application/json' } });
+            if (r.status === 413) throw new Error('The file is too big; split it into smaller files.');
+            const answer = await r.json().catch(() => { throw new Error('EasyDC did not answer as expected.'); });
+            if (answer.error) throw new Error(answer.error);
+            plan = answer;
+            show();
+        } catch (e) {
+            say(e.message);
+        } finally {
+            button.disabled = false;
+        }
+    });
+    q('.js-import-back').addEventListener('click', function () { say(null); step(false); });
+    modal.addEventListener('hidden.bs.modal', function () { plan = null; say(null); step(false); });
+
+    q('.js-import-go').addEventListener('click', async function () {
+        const todo = plan.rows;
+        const common = {
+            ou: document.getElementById('importOu').value,
+            default_password: document.getElementById('importPassword').value,
+            must_change: document.getElementById('importMustChange').checked,
+        };
+        bootstrap.Modal.getInstance(modal).hide();
+        const dialog = document.getElementById('bulkProgress');
+        const bar = dialog.querySelector('.progress-bar');
+        const progress = dialog.querySelector('.js-progress');
+        dialog.querySelector('.js-doing').textContent = 'Creating ' + users(todo.length) + '…';
+        bar.style.width = '0%';
+        bootstrap.Modal.getOrCreateInstance(dialog).show();
+        const leaving = e => { e.preventDefault(); e.returnValue = ''; };
+        window.addEventListener('beforeunload', leaving);
+
+        let sent = 0, failed = [], stopped = null;
+        while (sent < todo.length && !stopped) {
+            const part = todo.slice(sent, sent + PART);
+            try {
+                const r = await fetch(url, {
+                    method: 'POST',
+                    body: JSON.stringify(Object.assign({ rows: part }, common)),
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                });
+                const answer = await r.json();
+                if (answer.error) {
+                    stopped = answer.error;
+                } else {
+                    failed = failed.concat(answer.failed);
+                    sent += part.length;
+                }
+            } catch (e) {
+                stopped = 'EasyDC did not answer as expected.';
+            }
+            bar.style.width = (100 * sent / todo.length) + '%';
+            progress.textContent = sent.toLocaleString() + ' of ' + todo.length.toLocaleString() + ' done';
+        }
+        window.removeEventListener('beforeunload', leaving);
+
+        const notes = [];
+        const done = sent - failed.length;
+        if (sent > 0 && failed.length === 0) {
+            notes.push({ ok: true, text: 'Created ' + users(done) + ' from the file.' });
+        } else if (sent > 0) {
+            let listed = failed.slice(0, LISTED).join('; ');
+            if (failed.length > LISTED) listed += '; and ' + (failed.length - LISTED).toLocaleString() + ' more, listed in the Audit Log';
+            notes.push({ text: 'Created ' + done.toLocaleString() + ' of ' + users(sent) + ' from the file. Not created: ' + listed });
+        }
+        if (stopped) {
+            notes.push({ text: 'Stopped after ' + sent.toLocaleString() + ' of ' + users(todo.length) + ': ' + stopped +
+                ' The other ' + (todo.length - sent).toLocaleString() + ' were not created.' });
+        }
+        try { sessionStorage.setItem('easydc.bulkNote', JSON.stringify({ at: Date.now(), notes: notes })); } catch (e) { /* ignore */ }
+        EasyTable.remember();
+        // Not a reload: the page may be the answer to a POST that failed.
+        location.href = modal.dataset.back;
     });
 })();
 

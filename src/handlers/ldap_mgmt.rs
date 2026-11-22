@@ -18,7 +18,7 @@ use crate::{
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
-async fn get_server(state: &AppState, id: i64) -> Option<Server> {
+pub(crate) async fn get_server(state: &AppState, id: i64) -> Option<Server> {
     sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -1408,7 +1408,7 @@ impl ListView {
             }
     }
 
-    fn shows(&self, u: &ldap::LdapUser) -> bool {
+    pub(crate) fn shows(&self, u: &ldap::LdapUser) -> bool {
         self.holds(&u.container) && status_matches(u, self.status())
     }
 }
@@ -1509,6 +1509,8 @@ fn insert_tree(
     // Windows' own groups; then the default container, Users.
     let create_in = selected.filter(|c| !ldap::is_builtin_container(&c.dn, base_dn));
     ctx.insert("create_in", &create_in.map(|c| c.name.clone()));
+    // The same place as a DN, for the Import dialog's choice of OU.
+    ctx.insert("create_in_dn", &create_in.map_or_else(|| format!("CN=Users,{base_dn}"), |c| c.dn.clone()));
     ctx.insert("show_location", &(view.ou.is_empty() || view.nested()));
     ctx.insert("below", &selected.map_or(0, |c| c.total - c.direct));
 }
@@ -1705,6 +1707,7 @@ pub async fn create_user(
                 password: &form.password,
                 profile: form.profile.as_profile(),
                 parent: &view.ou,
+                must_change: false,
             },
         )
         .await
@@ -2516,6 +2519,20 @@ mod users_page_tests {
                 crate::access::Need::Edit(crate::access::Area::Groups)
             );
         }
+    }
+
+    /// Export takes the view along; Import offers the OUs, starting at the one shown.
+    #[test]
+    fn users_can_be_exported_and_imported() {
+        let html = render(&people());
+        assert!(html.contains(r#"href="/servers/1/users/export""#));
+        assert!(html.contains(r##"data-bs-target="#importModal" data-needs="users""##));
+        assert!(html.contains(&format!(r#"<option value="CN=Users,{BASE}" selected>"#)), "CN=Users when the domain is shown");
+
+        let (html, _) = page(&people(), &view("OU=Sales", true, ""), None);
+        assert!(html.contains("/servers/1/users/export?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom&amp;sub=1"), "the view is exported");
+        assert!(html.contains(&format!(r#"<option value="OU=Sales,{BASE}" selected>"#)));
+        assert!(html.contains(r#"data-back="/servers/1/users?ou="#), "back to the same view after an import");
     }
 
     /// The Password tab reads and saves through one route, which needs Edit on Users.

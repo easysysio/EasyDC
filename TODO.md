@@ -18,7 +18,7 @@ in `docs/managing.md`. At least one local admin always remains.
 - ~~A user's groups in the Edit dialog: see them, add and remove.~~ Done.
 - ~~Password and logon settings per user: password never expires, must change at next
   logon, cannot change password; when the password was last set and when it expires.~~ Done.
-- CSV export and import of users.
+- ~~CSV export and import of users.~~ Done.
 - Sites and subnets page.
 
 ## From samba-tool, over LDAP

@@ -8,11 +8,12 @@ mod ldap;
 mod models;
 mod remediate;
 mod replication;
+mod csv;
 mod sd;
 
 use std::sync::Arc;
 
-use axum::{middleware, routing::{get, post}, Router};
+use axum::{extract::DefaultBodyLimit, middleware, routing::{get, post}, Router};
 use rust_embed::RustEmbed;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
@@ -27,6 +28,10 @@ pub struct AppState {
     pub db: SqlitePool,
     pub tera: Arc<Tera>,
 }
+
+/// A CSV file of users, checked or imported: about 50,000 users. Other
+/// requests keep axum's 2 MB.
+const IMPORT_LIMIT: usize = 16 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() {
@@ -113,6 +118,9 @@ async fn main() {
         .route("/servers/:id/users", get(handlers::ldap_mgmt::users))
         .route("/servers/:id/users/new", post(handlers::ldap_mgmt::create_user))
         .route("/servers/:id/users/bulk", post(handlers::ldap_mgmt::bulk_users))
+        .route("/servers/:id/users/export", get(handlers::users_csv::export))
+        .route("/servers/:id/users/import/check", post(handlers::users_csv::import_check).layer(DefaultBodyLimit::max(IMPORT_LIMIT)))
+        .route("/servers/:id/users/import", post(handlers::users_csv::import).layer(DefaultBodyLimit::max(IMPORT_LIMIT)))
         .route("/servers/:id/users/:username/edit", post(handlers::ldap_mgmt::update_user))
         .route("/servers/:id/users/:username/groups", get(handlers::ldap_mgmt::user_groups))
         .route("/servers/:id/users/:username/password-settings", get(handlers::ldap_mgmt::password_settings).post(handlers::ldap_mgmt::update_password_settings))

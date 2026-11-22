@@ -26,11 +26,36 @@ open until it finishes. A DC makes about 25 to 30 changes a second, so 2,000 use
 about a minute and a half. Users that are already as asked (enabling an enabled user)
 take no time.
 
+**Export** downloads the users in the view (the OU, nested or not, and the status filter)
+as a CSV file for a spreadsheet, with their names, email, profile, manager, account expiry,
+OU and whether they are enabled. A value that starts like a spreadsheet formula (`=`, `+`,
+`-`, `@`) gets a `'` in front, so opening the file runs nothing.
+
+**Import** creates users from a CSV file. The first line names the columns: **Username** is
+needed; First name, Last name, Email, Password, Description, Job title, Department, Office,
+Phone, Mobile, Manager, Account expires (YYYY-MM-DD) and OU are read when there; other
+columns are ignored. An exported file has these headings. Commas, semicolons (as Excel
+saves in some countries) and tabs all work, in UTF-8 or Windows' own encoding.
+
+- EasyDC checks the file first and changes nothing: it lists the users it will create, the
+  rows it cannot (with the line and why), and the users already in the domain, which are
+  left unchanged. Import only creates users; it does not change existing ones.
+- Users go to the OU picked in the dialog, or to the one a row names (a path such as
+  `Sales/Europe`, or a DN).
+- A row without a password gets the one given in the dialog. *Users must change their
+  password at first sign-in* is on by default.
+- A manager can be an existing user or one the same file creates; EasyDC creates managers
+  first.
+- Users are created 25 at a time with a progress bar, about 3 a second, since setting a
+  password is the slow part: 1,000 users take about 5 minutes. Each user is a line in the
+  audit log.
+
 - **Move**, in a user's **⋯** menu with *Reset password* and *Delete*, moves one user to
   another OU or container. The user keeps their name, groups and settings.
-- EasyDC will not disable, delete or move the account it signs in to the DC with, since
-  that would lock it out. To do it anyway, first change the server's bind account with
-  **Edit** on the dashboard.
+- EasyDC will not disable, delete, move or reset the password of the account it signs in
+  to the DC with, since that would lock it out. To do it anyway, first change the server's
+  bind account with **Edit** on the dashboard. To change that account's password, set it
+  on the DC, then put the new one in the server's settings.
 - **Create** a user with a username, first and last name, email and initial password. The
   user is created in the OU or container you are looking at, or in `Users` when the whole
   domain is shown. A username cannot contain `" / \ [ ] : ; | = , + * ? < > @`; accents,

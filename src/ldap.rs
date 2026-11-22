@@ -811,7 +811,7 @@ async fn confirm_sign_in_state(ldap: &mut ldap3::Ldap, base_dn: &str, users: &mu
 }
 
 /// `OU=Europe,OU=Sales,DC=x` below `DC=x` as `Sales › Europe`.
-fn location(dn: &str, base_dn: &str) -> String {
+pub(crate) fn location(dn: &str, base_dn: &str) -> String {
     let parts = dn_parts(dn);
     let below = parts.len().saturating_sub(dn_parts(base_dn).len());
     parts[..below]
@@ -1052,6 +1052,8 @@ pub struct NewUser<'a> {
     pub profile: UserProfile<'a>,
     /// The OU or container to create the user in; empty for `CN=Users`.
     pub parent: &'a str,
+    /// Must set a new password at the first sign-in.
+    pub must_change: bool,
 }
 
 pub async fn create_user(
@@ -1160,10 +1162,13 @@ pub async fn create_user(
         });
     }
 
-    let enable_mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
+    let mut enable_mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
         sv("userAccountControl"),
         HashSet::from([sv("512")]),
     )];
+    if u.must_change {
+        enable_mods.push(Mod::Replace(sv("pwdLastSet"), HashSet::from([sv("0")])));
+    }
     ldap.with_timeout(OP_TIMEOUT).modify(&user_dn, enable_mods)
         .await
         .map_err(ldap_err)?

@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Computers page by OU: browse computers by OU, move them, and enable, disable or move many at once.
 - A user's groups in the Edit dialog: see the groups a user is in, including the primary group, and add or remove them.
 - Password settings per user, in the Edit dialog: when the password was last set and expires, and must change at next sign-in, cannot change password, and password never expires.
+- CSV export and import of users: export the users in a view; import creates users from a file, after a check that lists what it will do.
 
 ### Fixed
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.
