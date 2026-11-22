@@ -26,9 +26,8 @@ What these `samba-tool` commands do, written in EasyDC. Samba is GPLv3 and EasyD
 read its source (`python/samba/netcmd/`) to learn which objects and attributes it
 writes, and Microsoft's MS-ADTS for the rules, but do not copy its code. Admins only.
 
-- **Move FSMO roles** between DCs (`samba-tool fsmo transfer`): write the role's
-  `become…Master` operation to the target DC's rootDSE. Seizing a role from a dead DC
-  needs the DC's own files, so it stays in samba-tool.
+- ~~**Move FSMO roles** between DCs (`samba-tool fsmo transfer`).~~ Done, on the Domain
+  Controllers page. Seizing a role from a dead DC stays in samba-tool.
 - **Remove a dead DC** (`samba-tool domain demote --remove-other-dead-server`): delete its
   NTDS Settings and server objects, its computer account and its DNS records. Refuse while
   it still answers, or while it holds an FSMO role.

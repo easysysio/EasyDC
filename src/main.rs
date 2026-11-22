@@ -2,6 +2,7 @@ mod access;
 mod assets;
 mod auth;
 mod db;
+mod fsmo;
 mod handlers;
 mod health;
 mod ldap;
@@ -110,6 +111,8 @@ async fn main() {
         .route("/servers/:id/health", get(handlers::health::health_check))
         .route("/servers/:id/health/fix", post(handlers::health::health_fix))
         .route("/servers/:id/replication", get(handlers::replication::replication))
+        .route("/servers/:id/dcs", get(handlers::dcs::page))
+        .route("/servers/:id/dcs/fsmo", post(handlers::dcs::transfer))
         .route("/servers/:id/sites", get(handlers::sites::page))
         .route("/servers/:id/sites/new", post(handlers::sites::create_site))
         .route("/servers/:id/sites/move-dc", post(handlers::sites::move_dc))

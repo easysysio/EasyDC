@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - Password settings per user, in the Edit dialog: when the password was last set and expires, and must change at next sign-in, cannot change password, and password never expires.
 - CSV export and import of users: export the users in a view; import creates users from a file, after a check that lists what it will do.
 - Sites and subnets page: sites with their DCs, subnets and site links. Add and delete sites and subnets, edit site links, and move a DC to another site.
+- Domain Controllers page: each DC's site and FSMO roles. Admins can move a role, or all of them, to another DC.
 
 ### Fixed
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.

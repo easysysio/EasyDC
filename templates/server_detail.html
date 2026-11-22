@@ -104,6 +104,18 @@
     </div>
 
     <div class="col">
+        <a href="/servers/{{ server.id }}/dcs" class="text-decoration-none">
+            <div class="card h-100 shadow-sm hover-card">
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-hdd-rack fs-1 text-primary"></i>
+                    <h5 class="card-title mt-3">Domain Controllers</h5>
+                    <p class="card-text text-muted small">Each DC's site and FSMO roles, and moving roles between DCs</p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    <div class="col">
         <a href="/servers/{{ server.id }}/replication" class="text-decoration-none">
             <div class="card h-100 shadow-sm hover-card">
                 <div class="card-body text-center py-5">

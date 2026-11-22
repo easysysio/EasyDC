@@ -218,6 +218,27 @@ disabled), delete them, and **link or unlink** them to OUs.
 Browse the OU tree, **create**, **rename** and **delete** OUs, and **move** users,
 groups and computers from one OU to another.
 
+## Domain controllers
+
+**Domain Controllers** lists each DC with its DNS name, its site, and the FSMO roles it
+holds. *EasyDC connects here* marks the DC this server entry signs in to.
+
+Every DC can do almost everything, but seven jobs, the **FSMO roles**, are done by one DC
+at a time: the PDC emulator, RID master, infrastructure master, schema master, domain
+naming master, and the masters of the two DNS partitions. The page says what each does.
+Move them off a DC before you take it out of service.
+
+- **Move…** next to a role moves it to another DC, and **Move all roles here** next to a
+  DC moves every role it does not hold yet. Only admins can do this.
+- Both DCs must be running: the DC that is to hold a role asks the one that holds it to
+  hand it over. A move takes a few seconds; the PDC emulator takes about 15.
+- The DNS partition roles are changed on the DC that holds them, and the others learn of
+  it as they replicate. If the DC EasyDC reads from has not seen the change yet, the page
+  says so; it catches up within a few minutes.
+- A role whose holder no longer exists is marked so. It cannot be moved, only seized, on
+  a DC with `samba-tool fsmo seize --role=<role>`, and only once the old DC is gone for
+  good: seizing a role from a DC that comes back splits the domain.
+
 ## Replication
 
 **Replication** shows, for each domain controller, which DC it receives each partition from
@@ -366,8 +387,8 @@ For each area, an account is set to **View** or **Edit**:
 | Sites and subnets | sites, subnets and site links, and which site a DC is in |
 
 **View all** and **Edit all** set every area at once. An **Admin** may change everything,
-and is the only one who can manage EasyDC accounts, add, edit or remove servers, and apply
-the Health Check's fixes.
+and is the only one who can manage EasyDC accounts, add, edit or remove servers, apply
+the Health Check's fixes, and move FSMO roles.
 
 An action needs Edit on what it changes: adding users to a group needs Groups, and moving a
 group or computer to another OU needs Groups or Computers. What an account may not change is
