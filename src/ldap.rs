@@ -1295,24 +1295,17 @@ pub async fn set_user_enabled(ldap: &mut ldap3::Ldap, user: &UserForChange, enab
 
 // ── reset password ─────────────────────────────────────────────────────────────
 
-/// Set a new password for a user. Requires an LDAPS (or sign/seal) connection,
+/// Set a new password for the user at `dn`. Requires an LDAPS (or sign/seal) connection,
 /// same as initial password set. When `force_change` is true the user must
 /// change the password at next logon (pwdLastSet=0); otherwise it is marked as
 /// freshly set (pwdLastSet=-1).
-pub async fn reset_password(
-    ldap: &mut ldap3::Ldap,
-    base_dn: &str,
-    username: &str,
-    new_password: &str,
-    force_change: bool,
-) -> LdapResult<()> {
-    let dn = find_user_dn(ldap, base_dn, username).await?;
+pub async fn reset_password(ldap: &mut ldap3::Ldap, dn: &str, new_password: &str, force_change: bool) -> LdapResult<()> {
     let pwd_last_set = if force_change { "0" } else { "-1" };
     let mods: Vec<Mod<Vec<u8>>> = vec![
         Mod::Replace(sv("unicodePwd"), HashSet::from([encode_password(new_password)])),
         Mod::Replace(sv("pwdLastSet"), HashSet::from([sv(pwd_last_set)])),
     ];
-    let res = ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods).await.map_err(ldap_err)?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(dn, mods).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
         rc => Err(password_error("The password was not changed", rc, &res.text)),

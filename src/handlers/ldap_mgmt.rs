@@ -1848,12 +1848,29 @@ pub async fn reset_password(
             return Err("Password cannot be empty".to_string());
         }
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        ldap::reset_password(&mut conn, &base_dn, &username, &form.password, force_change).await
+        let user = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
+        refuse_bind_reset(user.is_bind, &username)?;
+        ldap::reset_password(&mut conn, &user.dn, &form.password, force_change).await
     }
     .await;
     db::log_action(&state.db, &actor, "user.reset_password", &username, Some(id), &result).await;
 
     after_user_action(&state, &server, &view, result).await
+}
+
+/// Resetting the bind account's password leaves EasyDC with the old one, so
+/// its next sign-in to the DC fails; with "must change" ticked, even the new
+/// one would not work.
+fn refuse_bind_reset(is_bind: bool, username: &str) -> Result<(), String> {
+    if is_bind {
+        Err(format!(
+            "EasyDC signs in to the DC as {username}, so resetting its password here would lock EasyDC out: \
+             EasyDC would still use the old one. To change it, set the new password on the DC, \
+             then put it in the server's settings (Edit on the dashboard)."
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// EasyDC signs in to the DC with one account. Disabling, deleting or moving
@@ -2586,6 +2603,12 @@ mod users_page_tests {
         let e = super::refuse_bind_account(true, "Administrator", "disabling").unwrap_err();
         assert!(e.contains("EasyDC signs in to the DC as Administrator"));
         assert!(e.contains("disabling it would lock EasyDC out"));
+        assert!(e.contains("Edit on the dashboard"));
+
+        assert!(super::refuse_bind_reset(false, "bob").is_ok());
+        let e = super::refuse_bind_reset(true, "Administrator").unwrap_err();
+        assert!(e.contains("EasyDC signs in to the DC as Administrator"));
+        assert!(e.contains("resetting its password here would lock EasyDC out"));
         assert!(e.contains("Edit on the dashboard"));
     }
 

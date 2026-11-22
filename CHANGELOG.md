@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.
+- Reset password refuses the account EasyDC signs in to the DC with, which would lock EasyDC out.
 
 ## [0.4.5] - 2026-11-21
 
