@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - CSV export and import of users: export the users in a view; import creates users from a file, after a check that lists what it will do.
 - Sites and subnets page: sites with their DCs, subnets and site links. Add and delete sites and subnets, edit site links, and move a DC to another site.
 - Domain Controllers page: each DC's site and FSMO roles. Admins can move a role, or all of them, to another DC, and remove a DC that is gone for good.
+- Delegation of OUs: see who may do what in an OU, and give a group a common task there, such as resetting passwords or managing users. Admins only.
 
 ### Fixed
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.

@@ -218,6 +218,24 @@ disabled), delete them, and **link or unlink** them to OUs.
 Browse the OU tree, **create**, **rename** and **delete** OUs, and **move** users,
 groups and computers from one OU to another.
 
+### Delegation
+
+**Delegation** (on the Organizational Units page, or the shield next to an OU) lets a group
+do a job in an OU without making its members domain admins: a help desk that resets
+passwords, say. It is what `samba-tool dsacl` and Windows' Delegation of Control wizard do.
+Only admins can change it.
+
+- The page lists, for the OU you pick, what each group may do there beyond the defaults:
+  a task EasyDC knows by name, or other rights in words ("Read and write gPLink"). The
+  rights every OU gets from the domain's defaults, such as Domain Admins' full control,
+  are under *Built-in access*.
+- **Delegate…** gives a security group one of these tasks: create, delete and manage
+  users; reset passwords and unlock accounts; create, delete and manage groups; change
+  group membership; create, delete and manage computers; link GPOs.
+- What a group is given applies in the OU and the OUs inside it, from any tool, not only
+  EasyDC. A right from a parent OU shows as such, and is removed on the OU it was set on.
+- The remove button takes away a task, or the other rights, set on that OU.
+
 ## Domain controllers
 
 **Domain Controllers** lists each DC with its DNS name, its site, and the FSMO roles it
@@ -403,7 +421,7 @@ For each area, an account is set to **View** or **Edit**:
 
 **View all** and **Edit all** set every area at once. An **Admin** may change everything,
 and is the only one who can manage EasyDC accounts, add, edit or remove servers, apply
-the Health Check's fixes, move FSMO roles, and remove a dead DC.
+the Health Check's fixes, move FSMO roles, remove a dead DC, and delegate control of OUs.
 
 An action needs Edit on what it changes: adding users to a group needs Groups, and moving a
 group or computer to another OU needs Groups or Computers. What an account may not change is

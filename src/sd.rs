@@ -1,4 +1,5 @@
-//! "User cannot change password", which Active Directory keeps not as an
+//! Access lists on directory objects. First for "User cannot change
+//! password", which Active Directory keeps not as an
 //! account flag but in the user's security descriptor: two entries that deny
 //! the Change Password right to Everyone and to the user itself (SELF).
 //!
@@ -6,7 +7,8 @@
 //! SECURITY_DESCRIPTOR, 2.4.5 ACL, 2.4.4.4 ACCESS_DENIED_OBJECT_ACE) and the
 //! "Modifying User Cannot Change Password" documentation. Only the DACL is
 //! read and written (the SD flags control asks for just that), and every
-//! entry other than the four this is about is kept byte for byte.
+//! entry other than the ones being changed is kept byte for byte. Also read
+//! and written by the delegation page (`delegation.rs`).
 
 /// The SD flags control (LDAP_SERVER_SD_FLAGS_OID): read and write only the
 /// DACL, which an account may change without the right to change owners or
@@ -97,6 +99,45 @@ impl Ace {
         !self.inherited() && self.is_change_password()
     }
 
+    /// The entry, for an allow or deny one (plain or object); None for the
+    /// kinds this does not read (callback and audit entries).
+    fn entry(&self) -> Option<Entry> {
+        let b = &self.bytes;
+        let deny = match self.kind() {
+            0x00 | ACCESS_ALLOWED_OBJECT_ACE => false,
+            0x01 | ACCESS_DENIED_OBJECT_ACE => true,
+            _ => return None,
+        };
+        let mask = u32_at(b, 4).ok()?;
+        let guid = |at: usize| b.get(at..at + 16).and_then(|g| <[u8; 16]>::try_from(g).ok());
+        let (object, applies_to, sid_at) = if self.kind() == 0x00 || self.kind() == 0x01 {
+            (None, None, 8)
+        } else {
+            let present = u32_at(b, 8).ok()?;
+            let mut at = 12;
+            let mut take = |flag: u32| {
+                if present & flag == 0 {
+                    return Some(None);
+                }
+                let g = guid(at)?;
+                at += 16;
+                Some(Some(g))
+            };
+            let object = take(ACE_OBJECT_TYPE_PRESENT)?;
+            let applies_to = take(ACE_INHERITED_OBJECT_TYPE_PRESENT)?;
+            (object, applies_to, at)
+        };
+        Some(Entry {
+            deny,
+            flags: b[1] & !INHERITED_ACE,
+            inherited: self.inherited(),
+            mask,
+            object,
+            applies_to,
+            sid: sid_at_or_none(b, sid_at)?,
+        })
+    }
+
     fn new(kind: u8, sid: &[u8; 12]) -> Ace {
         let mut b = Vec::with_capacity(40);
         b.extend([kind, 0]);
@@ -105,6 +146,71 @@ impl Ace {
         b.extend(ACE_OBJECT_TYPE_PRESENT.to_le_bytes());
         b.extend(CHANGE_PASSWORD);
         b.extend(sid);
+        Ace { bytes: b }
+    }
+}
+
+/// An access entry, read: what the delegation page shows and compares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub deny: bool,
+    /// The inheritance flags (container inherit, inherit only, …) without
+    /// INHERITED, which `inherited` says.
+    pub flags: u8,
+    pub inherited: bool,
+    pub mask: u32,
+    /// The right, class or attribute it is about, as stored.
+    pub object: Option<[u8; 16]>,
+    /// The class of the objects below that it applies to, as stored.
+    pub applies_to: Option<[u8; 16]>,
+    pub sid: Vec<u8>,
+}
+
+pub const CONTAINER_INHERIT: u8 = 0x02;
+pub const INHERIT_ONLY: u8 = 0x08;
+
+impl Entry {
+    /// An allow entry, set here (not inherited).
+    pub fn allow(mask: u32, flags: u8, object: Option<[u8; 16]>, applies_to: Option<[u8; 16]>, sid: &[u8]) -> Entry {
+        Entry { deny: false, flags, inherited: false, mask, object, applies_to, sid: sid.to_vec() }
+    }
+
+    /// The same grant, wherever it was set.
+    pub fn same_grant(&self, other: &Entry) -> bool {
+        self.deny == other.deny
+            && self.flags == other.flags
+            && self.mask == other.mask
+            && self.object == other.object
+            && self.applies_to == other.applies_to
+            && self.sid == other.sid
+    }
+
+    fn to_ace(&self) -> Ace {
+        let object = self.object.is_some() || self.applies_to.is_some();
+        let kind = match (object, self.deny) {
+            (false, false) => 0x00,
+            (false, true) => 0x01,
+            (true, false) => ACCESS_ALLOWED_OBJECT_ACE,
+            (true, true) => ACCESS_DENIED_OBJECT_ACE,
+        };
+        let mut b = vec![kind, self.flags | if self.inherited { INHERITED_ACE } else { 0 }, 0, 0];
+        b.extend(self.mask.to_le_bytes());
+        if object {
+            let mut present = 0u32;
+            if self.object.is_some() {
+                present |= ACE_OBJECT_TYPE_PRESENT;
+            }
+            if self.applies_to.is_some() {
+                present |= ACE_INHERITED_OBJECT_TYPE_PRESENT;
+            }
+            b.extend(present.to_le_bytes());
+            for g in [self.object, self.applies_to].into_iter().flatten() {
+                b.extend(g);
+            }
+        }
+        b.extend(&self.sid);
+        let size = (b.len() as u16).to_le_bytes();
+        b[2..4].copy_from_slice(&size);
         Ace { bytes: b }
     }
 }
@@ -123,6 +229,10 @@ pub struct Descriptor {
 fn sid_at(b: &[u8], at: usize) -> SdResult<Vec<u8>> {
     let count = usize::from(*b.get(at + 1).ok_or_else(too_short)?);
     b.get(at..at + 8 + 4 * count).map(<[u8]>::to_vec).ok_or_else(too_short)
+}
+
+fn sid_at_or_none(b: &[u8], at: usize) -> Option<Vec<u8>> {
+    sid_at(b, at).ok()
 }
 
 fn acl_at(b: &[u8], at: usize) -> SdResult<&[u8]> {
@@ -186,6 +296,31 @@ impl Descriptor {
             self.dacl.insert(at, Ace::new(ACCESS_ALLOWED_OBJECT_ACE, &EVERYONE));
         }
         self.acl_revision = self.acl_revision.max(ACL_REVISION_DS);
+    }
+
+    /// The allow and deny entries, in order.
+    pub fn entries(&self) -> Vec<Entry> {
+        self.dacl.iter().filter_map(Ace::entry).collect()
+    }
+
+    /// Add an allow entry set here, after the other entries set here and
+    /// before the inherited ones, unless it is there already. Returns whether
+    /// it was added.
+    pub fn add(&mut self, e: &Entry) -> bool {
+        if self.dacl.iter().filter_map(Ace::entry).any(|x| !x.inherited && x.same_grant(e)) {
+            return false;
+        }
+        let at = self.dacl.iter().position(Ace::inherited).unwrap_or(self.dacl.len());
+        self.dacl.insert(at, e.to_ace());
+        self.acl_revision = self.acl_revision.max(ACL_REVISION_DS);
+        true
+    }
+
+    /// Take out the entries set here that `drop` picks. Returns how many went.
+    pub fn remove(&mut self, drop: impl Fn(&Entry) -> bool) -> usize {
+        let before = self.dacl.len();
+        self.dacl.retain(|a| a.inherited() || !a.entry().is_some_and(|e| drop(&e)));
+        before - self.dacl.len()
     }
 
     /// Back to the self-relative form, for writing with the SD flags control.
@@ -348,6 +483,39 @@ mod tests {
         let back = Descriptor::parse(&d.to_bytes()).unwrap();
         assert_eq!(back.owner, Some(admins()));
         assert_eq!(back.dacl.len(), 1);
+    }
+
+    #[test]
+    fn entries_read_back_as_written() {
+        let user = [7u8; 16];
+        let right = [9u8; 16];
+        let full = Entry::allow(0xF01FF, CONTAINER_INHERIT | INHERIT_ONLY, None, Some(user), &admins());
+        let reset = Entry::allow(0x100, CONTAINER_INHERIT | INHERIT_ONLY, Some(right), Some(user), &admins());
+        let plain_one = Entry::allow(0x20094, 0, None, None, &admins());
+        let mut inherited = plain(&admins(), INHERITED_ACE);
+        inherited[4..8].copy_from_slice(&0x10u32.to_le_bytes());
+        let mut d = Descriptor::parse(&descriptor(&[inherited])).unwrap();
+        assert!(d.add(&full) && d.add(&reset) && d.add(&plain_one));
+        assert!(!d.add(&full), "not added twice");
+        let d = Descriptor::parse(&d.to_bytes()).unwrap();
+        let e = d.entries();
+        assert_eq!(e.len(), 4);
+        assert_eq!(e[0], full);
+        assert_eq!(e[1], reset);
+        assert_eq!(e[2], plain_one);
+        assert!(e[3].inherited && e[3].mask == 0x10, "new entries go before inherited ones");
+        assert_eq!(full.to_ace().bytes.len(), 4 + 4 + 4 + 16 + admins().len());
+    }
+
+    #[test]
+    fn only_entries_set_here_are_removed() {
+        let mut inherited = plain(&admins(), INHERITED_ACE);
+        inherited[4..8].copy_from_slice(&0x10u32.to_le_bytes());
+        let mut d = Descriptor::parse(&descriptor(&[plain(&admins(), 0), inherited])).unwrap();
+        assert_eq!(d.remove(|e| e.sid == admins()), 1);
+        let e = d.entries();
+        assert_eq!(e.len(), 1);
+        assert!(e[0].inherited);
     }
 
     #[test]

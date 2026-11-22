@@ -1,5 +1,6 @@
 pub mod auth_handlers;
 pub mod dcs;
+pub mod delegation;
 pub mod health;
 pub mod ldap_mgmt;
 pub mod policy;

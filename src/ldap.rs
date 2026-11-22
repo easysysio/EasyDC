@@ -1354,7 +1354,7 @@ struct PasswordEntry {
     expiry: Option<i64>,
 }
 
-fn sd_flags_dacl() -> ldap3::controls::RawControl {
+pub(crate) fn sd_flags_dacl() -> ldap3::controls::RawControl {
     ldap3::controls::RawControl {
         ctype: crate::sd::SD_FLAGS_OID.to_string(),
         crit: true,
@@ -1813,7 +1813,7 @@ pub async fn user_groups(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) 
 
 /// A binary SID as text: `S-1-5-21-…-1105` (revision, 48-bit authority,
 /// then the sub-authorities, little-endian).
-fn sid_string(b: &[u8]) -> Option<String> {
+pub(crate) fn sid_string(b: &[u8]) -> Option<String> {
     let count = usize::from(*b.get(1)?);
     if b.len() != 8 + 4 * count {
         return None;
@@ -2129,7 +2129,7 @@ pub(crate) fn first_rdn_value(dn: &str) -> String {
 
 /// Names for the well-known SIDs Samba puts into builtin groups, which show
 /// up as foreign security principals named by SID.
-fn well_known_sid(sid: &str) -> Option<&'static str> {
+pub(crate) fn well_known_sid(sid: &str) -> Option<&'static str> {
     Some(match sid {
         "S-1-1-0" => "Everyone",
         "S-1-5-4" => "Interactive",

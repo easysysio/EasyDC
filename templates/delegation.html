@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Delegation - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}/ous">Organizational Units</a></li>
+        <li class="breadcrumb-item active">Delegation</li>
+    </ol>
+</nav>
+
+<h4 class="mb-2"><i class="bi bi-shield-lock me-2 text-primary"></i>Delegation</h4>
+<p class="text-muted small mb-4">
+    Let a group do a job in an OU without making its members domain admins: a help desk that resets passwords,
+    say. What a group is given here applies in the OU and in the OUs inside it, from any tool, not just EasyDC.
+</p>
+
+{% if error %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> {{ error }}</div>
+{% endif %}
+{% if done %}
+<div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> {{ done }}</div>
+{% endif %}
+
+{% if ous and ous | length > 0 %}
+<form method="get" class="d-flex flex-wrap gap-2 align-items-center mb-3">
+    <label for="ouPick" class="form-label mb-0 fw-medium">OU</label>
+    <select id="ouPick" name="dn" class="form-select" style="max-width: 28rem;" onchange="this.form.submit()">
+        {% for ou in ous %}
+        <option value="{{ ou.dn }}"{% if ou.dn == dn %} selected{% endif %}>{% for i in range(end=ou.depth) %}&nbsp;&nbsp;&nbsp;{% endfor %}{{ ou.name }}</option>
+        {% endfor %}
+    </select>
+    <noscript><button type="submit" class="btn btn-outline-secondary">Show</button></noscript>
+    {% if v %}
+    <button type="button" class="btn btn-primary ms-auto" data-needs="admin" data-bs-toggle="modal" data-bs-target="#grantModal">
+        <i class="bi bi-person-plus me-1"></i> Delegate…
+    </button>
+    {% endif %}
+</form>
+{% elif not error %}
+<div class="text-center py-5 text-muted">
+    <i class="bi bi-folder2 fs-1"></i>
+    <p class="mt-3">There are no OUs yet. Rights are delegated on an OU: create one on the
+        <a href="/servers/{{ server.id }}/ous">Organizational Units</a> page first.</p>
+</div>
+{% endif %}
+
+{% if v %}
+<p class="small text-muted font-monospace text-break mb-2">{{ v.dn }}</p>
+<div class="card shadow-sm mb-4">
+    <div class="table-responsive">
+        <table class="table align-middle mb-0">
+            <thead class="table-light">
+                <tr><th>Group or user</th><th>Can</th><th>Set</th><th class="text-end">Actions</th></tr>
+            </thead>
+            <tbody>
+                {% for r in v.delegated %}
+                <tr>
+                    <td class="fw-medium text-nowrap"><i class="bi bi-{% if r.kind == 'group' %}people{% elif r.kind == 'computer' %}pc-display{% else %}person{% endif %} me-1 text-secondary"></i>{{ r.who }}</td>
+                    <td>
+                        {% if r.task %}{{ r.label }}{% else %}
+                        <span class="text-muted">Other rights:</span>
+                        <ul class="small mb-0 ps-3">{% for l in r.lines %}<li>{{ l }}</li>{% endfor %}</ul>
+                        {% endif %}
+                    </td>
+                    <td class="small text-nowrap">{% if r.inherited %}<span class="text-muted">From a parent OU</span>{% else %}Here{% endif %}</td>
+                    <td class="text-end" data-needs="admin">
+                        {% if not r.inherited %}
+                        <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#revokeModal"
+                            data-sid="{{ r.sid }}" data-task="{{ r.task }}" data-who="{{ r.who }}" data-label="{{ r.label }}" title="Remove">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center text-muted py-4">Nothing is delegated on {{ v.name }}: only the built-in groups have rights here.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% if v.delegated | filter(attribute="inherited", value=true) | length > 0 %}
+<p class="small text-muted">A right from a parent OU is removed on the OU it was set on.</p>
+{% endif %}
+
+<details class="mb-5">
+    <summary class="text-muted">Built-in access ({{ v.builtin | length }})</summary>
+    <p class="small text-muted mt-2">The rights every OU gets from the domain's defaults, for built-in groups such as
+        Domain Admins and Account Operators. EasyDC shows them but does not change them.</p>
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0 small">
+                <thead class="table-light"><tr><th>Group or user</th><th>Can</th><th>Set</th></tr></thead>
+                <tbody>
+                    {% for r in v.builtin %}
+                    <tr>
+                        <td class="text-nowrap">{{ r.who }}</td>
+                        <td>{% if r.task %}{{ r.label }}{% else %}<ul class="mb-0 ps-3">{% for l in r.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}</td>
+                        <td class="text-nowrap text-muted">{% if r.inherited %}Inherited{% else %}Here{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</details>
+
+<div class="modal fade" id="grantModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/delegation/grant">
+            <input type="hidden" name="dn" value="{{ v.dn }}">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-plus me-1"></i> Delegate on {{ v.name }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="grantGroup">Group</label>
+                    <input type="text" id="grantGroup" name="group" class="form-control" list="grantGroups" required autocomplete="off"
+                        placeholder="e.g. Helpdesk">
+                    <datalist id="grantGroups">{% for g in groups %}<option value="{{ g }}">{% endfor %}</datalist>
+                    <div class="form-text">A security group. Give rights to a group, not a person, so they go when someone leaves it.</div>
+                </div>
+                <p class="form-label">Task</p>
+                {% for t in tasks %}
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="task" id="task_{{ t.key }}" value="{{ t.key }}" required{% if loop.first %} checked{% endif %}>
+                    <label class="form-check-label" for="task_{{ t.key }}">{{ t.label }}
+                        <span class="d-block small text-muted">{{ t.does }}</span></label>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Delegate</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="revokeModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/delegation/revoke">
+            <input type="hidden" name="dn" value="{{ v.dn }}">
+            <input type="hidden" name="sid" data-fill="sid">
+            <input type="hidden" name="task" data-fill="task">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-x-circle me-1"></i> Remove</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Take "<span data-fill="label"></span>" from <strong data-fill="who"></strong> on {{ v.name }}?</p>
+                <p class="small text-muted mb-0">Its members can no longer do it here or in the OUs inside, unless they
+                    have the right some other way.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -30,9 +30,8 @@ writes, and Microsoft's MS-ADTS for the rules, but do not copy its code. Admins 
   Controllers page. Seizing a role from a dead DC stays in samba-tool.
 - ~~**Remove a dead DC** (`samba-tool domain demote --remove-other-dead-server`).~~ Done,
   on the Domain Controllers page.
-- **Delegate control of an OU** (`samba-tool dsacl`): show who has rights on an OU, and give
-  a group a common task there, such as resetting passwords or managing users. Edits the
-  OU's `nTSecurityDescriptor`.
+- ~~**Delegate control of an OU** (`samba-tool dsacl`).~~ Done, on the Delegation page
+  (from the Organizational Units page).
 
 ## Checks and housekeeping
 

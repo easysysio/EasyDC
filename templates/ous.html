@@ -13,6 +13,9 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h4 class="mb-0"><i class="bi bi-folder2-open me-2 text-warning"></i>Organizational Units</h4>
     <div class="d-flex gap-2">
+        <a class="btn btn-outline-primary" href="/servers/{{ server.id }}/delegation">
+            <i class="bi bi-shield-lock me-1"></i> Delegation
+        </a>
         <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#moveObjectModal">
             <i class="bi bi-arrow-left-right me-1"></i> Move Object
         </button>
@@ -60,7 +63,11 @@
                     </td>
                     <td class="text-muted small">{{ ou.description }}</td>
                     <td class="font-monospace small text-muted text-break d-none d-lg-table-cell">{{ ou.dn }}</td>
-                    <td class="text-end" data-needs="ous">
+                    <td class="text-end text-nowrap" data-needs="ous">
+                        <a class="btn btn-outline-secondary btn-sm" href="/servers/{{ server.id }}/delegation?dn={{ ou.dn | urlencode_strict }}"
+                            title="Delegation: who may do what here">
+                            <i class="bi bi-shield-lock"></i>
+                        </a>
                         <button type="button" class="btn btn-outline-secondary btn-sm"
                             data-bs-toggle="modal"
                             data-bs-target="#renameModal{{ loop.index }}"
