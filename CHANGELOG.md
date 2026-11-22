@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - Domain accounts: an admin can add a domain user as an EasyDC account. It signs in with its domain password, and cannot sign in while disabled, expired or locked out in the domain. At least one local admin always remains.
 - Computers page by OU: browse computers by OU, move them, and enable, disable or move many at once.
 - A user's groups in the Edit dialog: see the groups a user is in, including the primary group, and add or remove them.
+- Password settings per user, in the Edit dialog: when the password was last set and expires, and must change at next sign-in, cannot change password, and password never expires.
 
 ### Fixed
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.

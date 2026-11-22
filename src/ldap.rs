@@ -1319,6 +1319,204 @@ pub async fn reset_password(
     }
 }
 
+// ── password settings ─────────────────────────────────────────────────────────
+
+/// A user's password settings, for the Edit dialog's Password tab.
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct PasswordSettings {
+    /// Must set a new password at the next sign-in (pwdLastSet 0).
+    pub must_change: bool,
+    /// Denied the Change Password right (see [`crate::sd`]).
+    pub cannot_change: bool,
+    /// DONT_EXPIRE_PASSWORD in userAccountControl.
+    pub never_expires: bool,
+    /// When the password was last set, "2026-11-22 10:15 UTC"; empty when never.
+    pub last_set: String,
+    /// When it expires: a time, "Never", or empty when the DC does not say.
+    pub expires: String,
+}
+
+const DONT_EXPIRE_PASSWORD: i64 = 0x1_0000;
+
+/// What the settings are changed to.
+pub struct PasswordSettingsChange {
+    pub must_change: bool,
+    pub cannot_change: bool,
+    pub never_expires: bool,
+}
+
+/// A user's entry with what its password settings are read from.
+struct PasswordEntry {
+    dn: String,
+    name: String,
+    is_bind: bool,
+    uac: i64,
+    pwd_last_set: i64,
+    descriptor: crate::sd::Descriptor,
+    expiry: Option<i64>,
+}
+
+fn sd_flags_dacl() -> ldap3::controls::RawControl {
+    ldap3::controls::RawControl {
+        ctype: crate::sd::SD_FLAGS_OID.to_string(),
+        crit: true,
+        val: Some(crate::sd::SD_FLAGS_DACL.to_vec()),
+    }
+}
+
+async fn password_entry(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str, bind: &str) -> LdapResult<PasswordEntry> {
+    let filter = format!(
+        "(&(objectClass=user)(!(objectClass=computer))(sAMAccountName={}))",
+        ldap_escape(username.trim())
+    );
+    let attrs = vec![
+        "sAMAccountName",
+        "userPrincipalName",
+        "userAccountControl",
+        "pwdLastSet",
+        "msDS-UserPasswordExpiryTimeComputed",
+        "nTSecurityDescriptor",
+    ];
+    let (entries, _) = ldap
+        .with_controls(sd_flags_dacl())
+        .with_timeout(OP_TIMEOUT)
+        .search(base_dn, Scope::Subtree, &filter, attrs)
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    let e = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("User '{}' not found", username.trim()))?;
+    let raw = e
+        .bin_attrs
+        .get("nTSecurityDescriptor")
+        .and_then(|v| v.first())
+        .ok_or("The DC did not give the user's security descriptor; the bind account may lack the right to read it")?;
+    let uac = attr(&e, "userAccountControl")
+        .parse()
+        .map_err(|_| format!("Could not read userAccountControl of {}", e.dn))?;
+    Ok(PasswordEntry {
+        name: attr(&e, "sAMAccountName"),
+        is_bind: is_bind_account(bind, &e.dn, &attr(&e, "userPrincipalName"), &attr(&e, "sAMAccountName")),
+        uac,
+        pwd_last_set: attr(&e, "pwdLastSet").parse().unwrap_or(0),
+        descriptor: crate::sd::Descriptor::parse(raw).map_err(|why| format!("Could not read {}'s access list: {why}", e.dn))?,
+        expiry: crate::health::attr_ci(&e, "msDS-UserPasswordExpiryTimeComputed").parse().ok(),
+        dn: e.dn,
+    })
+}
+
+/// A FILETIME as "2026-11-22 10:15 UTC".
+fn filetime_text(ft: i64) -> String {
+    let secs = (ft - FILETIME_UNIX_EPOCH).div_euclid(TICKS_PER_SECOND);
+    let (y, m, d) = crate::health::civil_from_days(secs.div_euclid(86_400));
+    let rest = secs.rem_euclid(86_400);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
+}
+
+impl PasswordEntry {
+    fn settings(&self) -> PasswordSettings {
+        let never_expires = self.uac & DONT_EXPIRE_PASSWORD != 0;
+        PasswordSettings {
+            must_change: self.pwd_last_set == 0,
+            cannot_change: self.descriptor.cannot_change_password(),
+            never_expires,
+            last_set: if self.pwd_last_set > 0 { filetime_text(self.pwd_last_set) } else { String::new() },
+            expires: match self.expiry {
+                // A change was asked for: it has to be changed now, whatever the age.
+                _ if self.pwd_last_set == 0 => String::new(),
+                _ if never_expires => "Never".to_string(),
+                Some(t) if t == i64::MAX || t == 0 => "Never".to_string(),
+                Some(t) if t > 0 => filetime_text(t),
+                _ => String::new(),
+            },
+        }
+    }
+}
+
+pub async fn password_settings(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) -> LdapResult<PasswordSettings> {
+    Ok(password_entry(ldap, base_dn, username, "").await?.settings())
+}
+
+/// Settings that cannot go together, as Windows warns about them: a user who
+/// may not change the password, or whose password never expires, cannot be
+/// made to change it at the next sign-in.
+fn conflicting(want: &PasswordSettingsChange) -> Option<&'static str> {
+    if want.must_change && want.cannot_change {
+        Some("A user who cannot change their password cannot be made to change it at the next sign-in. Choose one.")
+    } else if want.must_change && want.never_expires {
+        Some("A password that never expires is not asked to be changed at the next sign-in either. Choose one.")
+    } else {
+        None
+    }
+}
+
+/// Change a user's password settings. Returns what changed, in words, for
+/// the audit log; nothing when they were already so.
+pub async fn set_password_settings(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    username: &str,
+    bind: &str,
+    want: &PasswordSettingsChange,
+) -> LdapResult<Vec<String>> {
+    if let Some(why) = conflicting(want) {
+        return Err(why.to_string());
+    }
+    let mut entry = password_entry(ldap, base_dn, username, bind).await?;
+    let now = entry.settings();
+    if want.must_change && !now.must_change && entry.is_bind {
+        return Err(format!(
+            "EasyDC signs in to the DC as {}, so making it change its password at the next sign-in would lock \
+             EasyDC out. To do it, first change the server's bind account (Edit on the dashboard).",
+            entry.name
+        ));
+    }
+    let on_off = |b: bool| if b { "on" } else { "off" };
+    let mut changed = Vec::new();
+    let mut mods: Vec<Mod<Vec<u8>>> = Vec::new();
+    if want.never_expires != now.never_expires {
+        let uac = if want.never_expires { entry.uac | DONT_EXPIRE_PASSWORD } else { entry.uac & !DONT_EXPIRE_PASSWORD };
+        mods.push(Mod::Replace(sv("userAccountControl"), HashSet::from([sv(&uac.to_string())])));
+        changed.push(format!("password never expires: {}", on_off(want.never_expires)));
+    }
+    if want.must_change != now.must_change {
+        // -1 marks the password as set now, so it does not count as expired.
+        let value = if want.must_change { "0" } else { "-1" };
+        mods.push(Mod::Replace(sv("pwdLastSet"), HashSet::from([sv(value)])));
+        changed.push(format!("must change at next sign-in: {}", on_off(want.must_change)));
+    }
+    if !mods.is_empty() {
+        let res = ldap.with_timeout(OP_TIMEOUT).modify(&entry.dn, mods).await.map_err(ldap_err)?;
+        if res.rc != 0 {
+            return Err(refused("The password settings were not changed", "the user", &res));
+        }
+    }
+    if want.cannot_change != now.cannot_change {
+        entry.descriptor.set_cannot_change_password(want.cannot_change);
+        let value = HashSet::from([entry.descriptor.to_bytes()]);
+        let res = ldap
+            .with_controls(sd_flags_dacl())
+            .with_timeout(OP_TIMEOUT)
+            .modify(&entry.dn, vec![Mod::Replace(b"nTSecurityDescriptor".to_vec(), value)])
+            .await
+            .map_err(ldap_err)?;
+        if res.rc != 0 {
+            let what = if changed.is_empty() {
+                "\"Cannot change password\" was not changed".to_string()
+            } else {
+                format!("Saved {}, but \"cannot change password\" was not changed", changed.join(", "))
+            };
+            return Err(refused(&what, "the user's access list", &res));
+        }
+        changed.push(format!("cannot change password: {}", on_off(want.cannot_change)));
+    }
+    Ok(changed)
+}
+
 /// Samba's replies to a password write that it refuses: 0000052D (Windows'
 /// ERROR_PASSWORD_RESTRICTION) when the password breaks the policy that
 /// governs the account, and confidentialityRequired (13) when the connection
@@ -4884,6 +5082,22 @@ mod account_toggle_tests {
     fn toggling_is_idempotent() {
         assert_eq!(with_account_disabled(514, true), 514);
         assert_eq!(with_account_disabled(512, false), 512);
+    }
+
+    #[test]
+    fn password_settings_that_cannot_go_together() {
+        let want = |must_change, cannot_change, never_expires| super::PasswordSettingsChange { must_change, cannot_change, never_expires };
+        assert!(super::conflicting(&want(true, true, false)).unwrap().contains("cannot change their password"));
+        assert!(super::conflicting(&want(true, false, true)).unwrap().contains("never expires"));
+        assert_eq!(super::conflicting(&want(true, false, false)), None);
+        assert_eq!(super::conflicting(&want(false, true, true)), None);
+    }
+
+    #[test]
+    fn a_password_time_reads_plainly() {
+        // 2026-11-22 10:15:30 UTC
+        let ft = super::unix_to_filetime(1_795_342_530);
+        assert_eq!(super::filetime_text(ft), "2026-11-22 10:15 UTC");
     }
 
     #[test]

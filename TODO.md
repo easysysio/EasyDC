@@ -16,8 +16,8 @@ in `docs/managing.md`. At least one local admin always remains.
 
 - ~~Computers page: browse by OU, move computers, and bulk enable, disable or move.~~ Done.
 - ~~A user's groups in the Edit dialog: see them, add and remove.~~ Done.
-- Password and logon settings per user: password never expires, must change at next
-  logon, cannot change password; when the password was last set and when it expires.
+- ~~Password and logon settings per user: password never expires, must change at next
+  logon, cannot change password; when the password was last set and when it expires.~~ Done.
 - CSV export and import of users.
 - Sites and subnets page.
 

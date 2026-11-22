@@ -56,6 +56,14 @@ take no time.
   password older than the maximum password age (from the domain policy, or the user's
   PSO) shows **Password expired**. Either way the user cannot sign in with their old
   password; on a PC, Windows asks for a new one.
+- **Password**, a tab in the Edit dialog, shows when the password was last set and when it
+  expires (by the domain policy or the user's PSO), and has three switches: *User must
+  change password at next sign-in*, *User cannot change password* and *Password never
+  expires*. As in Windows, *must change* cannot go with either of the other two, and
+  EasyDC does not ask its own bind account to change its password. *Cannot change
+  password* is not an account flag in Active Directory but two entries in the user's
+  permissions that deny the Change Password right to Everyone and to the user; EasyDC
+  changes only those entries, and turning it off restores the defaults.
 - **Unlock** clears a lockout. Locked accounts carry a **Locked** badge in the list, with
   the count of bad password attempts. When the lockout duration runs out the account
   unlocks by itself, and the badge goes with it.

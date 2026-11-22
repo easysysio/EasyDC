@@ -283,6 +283,10 @@
                     <button type="button" class="nav-link js-groups-tab" data-bs-toggle="tab"
                         data-bs-target="#editGroups" role="tab" aria-controls="editGroups">Groups</button>
                 </li>
+                <li class="nav-item" role="presentation">
+                    <button type="button" class="nav-link js-password-tab" data-bs-toggle="tab"
+                        data-bs-target="#editPassword" role="tab" aria-controls="editPassword">Password</button>
+                </li>
             </ul>
             <div class="tab-content">
             <div class="tab-pane fade show active" id="editDetails" role="tabpanel">
@@ -377,6 +381,39 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
+            </div>
+            <div class="tab-pane fade" id="editPassword" role="tabpanel">
+                <form class="js-password-form" data-needs="users">
+                    <div class="modal-body">
+                        <div class="js-password-error"></div>
+                        <dl class="row small mb-3">
+                            <dt class="col-sm-4 fw-normal text-muted">Password last set</dt>
+                            <dd class="col-sm-8 js-last-set"></dd>
+                            <dt class="col-sm-4 fw-normal text-muted">Password expires</dt>
+                            <dd class="col-sm-8 js-expires"></dd>
+                        </dl>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" role="switch" id="pwMustChange" name="must_change">
+                            <label class="form-check-label" for="pwMustChange">User must change password at next sign-in</label>
+                        </div>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" role="switch" id="pwCannotChange" name="cannot_change">
+                            <label class="form-check-label" for="pwCannotChange">User cannot change password</label>
+                        </div>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" role="switch" id="pwNeverExpires" name="never_expires">
+                            <label class="form-check-label" for="pwNeverExpires">Password never expires</label>
+                        </div>
+                        <div class="form-text">
+                            To set a new password, use <strong>Reset password</strong> in the user's
+                            <i class="bi bi-three-dots"></i> menu.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="submit" class="btn btn-primary js-password-save">Save</button>
+                    </div>
+                </form>
             </div>
             </div>
         </div>
@@ -586,6 +623,79 @@ userActions.querySelectorAll('.modal').forEach(function (modal) {
         bootstrap.Tab.getOrCreateInstance(modal.querySelector('.js-details-tab')).show();
     });
     modal.querySelector('.js-groups-tab').addEventListener('show.bs.tab', load);
+})();
+
+// The Edit dialog's Password tab: read when it is opened, saved in place.
+(function () {
+    const modal = document.getElementById('editUserModal');
+    const form = modal.querySelector('.js-password-form');
+    const problem = modal.querySelector('.js-password-error');
+    const save = form.querySelector('.js-password-save');
+    const switches = ['must_change', 'cannot_change', 'never_expires'].map(n => form.elements[n]);
+    let user = null;
+
+    function say(text, ok) {
+        problem.replaceChildren();
+        if (!text) return;
+        const box = document.createElement('div');
+        box.className = 'alert py-2 small ' + (ok ? 'alert-success' : 'alert-danger');
+        box.textContent = text;
+        problem.append(box);
+    }
+    function ready(on) {
+        switches.forEach(s => { s.disabled = !on; });
+        save.disabled = !on;
+    }
+    async function ask(options) {
+        try {
+            return await (await fetch(userUrl(user, 'password-settings'),
+                Object.assign({ headers: { Accept: 'application/json' } }, options))).json();
+        } catch (e) {
+            return { error: 'EasyDC did not answer as expected.' };
+        }
+    }
+    async function load() {
+        ready(false);
+        form.querySelector('.js-last-set').textContent = 'Loading…';
+        form.querySelector('.js-expires').textContent = '';
+        const a = await ask({});
+        if (a.error) {
+            form.querySelector('.js-last-set').textContent = '';
+            return say(a.error);
+        }
+        // A required change clears the time it was last set.
+        form.querySelector('.js-last-set').textContent = a.last_set || (a.must_change ? '—' : 'Never');
+        form.querySelector('.js-expires').textContent =
+            a.must_change ? 'Must be changed at the next sign-in' : (a.expires || '—');
+        form.elements.must_change.checked = a.must_change;
+        form.elements.cannot_change.checked = a.cannot_change;
+        form.elements.never_expires.checked = a.never_expires;
+        ready(true);
+    }
+    form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const body = new URLSearchParams();
+        switches.forEach(s => { if (s.checked) body.append(s.name, 'on'); });
+        ready(false);
+        const a = await ask({ method: 'POST', body: body });
+        if (a.error) {
+            ready(true);
+            return say(a.error);
+        }
+        await load();
+        say('Saved.', true);
+    });
+    modal.addEventListener('show.bs.modal', function (event) {
+        const row = event.relatedTarget && event.relatedTarget.closest('tr');
+        if (!row) return;
+        user = row.dataset.user;
+        say(null);
+        ready(false);
+    });
+    modal.querySelector('.js-password-tab').addEventListener('show.bs.tab', function () {
+        say(null);
+        load();
+    });
 })();
 
 // Select users and act on them at once (bulk.html); adding them to a group is the Users page's own.

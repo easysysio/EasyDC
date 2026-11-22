@@ -271,6 +271,7 @@ mod tests {
         let post = |r| need(&Method::POST, r);
         assert_eq!(post("/servers/:id/users/:username/reset-password"), Need::Edit(Area::Users));
         assert_eq!(post("/servers/:id/users/bulk"), Need::Edit(Area::Users));
+        assert_eq!(post("/servers/:id/users/:username/password-settings"), Need::Edit(Area::Users));
         assert_eq!(post("/servers/:id/groups/:name/members/add"), Need::Edit(Area::Groups));
         assert_eq!(post("/servers/:id/computers/:name/toggle"), Need::Edit(Area::Computers));
         assert_eq!(post("/servers/:id/computers/bulk"), Need::Edit(Area::Computers));

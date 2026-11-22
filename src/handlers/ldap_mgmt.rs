@@ -2079,6 +2079,77 @@ async fn add_users_to_group(
     Ok(results)
 }
 
+// ── password settings ─────────────────────────────────────────────────────────
+
+/// GET: a user's password settings, as JSON for the Edit dialog's Password tab.
+pub async fn password_settings(State(state): State<AppState>, Path((id, username)): Path<(i64, String)>) -> Response {
+    let Some(server) = get_server(&state, id).await else {
+        return axum::Json(serde_json::json!({ "error": "This server is no longer in EasyDC" })).into_response();
+    };
+    let loaded: Result<_, String> = async {
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        ldap::password_settings(&mut conn, &base_dn, &username).await
+    }
+    .await;
+    match loaded {
+        Ok(settings) => axum::Json(settings).into_response(),
+        Err(e) => axum::Json(serde_json::json!({ "error": e })).into_response(),
+    }
+}
+
+/// The Password tab's switches; a switch that is off is not sent.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct PasswordSettingsForm {
+    pub must_change: String,
+    pub cannot_change: String,
+    pub never_expires: String,
+}
+
+impl PasswordSettingsForm {
+    fn change(&self) -> ldap::PasswordSettingsChange {
+        let on = |v: &str| !v.is_empty();
+        ldap::PasswordSettingsChange {
+            must_change: on(&self.must_change),
+            cannot_change: on(&self.cannot_change),
+            never_expires: on(&self.never_expires),
+        }
+    }
+}
+
+pub async fn update_password_settings(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path((id, username)): Path<(i64, String)>,
+    Query(view): Query<ListView>,
+    headers: HeaderMap,
+    Form(form): Form<PasswordSettingsForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+    let result: Result<Vec<String>, String> = async {
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        ldap::set_password_settings(&mut conn, &base_dn, &username, &server.bind_dn, &form.change()).await
+    }
+    .await;
+    // Saving with nothing changed is not worth a line in the log.
+    if result.as_ref().map_or(true, |c| !c.is_empty()) {
+        let target = match &result {
+            Ok(changed) => format!("{username} ({})", changed.join(", ")),
+            Err(_) => username.clone(),
+        };
+        let logged = result.as_ref().map(|_| ()).map_err(Clone::clone);
+        db::log_action(&state.db, &actor, "user.password_settings", &target, Some(id), &logged).await;
+    }
+    let result = result.map(|_| ());
+    if wants_json(&headers) {
+        return json_result(result);
+    }
+    after_user_action(&state, &server, &view, result).await
+}
+
 // ── unlock account ─────────────────────────────────────────────────────────────
 
 pub async fn unlock_user(
@@ -2428,6 +2499,22 @@ mod users_page_tests {
                 crate::access::Need::Edit(crate::access::Area::Groups)
             );
         }
+    }
+
+    /// The Password tab reads and saves through one route, which needs Edit on Users.
+    #[test]
+    fn the_edit_dialog_has_a_password_tab() {
+        let html = render(&people());
+        let dialog = html.split(r#"id="editUserModal""#).nth(1).unwrap().split(r#"id="resetUserModal""#).next().unwrap();
+        assert!(dialog.contains(r##"data-bs-target="#editPassword""##));
+        assert!(dialog.contains(r#"<form class="js-password-form" data-needs="users">"#));
+        for name in ["must_change", "cannot_change", "never_expires"] {
+            assert!(dialog.contains(&format!(r#"name="{name}""#)), "{name}");
+        }
+        assert!(html.contains("userUrl(user, 'password-settings')"));
+        let f: super::PasswordSettingsForm = serde_urlencoded::from_str("cannot_change=on").unwrap();
+        let c = f.change();
+        assert!(c.cannot_change && !c.must_change && !c.never_expires, "a switch that is off is not sent");
     }
 
     #[test]
