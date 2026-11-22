@@ -239,6 +239,32 @@ server's account and TLS setting. A DC it cannot reach is shown as such, with th
 and does not hold up the rest of the page. To force a sync, run
 `samba-tool drs replicate <to-DC> <from-DC> <partition DN>` on a DC.
 
+## Sites and subnets
+
+A **site** is a place with a fast network, such as an office. A computer finds its site
+from its address, using the **subnets**, and then signs in at a DC in that site rather than
+across a slow link. **Site links** say which sites replicate with each other, at what cost
+and how often. A new domain has one site, *Default-First-Site-Name*, and one link,
+*DEFAULTIPSITELINK*.
+
+- **Sites** show their DCs, subnets and site links. **Add Site** asks for a name and the
+  site link to put it in, so it replicates with the others. A site name can hold letters,
+  digits and hyphens only, since each DC publishes its site in DNS.
+- **Delete** a site that holds no DC. It is taken out of its site links, and its subnets
+  stay with no site until you give them one. A site that holds a DC shows *Holds a DC,
+  so it stays*.
+- **Move…** next to a DC moves it to another site: when the DC has moved, or its site was
+  set wrong when it joined. Samba updates the DC's DNS records for the new site at its
+  next DNS update, within about 10 minutes.
+- **Subnets** are written as an address and a prefix length, such as `10.1.0.0/16` or
+  `2001:db8:10::/48`. EasyDC refuses an address with host bits set (`10.1.2.3/16`) and says
+  which subnet was meant. A subnet with no site is marked **No site**.
+- **Site links**: tick the sites in the link, and set its **cost** (lower is preferred;
+  100 is the default) and how often it **replicates** (15 minutes to a week, in steps of
+  15; every 3 hours is the default). EasyDC will not leave a site in no link at all, since
+  its DCs would then not replicate with the other sites. Within a site, DCs replicate
+  within seconds of a change, whatever the links say.
+
 ## Password policy
 
 **Password Policy** on a server edits the domain-wide settings that
@@ -337,6 +363,7 @@ For each area, an account is set to **View** or **Edit**:
 | GPOs | create, edit, delete, link to OUs |
 | OUs | create, rename, delete |
 | Password policies | the domain policy and per-group policies |
+| Sites and subnets | sites, subnets and site links, and which site a DC is in |
 
 **View all** and **Edit all** set every area at once. An **Admin** may change everything,
 and is the only one who can manage EasyDC accounts, add, edit or remove servers, and apply

@@ -1,0 +1,420 @@
+{% extends "base.html" %}
+{% block title %}Sites and subnets - {{ server.name }} - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">Sites and Subnets</li>
+    </ol>
+</nav>
+
+<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2">
+    <h4 class="mb-0"><i class="bi bi-geo-alt me-2 text-success"></i>Sites and Subnets</h4>
+    {% if t %}
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addSiteModal" data-needs="sites">
+        <i class="bi bi-plus-lg me-1"></i> Add Site
+    </button>
+    {% endif %}
+</div>
+<p class="text-muted small mb-4">
+    A site is a place with a fast network, such as an office. A computer finds the site it is in
+    by its address, from the subnets, and then uses a DC in that site. Site links say which sites
+    replicate with each other, and how often.
+</p>
+
+{% if error %}
+<div class="alert alert-danger">
+    <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
+</div>
+{% endif %}
+
+{% if t %}
+<!-- ── Sites ─────────────────────────────────────────────────────────────── -->
+<h5 class="mb-3">Sites <span class="text-muted fw-normal small">{{ t.sites | length }}</span></h5>
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3 mb-5">
+    {% for site in t.sites %}
+    <div class="col">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h6 class="card-title mb-1"><i class="bi bi-geo-alt me-1 text-success"></i>{{ site.name }}</h6>
+                {% if site.description %}<p class="small text-muted mb-2">{{ site.description }}</p>{% endif %}
+
+                <div class="small text-uppercase text-muted mt-3 mb-1">Domain controllers</div>
+                {% for dc in site.dcs %}
+                <div class="d-flex align-items-center gap-2 mb-1">
+                    <i class="bi bi-hdd-rack text-secondary"></i>
+                    <span class="fw-medium">{{ dc.name }}</span>
+                    {% if dc.host %}<span class="small text-muted text-truncate">{{ dc.host }}</span>{% endif %}
+                    {% if t.sites | length > 1 %}
+                    <button type="button" class="btn btn-sm btn-link p-0 ms-auto" data-needs="sites"
+                        data-bs-toggle="modal" data-bs-target="#moveDcModal" data-dc="{{ dc.name }}" data-site="{{ site.name }}"
+                        title="Move {{ dc.name }} to another site">Move…</button>
+                    {% endif %}
+                </div>
+                {% else %}
+                <p class="small text-muted mb-1">None</p>
+                {% endfor %}
+
+                <div class="small text-uppercase text-muted mt-3 mb-1">Subnets</div>
+                {% for name in site.subnets %}
+                <span class="badge bg-secondary-subtle text-secondary border me-1 mb-1">{{ name }}</span>
+                {% else %}
+                <p class="small text-muted mb-1">None: computers find this site by no address.</p>
+                {% endfor %}
+
+                <div class="small text-uppercase text-muted mt-3 mb-1">Site links</div>
+                {% for name in site.links %}
+                <span class="badge bg-info-subtle text-info-emphasis border me-1 mb-1">{{ name }}</span>
+                {% else %}
+                <p class="small text-danger mb-1"><i class="bi bi-exclamation-triangle me-1"></i>None: its DCs do not replicate with other sites.</p>
+                {% endfor %}
+            </div>
+            <div class="card-footer bg-white d-flex gap-2" data-needs="sites">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSiteModal"
+                    data-name="{{ site.name }}" data-description="{{ site.description }}"
+                    data-url="/servers/{{ server.id }}/sites/{{ site.name | urlencode_strict }}/edit">
+                    <i class="bi bi-pencil me-1"></i>Edit
+                </button>
+                {% if site.dcs | length == 0 %}
+                <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteSiteModal"
+                    data-name="{{ site.name }}"
+                    data-note="{% if site.subnets | length > 0 %}Its subnets ({{ site.subnets | join(sep=', ') }}) stay, with no site, until you give them one.{% endif %}"
+                    data-url="/servers/{{ server.id }}/sites/{{ site.name | urlencode_strict }}/delete">
+                    <i class="bi bi-trash me-1"></i>Delete
+                </button>
+                {% else %}
+                <span class="small text-muted align-self-center" title="Move its DCs to another site first">Holds a DC, so it stays</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- ── Subnets ───────────────────────────────────────────────────────────── -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h5 class="mb-0">Subnets <span class="text-muted fw-normal small">{{ t.subnets | length }}</span></h5>
+    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addSubnetModal" data-needs="sites">
+        <i class="bi bi-plus-lg me-1"></i>Add Subnet
+    </button>
+</div>
+{% if t.subnets | length == 0 %}
+<div class="card shadow-sm mb-5">
+    <div class="card-body text-center text-muted py-4">
+        <p class="mb-1 fw-medium">No subnets yet</p>
+        <p class="small mb-0">Add your networks, such as <code>10.1.0.0/16</code>, and the site each is in. Until then, a
+            computer cannot tell which site it is in, and may use a DC in any site.</p>
+    </div>
+</div>
+{% else %}
+<div class="card shadow-sm mb-5">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr><th>Subnet</th><th>Site</th><th>Location</th><th>Description</th><th class="text-end">Actions</th></tr>
+            </thead>
+            <tbody>
+                {% for n in t.subnets %}
+                <tr>
+                    <td class="fw-medium font-monospace">{{ n.name }}</td>
+                    <td>{% if n.site %}{{ n.site }}{% else %}<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
+                        title="Computers in this subnet are in no site">No site</span>{% endif %}</td>
+                    <td class="small">{{ n.location }}</td>
+                    <td class="small text-muted">{{ n.description }}</td>
+                    <td class="text-end">
+                        <div class="btn-group btn-group-sm" data-needs="sites">
+                            <button type="button" class="btn btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editSubnetModal"
+                                data-name="{{ n.name }}" data-site="{{ n.site }}" data-description="{{ n.description }}" data-location="{{ n.location }}"
+                                data-url="/servers/{{ server.id }}/subnets/{{ n.name | urlencode_strict }}/edit"><i class="bi bi-pencil"></i></button>
+                            <button type="button" class="btn btn-outline-danger" title="Delete" data-bs-toggle="modal" data-bs-target="#deleteSubnetModal"
+                                data-name="{{ n.name }}"
+                                data-url="/servers/{{ server.id }}/subnets/{{ n.name | urlencode_strict }}/delete"><i class="bi bi-trash"></i></button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ── Site links ────────────────────────────────────────────────────────── -->
+<h5 class="mb-3">Site links <span class="text-muted fw-normal small">{{ t.links | length }}</span></h5>
+<div class="card shadow-sm mb-4">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr><th>Name</th><th>Sites</th><th>Cost</th><th>Replicates</th><th>Description</th><th class="text-end">Actions</th></tr>
+            </thead>
+            <tbody>
+                {% for l in t.links %}
+                <tr>
+                    <td class="fw-medium">{{ l.name }}{% if l.transport != "IP" %} <span class="badge bg-secondary-subtle text-secondary border">{{ l.transport }}</span>{% endif %}</td>
+                    <td>{% for s in l.sites %}<span class="badge bg-success-subtle text-success-emphasis border me-1">{{ s }}</span>{% else %}<span class="text-muted small">None</span>{% endfor %}</td>
+                    <td>{{ l.cost }}</td>
+                    <td class="small">{{ l.every }}</td>
+                    <td class="small text-muted">{{ l.description }}</td>
+                    <td class="text-end">
+                        {% if l.transport == "IP" %}
+                        <button type="button" class="btn btn-sm btn-outline-primary" title="Edit" data-needs="sites" data-bs-toggle="modal" data-bs-target="#editLinkModal"
+                            data-name="{{ l.name }}" data-cost="{{ l.cost }}" data-interval="{{ l.interval }}" data-description="{{ l.description }}"
+                            data-sites="{{ l.sites | json_encode }}"
+                            data-url="/servers/{{ server.id }}/site-links/{{ l.name | urlencode_strict }}/edit"><i class="bi bi-pencil"></i></button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No site links.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+<p class="small text-muted mb-5">
+    Between sites, replication takes the links with the lowest total cost. Within a site, DCs
+    replicate within seconds of a change, whatever the links say.
+</p>
+
+<!-- ── Dialogs ───────────────────────────────────────────────────────────── -->
+
+<div class="modal fade" id="addSiteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/sites/new">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-geo-alt me-1"></i> Add Site</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="siteName">Name <span class="text-danger">*</span></label>
+                    <input type="text" id="siteName" name="name" class="form-control" required maxlength="63" pattern="[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?">
+                    <div class="form-text">Letters, digits and hyphens, such as <code>Haifa-Office</code>: DCs publish their site in DNS.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="siteDescription">Description</label>
+                    <input type="text" id="siteDescription" name="description" class="form-control">
+                </div>
+                <div class="mb-1">
+                    <label class="form-label" for="siteLink">Site link</label>
+                    <select id="siteLink" name="link" class="form-select" required>
+                        {% for l in t.links %}{% if l.transport == "IP" %}<option value="{{ l.name }}">{{ l.name }}</option>{% endif %}{% endfor %}
+                    </select>
+                    <div class="form-text">The site replicates with the other sites in this link.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Site</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="editSiteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" data-fill-action>
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> <span data-fill="name"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label" for="editSiteDescription">Description</label>
+                <input type="text" id="editSiteDescription" name="description" class="form-control" data-fill="description">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="deleteSiteModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" data-fill-action>
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-trash me-1"></i> Delete Site</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Delete the site <strong data-fill="name"></strong>?</p>
+                <p class="small text-muted mb-0">It is taken out of its site links. <span data-fill="note"></span></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-danger">Delete</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="moveDcModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/sites/move-dc">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-arrow-right-square me-1"></i> Move <span class="js-dc"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="dc">
+                <label class="form-label" for="moveDcTo">To the site</label>
+                <select id="moveDcTo" name="to" class="form-select">{% for s in t.sites %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}</select>
+                <div class="form-text">
+                    Move a DC when it has moved, or its site was set wrong when it joined. Its site should
+                    have subnets for the DC's own address. Samba updates the DC's DNS records for the new
+                    site at its next DNS update, within about 10 minutes.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Move</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="addSubnetModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/subnets/new">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-diagram-2 me-1"></i> Add Subnet</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="subnetName">Subnet <span class="text-danger">*</span></label>
+                    <input type="text" id="subnetName" name="subnet" class="form-control font-monospace" required placeholder="10.1.0.0/16">
+                    <div class="form-text">The network address and prefix length, IPv4 or IPv6, such as <code>192.168.10.0/24</code> or <code>2001:db8:10::/48</code>.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="subnetSite">Site</label>
+                    <select id="subnetSite" name="site" class="form-select" required>{% for s in t.sites %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}</select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="subnetLocation">Location</label>
+                    <input type="text" id="subnetLocation" name="location" class="form-control" placeholder="Haifa, 2nd floor">
+                </div>
+                <div class="mb-1">
+                    <label class="form-label" for="subnetDescription">Description</label>
+                    <input type="text" id="subnetDescription" name="description" class="form-control">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Subnet</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="editSubnetModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" data-fill-action>
+            <div class="modal-header">
+                <h5 class="modal-title font-monospace"><i class="bi bi-pencil me-1"></i> <span data-fill="name"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="editSubnetSite">Site</label>
+                    <select id="editSubnetSite" name="site" class="form-select" required data-fill="site">{% for s in t.sites %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}</select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="editSubnetLocation">Location</label>
+                    <input type="text" id="editSubnetLocation" name="location" class="form-control" data-fill="location">
+                </div>
+                <div class="mb-1">
+                    <label class="form-label" for="editSubnetDescription">Description</label>
+                    <input type="text" id="editSubnetDescription" name="description" class="form-control" data-fill="description">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="deleteSubnetModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <form class="modal-content" method="post" data-fill-action>
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-trash me-1"></i> Delete Subnet</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Delete <strong class="font-monospace" data-fill="name"></strong>? Computers in it will no
+                    longer know their site.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="editLinkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" data-fill-action>
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> <span data-fill="name"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <div class="form-label">Sites</div>
+                    {% for s in t.sites %}
+                    <div class="form-check">
+                        <input class="form-check-input js-link-site" type="checkbox" name="site" value="{{ s.name }}" id="linkSite{{ loop.index }}">
+                        <label class="form-check-label" for="linkSite{{ loop.index }}">{{ s.name }}</label>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label" for="linkCost">Cost</label>
+                        <input type="number" id="linkCost" name="cost" class="form-control" min="1" max="99999" required data-fill="cost">
+                        <div class="form-text">Lower is preferred. 100 is the default.</div>
+                    </div>
+                    <div class="col-sm-6">
+                        <label class="form-label" for="linkInterval">Replicate every (minutes)</label>
+                        <input type="number" id="linkInterval" name="interval" class="form-control" min="15" max="10080" step="15" required data-fill="interval">
+                        <div class="form-text">15 to 10,080, in steps of 15. 180 is the default.</div>
+                    </div>
+                </div>
+                <div class="mb-1">
+                    <label class="form-label" for="linkDescription">Description</label>
+                    <input type="text" id="linkDescription" name="description" class="form-control" data-fill="description">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// The dialogs that need more than base.html's row filling.
+document.getElementById('moveDcModal').addEventListener('show.bs.modal', function (e) {
+    const from = e.relatedTarget;
+    this.querySelector('.js-dc').textContent = from.dataset.dc;
+    this.querySelector('[name=dc]').value = from.dataset.dc;
+    const to = this.querySelector('[name=to]');
+    [...to.options].forEach(o => { o.disabled = o.value === from.dataset.site; });
+    to.value = [...to.options].find(o => !o.disabled)?.value || '';
+});
+document.getElementById('editLinkModal').addEventListener('show.bs.modal', function (e) {
+    const sites = JSON.parse(e.relatedTarget.dataset.sites || '[]');
+    this.querySelectorAll('.js-link-site').forEach(b => { b.checked = sites.includes(b.value); });
+});
+</script>
+{% endif %}
+
+{% endblock %}

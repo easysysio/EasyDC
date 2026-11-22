@@ -10,6 +10,7 @@ mod remediate;
 mod replication;
 mod csv;
 mod sd;
+mod sites;
 
 use std::sync::Arc;
 
@@ -109,6 +110,15 @@ async fn main() {
         .route("/servers/:id/health", get(handlers::health::health_check))
         .route("/servers/:id/health/fix", post(handlers::health::health_fix))
         .route("/servers/:id/replication", get(handlers::replication::replication))
+        .route("/servers/:id/sites", get(handlers::sites::page))
+        .route("/servers/:id/sites/new", post(handlers::sites::create_site))
+        .route("/servers/:id/sites/move-dc", post(handlers::sites::move_dc))
+        .route("/servers/:id/sites/:name/edit", post(handlers::sites::update_site))
+        .route("/servers/:id/sites/:name/delete", post(handlers::sites::delete_site))
+        .route("/servers/:id/subnets/new", post(handlers::sites::create_subnet))
+        .route("/servers/:id/subnets/:subnet/edit", post(handlers::sites::update_subnet))
+        .route("/servers/:id/subnets/:subnet/delete", post(handlers::sites::delete_subnet))
+        .route("/servers/:id/site-links/:name/edit", post(handlers::sites::update_site_link))
         .route("/servers/:id/policy", get(handlers::policy::policy).post(handlers::policy::update_policy))
         .route("/servers/:id/policy/pso", post(handlers::policy::pso_create))
         .route("/servers/:id/policy/pso/:name/edit", post(handlers::policy::pso_update))

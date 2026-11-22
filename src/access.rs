@@ -26,10 +26,11 @@ pub enum Area {
     Gpos,
     Ous,
     PasswordPolicies,
+    Sites,
 }
 
 /// In the order the Settings page lists them.
-pub const AREAS: [Area; 8] = [
+pub const AREAS: [Area; 9] = [
     Area::Users,
     Area::Groups,
     Area::Computers,
@@ -38,6 +39,7 @@ pub const AREAS: [Area; 8] = [
     Area::Gpos,
     Area::Ous,
     Area::PasswordPolicies,
+    Area::Sites,
 ];
 
 impl Area {
@@ -52,6 +54,7 @@ impl Area {
             Area::Gpos => "gpos",
             Area::Ous => "ous",
             Area::PasswordPolicies => "password_policies",
+            Area::Sites => "sites",
         }
     }
 
@@ -65,6 +68,7 @@ impl Area {
             Area::Gpos => "GPOs",
             Area::Ous => "OUs",
             Area::PasswordPolicies => "Password policies",
+            Area::Sites => "Sites and subnets",
         }
     }
 
@@ -79,6 +83,7 @@ impl Area {
             Area::Gpos => "create, edit, delete, link to OUs",
             Area::Ous => "create, rename, delete",
             Area::PasswordPolicies => "the domain policy and per-group policies",
+            Area::Sites => "sites, subnets and site links, and which site a DC is in",
         }
     }
 
@@ -119,6 +124,7 @@ pub fn need(method: &Method, route: &str) -> Need {
         "dns-zones" => Need::Edit(Area::DnsZones),
         "gpo" => Need::Edit(Area::Gpos),
         "policy" => Need::Edit(Area::PasswordPolicies),
+        "sites" | "subnets" | "site-links" => Need::Edit(Area::Sites),
         // Moving a user, group or computer needs the area of what is moved.
         "ous" if rest == "ous/move" => Need::Handler,
         "ous" => Need::Edit(Area::Ous),
@@ -284,6 +290,10 @@ mod tests {
         assert_eq!(post("/servers/:id/ous/rename"), Need::Edit(Area::Ous));
         assert_eq!(post("/servers/:id/policy/pso/:name/apply"), Need::Edit(Area::PasswordPolicies));
         assert_eq!(post("/servers/:id/policy"), Need::Edit(Area::PasswordPolicies));
+        assert_eq!(post("/servers/:id/sites/new"), Need::Edit(Area::Sites));
+        assert_eq!(post("/servers/:id/sites/move-dc"), Need::Edit(Area::Sites));
+        assert_eq!(post("/servers/:id/subnets/:subnet/delete"), Need::Edit(Area::Sites));
+        assert_eq!(post("/servers/:id/site-links/:name/edit"), Need::Edit(Area::Sites));
         for admin_only in [
             "/servers/new",
             "/servers/:id/edit",

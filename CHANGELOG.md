@@ -5,12 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Permissions for EasyDC accounts: for each area (users, groups, computers, DNS records, DNS zones, GPOs, OUs, password policies) an account may view or edit, and an admin may change everything, including EasyDC accounts and servers. What an account may not change is greyed out, and a refused change says why and is in the audit log. Existing accounts become admins.
+- Permissions for EasyDC accounts: for each area (users, groups, computers, DNS records, DNS zones, GPOs, OUs, password policies, sites and subnets) an account may view or edit, and an admin may change everything, including EasyDC accounts and servers. What an account may not change is greyed out, and a refused change says why and is in the audit log. Existing accounts become admins.
 - Domain accounts: an admin can add a domain user as an EasyDC account. It signs in with its domain password, and cannot sign in while disabled, expired or locked out in the domain. At least one local admin always remains.
 - Computers page by OU: browse computers by OU, move them, and enable, disable or move many at once.
 - A user's groups in the Edit dialog: see the groups a user is in, including the primary group, and add or remove them.
 - Password settings per user, in the Edit dialog: when the password was last set and expires, and must change at next sign-in, cannot change password, and password never expires.
 - CSV export and import of users: export the users in a view; import creates users from a file, after a check that lists what it will do.
+- Sites and subnets page: sites with their DCs, subnets and site links. Add and delete sites and subnets, edit site links, and move a DC to another site.
 
 ### Fixed
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.

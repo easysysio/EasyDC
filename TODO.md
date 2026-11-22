@@ -4,8 +4,7 @@ Everything below is planned for **0.5.0**, except the last section.
 
 ## ~~Permissions for EasyDC accounts~~ — done
 
-Per-area View or Edit and a separate Admin, as described in `docs/managing.md`. When the
-Sites and subnets page lands, add it as an area (`src/access.rs`).
+Per-area View or Edit and a separate Admin, as described in `docs/managing.md`.
 
 ## ~~Two kinds of EasyDC accounts~~ — done
 
@@ -19,7 +18,7 @@ in `docs/managing.md`. At least one local admin always remains.
 - ~~Password and logon settings per user: password never expires, must change at next
   logon, cannot change password; when the password was last set and when it expires.~~ Done.
 - ~~CSV export and import of users.~~ Done.
-- Sites and subnets page.
+- ~~Sites and subnets page.~~ Done.
 
 ## From samba-tool, over LDAP
 

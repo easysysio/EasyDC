@@ -2091,7 +2091,7 @@ pub struct GroupDetail {
 
 /// The value of a DN's first part, unescaped enough to read: `CN=Doe\, John,…`
 /// gives `Doe, John`.
-fn first_rdn_value(dn: &str) -> String {
+pub(crate) fn first_rdn_value(dn: &str) -> String {
     // Bytes, since an escape may be hex: `\3B` for `;`, `\C3\A9` for `é`.
     let mut out = Vec::new();
     let mut chars = dn.chars().peekable();
