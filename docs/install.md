@@ -214,9 +214,15 @@ is a good starting point.
 ## Docker
 
 EasyDC is also a container image for **x86_64** and **arm64**,
-[`easysysio/easydc` on Docker Hub](https://hub.docker.com/r/easysysio/easydc), published with each release and tagged with its version
-(`0.5.0`), its minor version (`0.5`) and `latest`. It runs anywhere Docker or Podman
-does.
+[`easysysio/easydc` on Docker Hub](https://hub.docker.com/r/easysysio/easydc), published
+with each release. It runs anywhere Docker or Podman does. The image is Alpine with the
+same static binary as the packages, and runs as its own non-root user.
+
+| Tag | What it is |
+|---|---|
+| `latest` | The newest release |
+| `0.5` | The newest 0.5.x release |
+| `0.5.1` | That release only |
 
 === "docker run"
 
@@ -228,14 +234,24 @@ does.
 
 === "Docker Compose"
 
-    Save this as `compose.yaml` (it is also
-    [in the repository](https://github.com/easysysio/EasyDC/blob/main/compose.yaml)),
-    then run `docker compose up -d`:
+    Each [GitHub release](https://github.com/easysysio/EasyDC/releases) has a
+    `compose.yaml` with the image pinned to that version. Download the latest one and
+    start it:
+
+    ```bash
+    curl -fsSLO https://github.com/easysysio/EasyDC/releases/latest/download/compose.yaml
+    docker compose up -d
+    ```
+
+    Or write it yourself (the repository has the
+    [same file](https://github.com/easysysio/EasyDC/blob/main/compose.yaml), with
+    `latest`):
 
     ```yaml
     services:
       easydc:
         image: easysysio/easydc:latest
+        container_name: easydc
         restart: unless-stopped
         ports:
           - "3000:3000"
@@ -256,7 +272,8 @@ Then open `http://<host>:3000/` to create the admin account.
 - **Upgrading** is pulling the new image and recreating the container:
   `docker compose pull && docker compose up -d`, or `docker pull` and `docker run` again
   with the same volume. The database is updated on first start, as with the packages.
-  Use a version tag such as `:0.5` instead of `:latest` to choose when to move.
+  With a release's `compose.yaml`, change the version in `image:` first. Use `:0.5`
+  instead of `:latest` to get fixes but choose when to move to 0.6.
 - **Another port**: publish a different one, such as `-p 8080:3000`.
 - **Finding the DCs**: the container uses the host's DNS. If the DCs' names are only in
   the domain's own DNS, add `--dns <DC address>` (or `dns:` in Compose), so that an

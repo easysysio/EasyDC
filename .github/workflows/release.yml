@@ -1,6 +1,6 @@
 # Release pipeline: on a v* tag, build .deb + .rpm for x86_64 and arm64, then
 # publish a GitHub Release whose body is the matching CHANGELOG section, with
-# the packages attached, and a container image on Docker Hub.
+# the packages and a compose.yaml attached, and a container image on Docker Hub.
 #
 # The binary is linked statically against musl, so it needs no glibc at all and
 # the same package runs on any Linux distribution — RHEL 8 included. It is
@@ -196,6 +196,22 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      # The overview on the Docker Hub page, kept in the repository as
+      # docker/README.md so it is reviewed and versioned with the rest.
+      # Non-fatal: Docker Hub only lets a personal access token with Read,
+      # Write, Delete edit it, and an image that was published must not turn
+      # into a failed release over its description. Check this step's log
+      # after a release.
+      - name: Update the Docker Hub overview
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: easysysio/easydc
+          readme-filepath: docker/README.md
+          short-description: Manage Samba Active Directory from the browser
+
   release:
     name: Publish GitHub Release
     needs: build
@@ -222,8 +238,27 @@ jobs:
           if [ ! -s RELEASE_NOTES.md ]; then
             echo "Release ${GITHUB_REF_NAME}" > RELEASE_NOTES.md
           fi
+          cat >> RELEASE_NOTES.md <<EOF
+
+          ### Docker
+
+          \`\`\`bash
+          docker pull easysysio/easydc:${version}
+          \`\`\`
+
+          Or with Compose: download \`compose.yaml\` below, then \`docker compose up -d\`.
+          EOF
           echo "----- release notes -----"
           cat RELEASE_NOTES.md
+
+      # The repository's compose.yaml, with the image pinned to this release,
+      # so a download keeps running the version it was taken from.
+      - name: Pin compose.yaml to this release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed "s|easysysio/easydc:latest|easysysio/easydc:${version}|" compose.yaml > dist/compose.yaml
+          grep -q "easysysio/easydc:${version}" dist/compose.yaml
+          cat dist/compose.yaml
 
       - name: Publish release
         uses: softprops/action-gh-release@v3

@@ -1,9 +1,13 @@
 # EasyDC with Docker Compose:  docker compose up -d
 # Then open http://<host>:3000/ to create the admin account.
-# Upgrade:                     docker compose pull && docker compose up -d
+#
+# Upgrade:  docker compose pull && docker compose up -d
+# The compose.yaml attached to each GitHub release names that version instead
+# of latest; to upgrade it, change the tag, then run the same two commands.
 services:
   easydc:
     image: easysysio/easydc:latest
+    container_name: easydc
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -16,6 +20,9 @@ services:
       # - ./domain-ca.pem:/certs/domain-ca.pem:ro
     # environment:
     #   SSL_CERT_FILE: /certs/domain-ca.pem
+    # If the DCs' names are only in the domain's DNS:
+    # dns:
+    #   - 192.0.2.10
 
 volumes:
   easydc-data:

@@ -55,18 +55,30 @@ sudo apt update && sudo apt install easydc
 sudo systemctl enable --now easydc
 ```
 
-Or with Docker, on any system:
+Or with Docker, on any system, from
+[`easysysio/easydc` on Docker Hub](https://hub.docker.com/r/easysysio/easydc)
+(x86_64 and arm64):
 
 ```bash
 docker run -d --name easydc --restart unless-stopped \
   -p 3000:3000 -v easydc-data:/data easysysio/easydc:latest
 ```
 
+or with Compose, using the `compose.yaml` attached to each release:
+
+```bash
+curl -fsSLO https://github.com/easysysio/EasyDC/releases/latest/download/compose.yaml
+docker compose up -d
+```
+
+The database is then `easydc.db` in the `easydc-data` volume. The Docker Hub page is
+[`docker/README.md`](docker/README.md), pushed there by each release.
+
 The [installation guide](https://easydc.easysys.io/install/) covers RHEL / Fedora,
 openSUSE, Docker, air-gapped hosts, moving from a manual install, and running the bare binary.
 
 The web interface is then at `http://<server-ip>:3000`, where the first visit creates the
-admin account. The database is `/var/lib/easydc/easydc.db`.
+admin account. With the packages, the database is `/var/lib/easydc/easydc.db`.
 
 ## Adding a Server
 
