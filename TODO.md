@@ -35,8 +35,8 @@ writes, and Microsoft's MS-ADTS for the rules, but do not copy its code. Admins 
 
 ## Checks and housekeeping
 
-- Remove the `RUSTSEC-2026-0459` ignore in `.cargo/audit.toml` once sqlx allows the fixed
-  SQLite (libsqlite3-sys 0.39 or later).
+- ~~Remove the `RUSTSEC-2026-0459` ignore in `.cargo/audit.toml`.~~ Done: sqlx 0.9.1 allows
+  the fixed SQLite.
 
 ## After 0.5.0
 

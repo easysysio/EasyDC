@@ -19,6 +19,10 @@ All notable changes to this project will be documented in this file.
 - A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.
 - Reset password refuses the account EasyDC signs in to the DC with, which would lock EasyDC out.
 
+### Security
+- sqlx 0.9 with SQLite 3.54 or later, which fixes RUSTSEC-2026-0459; it is no longer ignored.
+- Updated `url` to clear RUSTSEC-2026-0592.
+
 ## [0.4.5] - 2026-11-21
 
 ### Added

@@ -1,4 +1,4 @@
-use sqlx::sqlite::SqlitePool;
+use sqlx::{sqlite::SqlitePool, AssertSqlSafe};
 
 pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -186,9 +186,11 @@ pub async fn search_audit(
         );
     }
     let from = " FROM audit_log a LEFT JOIN servers s ON s.id = a.server_id";
+    // The SQL below is fixed text and one placeholder per word: the words
+    // themselves are bound, never put into it.
 
     let count_sql = format!("SELECT COUNT(*){from}{filter}");
-    let mut count = sqlx::query_scalar::<_, i64>(&count_sql);
+    let mut count = sqlx::query_scalar::<_, i64>(AssertSqlSafe(count_sql));
     for w in &words {
         count = count.bind(w);
     }
@@ -199,7 +201,7 @@ pub async fn search_audit(
                 s.name AS server_name, a.result, a.detail{from}{filter}
          ORDER BY a.id DESC LIMIT ? OFFSET ?"
     );
-    let mut page = sqlx::query_as::<_, crate::models::AuditEntry>(&page_sql);
+    let mut page = sqlx::query_as::<_, crate::models::AuditEntry>(AssertSqlSafe(page_sql));
     for w in &words {
         page = page.bind(w);
     }
@@ -460,11 +462,12 @@ pub async fn sign_in_account(pool: &SqlitePool, typed: &str) -> Option<SignIn> {
             SignIn::Local { username, hash: r.get("password_hash") }
         }
     };
+    // Fixed text; the names are bound.
     const COLS: &str = "SELECT username, kind, password_hash, domain_user, server_id FROM users";
-    if let Ok(Some(r)) = sqlx::query(&format!("{COLS} WHERE username = ?")).bind(typed).fetch_optional(pool).await {
+    if let Ok(Some(r)) = sqlx::query(AssertSqlSafe(format!("{COLS} WHERE username = ?"))).bind(typed).fetch_optional(pool).await {
         return Some(row_to(r));
     }
-    if let Ok(Some(r)) = sqlx::query(&format!("{COLS} WHERE kind = 'domain' AND username = ? COLLATE NOCASE"))
+    if let Ok(Some(r)) = sqlx::query(AssertSqlSafe(format!("{COLS} WHERE kind = 'domain' AND username = ? COLLATE NOCASE")))
         .bind(typed)
         .fetch_optional(pool)
         .await
@@ -485,7 +488,7 @@ pub async fn sign_in_account(pool: &SqlitePool, typed: &str) -> Option<SignIn> {
     if local_named {
         return None;
     }
-    let rows = sqlx::query(&format!("{COLS} WHERE kind = 'domain' AND domain_user = ? COLLATE NOCASE"))
+    let rows = sqlx::query(AssertSqlSafe(format!("{COLS} WHERE kind = 'domain' AND domain_user = ? COLLATE NOCASE")))
         .bind(short)
         .fetch_all(pool)
         .await

@@ -2,17 +2,4 @@
 # should be removed as soon as an upgrade fixes it.
 
 [advisories]
-ignore = [
-    # RUSTSEC-2026-0459 — bundled SQLite before 3.54.0 can return stale memory
-    # when it opens a database together with a crafted `-wal` file.
-    #
-    # Not exploitable here: EasyDC only opens its own easydc.db, in
-    # /var/lib/easydc (mode 0700, owned by the easydc user). Planting a -wal
-    # file there needs that user's access, which already means control of
-    # EasyDC and its data.
-    #
-    # Not fixable yet: the fix is libsqlite3-sys >= 0.39, and every sqlx
-    # release (0.8.6, 0.9.0) requires < 0.38. Remove this entry when sqlx
-    # allows 0.39; `cargo tree -i libsqlite3-sys` shows the version in use.
-    "RUSTSEC-2026-0459",
-]
+ignore = []
