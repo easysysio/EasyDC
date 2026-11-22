@@ -4,24 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-22
+
 ### Added
-- Permissions for EasyDC accounts: for each area (users, groups, computers, DNS records, DNS zones, GPOs, OUs, password policies, sites and subnets) an account may view or edit, and an admin may change everything, including EasyDC accounts and servers. What an account may not change is greyed out, and a refused change says why and is in the audit log. Existing accounts become admins.
-- Domain accounts: an admin can add a domain user as an EasyDC account. It signs in with its domain password, and cannot sign in while disabled, expired or locked out in the domain. At least one local admin always remains.
-- Computers page by OU: browse computers by OU, move them, and enable, disable or move many at once.
-- A user's groups in the Edit dialog: see the groups a user is in, including the primary group, and add or remove them.
-- Password settings per user, in the Edit dialog: when the password was last set and expires, and must change at next sign-in, cannot change password, and password never expires.
-- CSV export and import of users: export the users in a view; import creates users from a file, after a check that lists what it will do.
-- Sites and subnets page: sites with their DCs, subnets and site links. Add and delete sites and subnets, edit site links, and move a DC to another site.
-- Domain Controllers page: each DC's site and FSMO roles. Admins can move a role, or all of them, to another DC, and remove a DC that is gone for good.
-- Delegation of OUs: see who may do what in an OU, and give a group a common task there, such as resetting passwords or managing users. Admins only.
+- Permissions for EasyDC accounts: View or Edit for each area (users, groups, computers, DNS, GPOs, OUs, password policies, sites), and admins who can change everything. What an account may not change is greyed out. Existing accounts become admins.
+- Domain accounts: domain users can sign in to EasyDC with their domain password. At least one local admin always remains.
+- Computers page by OU: browse computers by OU, and move, enable or disable many at once.
+- A user's groups in the Edit dialog: see them, add and remove.
+- Password settings per user: when the password was last set and expires, must change at next sign-in, cannot change password, and password never expires.
+- CSV export and import of users, with a check before anything is created.
+- Sites and subnets page: sites, subnets and site links, and moving a DC to another site.
+- Domain Controllers page: see and move FSMO roles, and remove a DC that is gone for good.
+- Delegation: give a group a common task in an OU, such as resetting passwords or managing users.
 
 ### Fixed
-- A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC, which would stop it working as a DC.
+- A domain controller's computer account can no longer be disabled, moved or deleted from EasyDC.
 - Reset password refuses the account EasyDC signs in to the DC with, which would lock EasyDC out.
 
 ### Security
-- sqlx 0.9 with SQLite 3.54 or later, which fixes RUSTSEC-2026-0459; it is no longer ignored.
-- Updated `url` to clear RUSTSEC-2026-0592.
+- sqlx 0.9 with SQLite 3.54, which fixes RUSTSEC-2026-0459. `url` updated for RUSTSEC-2026-0592.
 
 ## [0.4.5] - 2026-11-21
 
