@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-22
+
 ### Added
 - Docker image for x86_64 and arm64, `easysysio/easydc` on Docker Hub, published with each release, and a `compose.yaml` pinned to the release attached to it (#2).
 
