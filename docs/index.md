@@ -305,7 +305,7 @@ Get started
 <div>
 <span class="es-kicker-lg">Deploy</span>
 <h2 class="es-h2">Running in minutes. Upgraded like everything else.</h2>
-<p class="es-desc">EasyDC installs from the signed EasySYS package repository, starts on boot under systemd, and upgrades through the package manager you already use. Already running it by hand? The package moves it over for you. The <a href="install/">installation guide</a> has the details.</p>
+<p class="es-desc">EasyDC installs from the signed EasySYS package repository, starts on boot under systemd, and upgrades through the package manager you already use. Already running it by hand? The package moves it over for you. Or run the <a href="install/#docker">Docker image</a> on any system. The <a href="install/">installation guide</a> has the details.</p>
 <div class="es-steps">
 <div class="es-step"><span class="es-step-num es-mono">1</span><div><div class="es-step-title">Add the signed repository</div><div class="es-step-text">apt, dnf and zypper channels for x86_64 and arm64, signed with the same key as the other EasySYS products.</div></div></div>
 <div class="es-step"><span class="es-step-num es-mono">2</span><div><div class="es-step-title">Install and enable the service</div><div class="es-step-text">It runs as its own user, listens on port 3000 and keeps its state in one SQLite file.</div></div></div>
@@ -316,11 +316,13 @@ Get started
 <input class="es-os-radio" type="radio" name="es-os" id="es-os-deb" checked />
 <input class="es-os-radio" type="radio" name="es-os" id="es-os-rpm" />
 <input class="es-os-radio" type="radio" name="es-os" id="es-os-suse" />
+<input class="es-os-radio" type="radio" name="es-os" id="es-os-docker" />
 <input class="es-os-radio" type="radio" name="es-os" id="es-os-air" />
 <div class="es-tabs">
 <label for="es-os-deb">Debian / Ubuntu</label>
 <label for="es-os-rpm">RHEL / Fedora</label>
 <label for="es-os-suse">openSUSE / SLES</label>
+<label for="es-os-docker">Docker</label>
 <label for="es-os-air">Air-gapped</label>
 </div>
 <div class="es-panel es-panel--deb"><div class="es-term-body es-mono"><span class="t-c"># 1 — trust the repository</span>
@@ -354,6 +356,17 @@ EOF
 <span class="t-c"># 2 — install and start</span>
 <span class="t-p">$</span> sudo zypper install easydc
 <span class="t-p">$</span> sudo systemctl enable --now easydc
+<span class="t-c"># 3 — create your admin</span>
+<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<div class="es-panel es-panel--docker"><div class="es-term-body es-mono"><span class="t-c"># 1 — any system with Docker or Podman, x86_64 or arm64</span>
+<span class="t-c">#     hub.docker.com/r/easysysio/easydc</span>
+<span class="t-c"># 2 — run it, with its data in a volume</span>
+<span class="t-p">$</span> docker run -d --name easydc --restart unless-stopped \
+    -p 3000:3000 -v easydc-data:/data \
+    easysysio/easydc:latest
+<span class="t-c">#     or with Compose: compose.yaml from the latest</span>
+<span class="t-c">#     release, github.com/easysysio/EasyDC/releases</span>
+<span class="t-p">$</span> docker compose up -d
 <span class="t-c"># 3 — create your admin</span>
 <span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
 <div class="es-panel es-panel--air"><div class="es-term-body es-mono"><span class="t-c"># 1 — download the package for your architecture</span>

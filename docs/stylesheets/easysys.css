@@ -982,6 +982,7 @@ body:has(.es-home) .md-content {
 #es-os-deb:checked ~ .es-tabs label[for="es-os-deb"],
 #es-os-rpm:checked ~ .es-tabs label[for="es-os-rpm"],
 #es-os-suse:checked ~ .es-tabs label[for="es-os-suse"],
+#es-os-docker:checked ~ .es-tabs label[for="es-os-docker"],
 #es-os-air:checked ~ .es-tabs label[for="es-os-air"] {
   color: #ffffff;
   font-weight: 600;
@@ -991,6 +992,7 @@ body:has(.es-home) .md-content {
 #es-os-deb:checked ~ .es-panel--deb,
 #es-os-rpm:checked ~ .es-panel--rpm,
 #es-os-suse:checked ~ .es-panel--suse,
+#es-os-docker:checked ~ .es-panel--docker,
 #es-os-air:checked ~ .es-panel--air {
   display: block;
 }
