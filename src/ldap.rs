@@ -1820,8 +1820,8 @@ pub(crate) fn sid_string(b: &[u8]) -> Option<String> {
     }
     let authority = b[2..8].iter().fold(0u64, |a, &x| (a << 8) | u64::from(x));
     let mut sid = format!("S-{}-{}", b[0], authority);
-    for sub in b[8..].chunks_exact(4) {
-        sid += &format!("-{}", u32::from_le_bytes([sub[0], sub[1], sub[2], sub[3]]));
+    for sub in b[8..].as_chunks::<4>().0 {
+        sid += &format!("-{}", u32::from_le_bytes(*sub));
     }
     Some(sid)
 }
