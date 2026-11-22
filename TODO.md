@@ -1,50 +1,55 @@
 # TODO
 
-Everything below is planned for **0.5.0**, except the last section.
+Everything below is planned for **0.6.0**, except the last section. What 0.5.0 brought is
+in `CHANGELOG.md`.
 
-## ~~Permissions for EasyDC accounts~~ — done
+## Securing EasyDC itself
 
-Per-area View or Edit and a separate Admin, as described in `docs/managing.md`.
+EasyDC keeps the bind passwords of accounts that can change the whole domain, yet it serves
+plain HTTP and signs in with a password alone.
 
-## ~~Two kinds of EasyDC accounts~~ — done
+- **HTTPS built in.** Generate a self-signed certificate on first start, as EasyWAF does,
+  and let an admin upload their own in Settings. Plain HTTP stays possible behind a reverse
+  proxy. The packages, the Docker image and the docs ("put TLS in front of it") follow.
+- **Two-factor sign-in** with an authenticator app (TOTP) for local EasyDC accounts: set
+  up from a QR code, with recovery codes, and a way for an admin to reset it. Admins may be
+  required to use it. Domain accounts keep signing in with their domain password.
 
-Local accounts and domain accounts that sign in with their domain password, as described
-in `docs/managing.md`. At least one local admin always remains.
+## Group Policy
 
-## Next features
+- **Create a GPO's SYSVOL folder**, as `samba-tool gpo create` does, so a new GPO is complete
+  without opening it in GPMC. Written over SMB to `\\<dc>\sysvol`. First look at the Rust
+  SMB libraries: if none is good enough, this moves to a later release.
 
-- ~~Computers page: browse by OU, move computers, and bulk enable, disable or move.~~ Done.
-- ~~A user's groups in the Edit dialog: see them, add and remove.~~ Done.
-- ~~Password and logon settings per user: password never expires, must change at next
-  logon, cannot change password; when the password was last set and when it expires.~~ Done.
-- ~~CSV export and import of users.~~ Done.
-- ~~Sites and subnets page.~~ Done.
+## Reports
+
+Read-only, over LDAP, each with CSV export. For the questions an admin asks every week:
+
+- Accounts that have not signed in for a chosen number of days (`lastLogonTimestamp`).
+- Passwords that expire soon, and passwords set never to expire.
+- Accounts that are locked out, disabled or expired.
+- Members of the privileged groups: Domain Admins, Enterprise Admins, Schema Admins,
+  Administrators and the other built-in operator groups, including nested members.
+- Empty groups.
 
 ## From samba-tool, over LDAP
 
-What these `samba-tool` commands do, written in EasyDC. Samba is GPLv3 and EasyDC is MIT:
-read its source (`python/samba/netcmd/`) to learn which objects and attributes it
-writes, and Microsoft's MS-ADTS for the rules, but do not copy its code. Admins only.
+Same rule as in 0.5.0: Samba is GPLv3 and EasyDC is MIT. Read its source
+(`python/samba/netcmd/`) and Microsoft's MS-ADTS to learn what is written, but do not copy
+its code.
 
-- ~~**Move FSMO roles** between DCs (`samba-tool fsmo transfer`).~~ Done, on the Domain
-  Controllers page. Seizing a role from a dead DC stays in samba-tool.
-- ~~**Remove a dead DC** (`samba-tool domain demote --remove-other-dead-server`).~~ Done,
-  on the Domain Controllers page.
-- ~~**Delegate control of an OU** (`samba-tool dsacl`).~~ Done, on the Delegation page
-  (from the Organizational Units page).
+- **SPNs** on users and computers: view, add and remove (`samba-tool spn`).
+- **Raise the functional level** of the domain and forest (`samba-tool domain level raise`).
+  Admins only.
 
-## Checks and housekeeping
+## Maybe later
 
-- ~~Remove the `RUSTSEC-2026-0459` ignore in `.cargo/audit.toml`.~~ Done: sqlx 0.9.1 allows
-  the fixed SQLite.
+- **One search box** across users, groups and computers.
+- **Restore deleted objects.** First check how well Samba supports bringing a deleted
+  object back over LDAP.
 
-## After 0.5.0
+## Not planned
 
-- **Create a GPO's SYSVOL folder**, as `samba-tool gpo create` does, so a new GPO is complete
-  without opening it in GPMC. Written over SMB to `\\<dc>\sysvol`: first look at the Rust
-  SMB libraries.
-- **SPNs** on users and computers (`samba-tool spn`), and **raising the functional level**
-  (`samba-tool domain level raise`). Both are LDAP.
-- Not planned, because they need DCE/RPC: forcing a sync now (`samba-tool drs replicate`),
-  creating and deleting DNS zones through Samba's DNS service (which would remove the wait
-  for a samba restart after deleting a zone), and trusts.
+They need DCE/RPC: forcing a sync now (`samba-tool drs replicate`), creating and deleting
+DNS zones through Samba's DNS service (which would remove the wait for a samba restart
+after deleting a zone), and trusts.
