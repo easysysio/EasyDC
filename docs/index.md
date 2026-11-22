@@ -33,7 +33,7 @@ GitHub
 <div class="es-hero-copy es-rise">
 <div class="es-eyebrow"><span class="es-eyebrow-dot"></span>Samba AD management · part of EasySYS</div>
 <h1 class="es-h1">Run your Samba domain from the browser.</h1>
-<p class="es-lead">EasyDC connects to your Samba Active Directory domain controllers over LDAP and gives you users, groups, computers, DNS, Group Policy and OUs in one web console, with an audit log of every change and a health check for the domain. One binary, and nothing installed on the DC.</p>
+<p class="es-lead">EasyDC connects to your Samba Active Directory domain controllers over LDAP and gives you users, groups, computers, DNS, Group Policy, OUs, sites and domain controllers in one web console, with an audit log of every change and a health check for the domain. One binary, and nothing installed on the DC.</p>
 <div class="es-actions">
 <a class="es-btn es-btn--primary es-btn--lg" href="#install">
 Get started
@@ -99,8 +99,8 @@ Get started
 </div>
 <span class="es-kicker">Users</span>
 <h3 class="es-h3">Accounts and passwords</h3>
-<p class="es-product-text">Create, edit, enable, disable and delete accounts. Reset a password with must-change-at-next-logon, and unlock an account the moment you see its Locked badge.</p>
-<div class="es-tags"><span class="es-tag">Reset password</span><span class="es-tag">Unlock</span></div>
+<p class="es-product-text">Create, edit, enable, disable and delete accounts. Reset a password, unlock an account the moment you see its Locked badge, and set its password options and groups. Export users to CSV, or create many from one.</p>
+<div class="es-tags"><span class="es-tag">Reset password</span><span class="es-tag">Unlock</span><span class="es-tag">CSV</span></div>
 </div>
 <div class="es-card ed-area">
 <div class="ed-area-top">
@@ -119,8 +119,8 @@ Get started
 </div>
 <span class="es-kicker">Computers</span>
 <h3 class="es-h3">Machine accounts</h3>
-<p class="es-product-text">List the computers joined to the domain, disable one that should not authenticate, and delete the accounts of machines that are gone.</p>
-<div class="es-tags"><span class="es-tag">Enable / disable</span></div>
+<p class="es-product-text">Browse the computers joined to the domain by OU, move them, disable one that should not authenticate, and delete the accounts of machines that are gone, one or many at a time.</p>
+<div class="es-tags"><span class="es-tag">By OU</span><span class="es-tag">Enable / disable</span></div>
 </div>
 <div class="es-card ed-area">
 <div class="ed-area-top">
@@ -149,8 +149,38 @@ Get started
 </div>
 <span class="es-kicker">Organizational Units</span>
 <h3 class="es-h3">The OU tree</h3>
-<p class="es-product-text">Browse the tree, create, rename and delete OUs, and move users, groups and computers into the OU where they belong.</p>
-<div class="es-tags"><span class="es-tag">Move objects</span></div>
+<p class="es-product-text">Browse the tree, create, rename and delete OUs, and move users, groups and computers into the OU where they belong. Delegate a task in an OU, such as resetting passwords, to a group.</p>
+<div class="es-tags"><span class="es-tag">Move objects</span><span class="es-tag">Delegation</span></div>
+</div>
+<div class="es-card ed-area">
+<div class="ed-area-top">
+<div class="es-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></div>
+<span class="es-tag es-mono">/dcs</span>
+</div>
+<span class="es-kicker">Domain controllers</span>
+<h3 class="es-h3">Roles and replication</h3>
+<p class="es-product-text">See each DC's site and FSMO roles, move roles before a DC goes out of service, and clean up after a DC that died. The Replication page shows who each DC receives from, and whether it worked.</p>
+<div class="es-tags"><span class="es-tag">FSMO roles</span><span class="es-tag">Dead DC</span><span class="es-tag">Replication</span></div>
+</div>
+<div class="es-card ed-area">
+<div class="ed-area-top">
+<div class="es-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 0114 0c0 4.8-7 11-7 11z"></path><circle cx="12" cy="10" r="2.5"></circle></svg></div>
+<span class="es-tag es-mono">/sites</span>
+</div>
+<span class="es-kicker">Sites and subnets</span>
+<h3 class="es-h3">Where clients find a DC</h3>
+<p class="es-product-text">Add sites and the subnets that belong to them, so clients use a nearby DC, edit site links, and move a DC to another site.</p>
+<div class="es-tags"><span class="es-tag">Subnets</span><span class="es-tag">Site links</span></div>
+</div>
+<div class="es-card ed-area">
+<div class="ed-area-top">
+<div class="es-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 018 0v4"></path></svg></div>
+<span class="es-tag es-mono">/settings</span>
+</div>
+<span class="es-kicker">EasyDC accounts</span>
+<h3 class="es-h3">Who may change what</h3>
+<p class="es-product-text">Give each person their own account with View or Edit for each area, or let them sign in with their domain password. What they may not change is greyed out, and every change is in the audit log.</p>
+<div class="es-tags"><span class="es-tag">Per-area access</span><span class="es-tag">Domain sign-in</span></div>
 </div>
 </div>
 </div>

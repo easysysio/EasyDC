@@ -10,11 +10,16 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 ## Features
 
 - **Multi-server dashboard** — add and manage multiple Samba DC servers from one place
-- **User management** — create, edit, enable/disable, and delete AD users
-- **Group management** — create security/distribution groups, manage memberships
-- **Computer management** — view, enable/disable, and remove computer accounts
-- **DNS management** — browse zones, add and delete A, AAAA, CNAME, MX, TXT, NS, PTR records (AD-integrated DNS via LDAP)
-- **GPO management** — create and configure Group Policy Objects, link/unlink to OUs
+- **Users** — create, edit, enable/disable and delete users; reset passwords, unlock, password settings, groups, CSV export and import
+- **Groups** — create security/distribution groups, manage memberships
+- **Computers** — browse by OU, move, enable/disable and remove computer accounts
+- **DNS** — browse zones, add and delete A, AAAA, CNAME, MX, TXT, NS, PTR records (AD-integrated DNS via LDAP)
+- **Group Policy** — create GPOs, link/unlink them to OUs
+- **OUs** — the OU tree, moving objects, and delegating tasks such as password resets to a group
+- **Password policy** — the domain policy, and fine-grained policies for groups and users
+- **Domain controllers** — FSMO roles and moving them, removing a dead DC, and replication status
+- **Sites and subnets** — sites, subnets and site links
+- **EasyDC accounts** — View or Edit per area for each account, local or signing in with a domain password; every change in an audit log
 - **Domain health check** — diagnose clock skew, FSMO holders, replication, the DNS service records clients need, LDAPS certificate expiry, and security posture; read-only, over LDAP
 - **First-run setup** — guided setup wizard on fresh install; no config files needed
 
@@ -75,7 +80,7 @@ On saving, EasyDC signs in to the server once and shows whether that worked, and
 - **Use LDAPS** (port 636). A default Samba DC refuses a password over plain LDAP, so EasyDC cannot sign in over `ldap://`; and where a DC allows it, it still rejects password changes.
 - **DNS** manages records stored in the AD DNS partition (`CN=MicrosoftDNS,DC=DomainDnsZones`). Internal zones (`_msdcs`, `RootDNSServers`) are hidden automatically.
 - **GPO** manages LDAP metadata (name, status, OU links). Editing actual policy settings (registry values, scripts, etc.) requires direct access to SYSVOL on the DC.
-- **Health check** runs entirely over LDAP and changes nothing. Checks that need shell access on the DC — `samba-tool dbcheck`, SYSVOL replication and ACLs, `net ads testjoin`, service status — are out of its reach. Replication reporting currently covers partner *presence* only; use `samba-tool drs showrepl` for last-success times.
+- **Health check** runs entirely over LDAP and changes nothing. Checks that need shell access on the DC — `samba-tool dbcheck`, SYSVOL replication and ACLs, `net ads testjoin`, service status — are out of its reach. The Replication page shows each DC's partners, last success and errors.
 - The SQLite database (`easydc.db`) is created automatically on first run in the working directory.
 
 ## License

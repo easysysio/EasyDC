@@ -48,13 +48,17 @@ Opening a server shows one card per area:
 
 | Card | What it covers |
 |---|---|
-| **User Management** | Accounts, password resets, unlocks |
+| **User Management** | Accounts, password resets and settings, unlocks, CSV export and import |
 | **Group Management** | Security and distribution groups, membership |
-| **Computer Management** | Computer accounts |
+| **Computer Management** | Computer accounts, by OU |
 | **DNS Management** | AD-integrated zones and records |
 | **GPO Management** | Group Policy Objects and their OU links |
+| **Password Policy** | The domain's password and lockout policy, and policies for groups and users |
 | **Health Check** | Read-only diagnostics for the domain |
-| **OU Management** | The OU tree and moving objects between OUs |
+| **Domain Controllers** | Each DC's site and FSMO roles; moving roles and removing a dead DC |
+| **Replication** | Which DC each DC receives from, and whether it worked |
+| **Sites and Subnets** | Sites, subnets and site links |
+| **OU Management** | The OU tree, moving objects between OUs, and delegation |
 
 **Settings** in the top bar manages who can sign in to EasyDC: change your own password,
 and add an account for each person who administers the domain, with what each may change.
