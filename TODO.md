@@ -7,22 +7,10 @@ Everything below is planned for **0.5.0**, except the last section.
 Per-area View or Edit and a separate Admin, as described in `docs/managing.md`. When the
 Sites and subnets page lands, add it as an area (`src/access.rs`).
 
-## Two kinds of EasyDC accounts
+## ~~Two kinds of EasyDC accounts~~ — done
 
-An admin adds both kinds in EasyDC and sets their permissions. No groups in AD.
-
-- **Local**: username and password stored in EasyDC's own database, as today.
-- **From the domain**: added by domain username, with permissions, like a local account. There
-  is no password in EasyDC: signing in checks the password against the DC. A domain
-  account that is disabled, expired or locked in AD cannot sign in to EasyDC either.
-
-Keep at least one local admin, so EasyDC can still be reached when the DC is down.
-
-Decided:
-
-- EasyDC makes every change in AD with the server's bind account, after checking the
-  person's permissions. The audit log records who did it. People need no rights in AD.
-- Permissions apply to every server EasyDC manages, not one server at a time.
+Local accounts and domain accounts that sign in with their domain password, as described
+in `docs/managing.md`. At least one local admin always remains.
 
 ## Next features
 

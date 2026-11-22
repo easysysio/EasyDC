@@ -18,7 +18,7 @@ use tera::Context;
 use crate::{
     access::{self, Area, AREAS},
     auth::{extract_session_cookie, CurrentUser},
-    db, AppState,
+    db, ldap, AppState,
 };
 
 const MIN_PASSWORD_LEN: usize = 8;
@@ -57,7 +57,15 @@ async fn render(
 ) -> Response {
     let mut ctx = Context::new();
     ctx.insert("actor", actor);
-    ctx.insert("accounts", &db::list_accounts(&state.db).await.unwrap_or_default());
+    let accounts = db::list_accounts(&state.db).await.unwrap_or_default();
+    ctx.insert("me_domain", &accounts.iter().any(|a| a.username == actor && a.domain));
+    ctx.insert("accounts", &accounts);
+    let servers: Vec<_> = db::server_names(&state.db)
+        .await
+        .into_iter()
+        .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+        .collect();
+    ctx.insert("servers", &servers);
     ctx.insert("areas", &area_rows());
     ctx.insert("min_password_len", &MIN_PASSWORD_LEN);
     if let Some(e) = error {
@@ -94,6 +102,16 @@ pub async fn change_password(
     Form(form): Form<ChangePasswordForm>,
 ) -> Response {
     let fail = |msg: &str| msg.to_string();
+
+    if db::list_accounts(&state.db).await.unwrap_or_default().iter().any(|a| a.username == actor && a.domain) {
+        return render(
+            &state,
+            &actor,
+            Some(fail("You sign in with your domain password. Change it on a computer in the domain.")),
+            None,
+        )
+        .await;
+    }
 
     // A session created before usernames were recorded cannot be attributed to
     // a row in `users`, so there is no account to change.
@@ -194,9 +212,21 @@ fn described(admin: bool, edit: &BTreeSet<Area>) -> String {
 
 #[derive(Deserialize)]
 pub struct NewAccountForm {
+    /// "local" (the default) or "domain".
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
+    #[serde(default)]
     pub confirm_password: String,
+    /// For a domain account: the server whose domain it is in, and the
+    /// person's username there.
+    #[serde(default)]
+    pub server_id: String,
+    #[serde(default)]
+    pub domain_user: String,
     #[serde(flatten)]
     pub permissions: HashMap<String, String>,
 }
@@ -206,8 +236,11 @@ pub async fn create_account(
     CurrentUser(actor): CurrentUser,
     Form(form): Form<NewAccountForm>,
 ) -> Response {
-    let username = form.username.trim().to_string();
     let (admin, edit) = read_permissions(&form.permissions);
+    if form.kind == "domain" {
+        return create_domain_account(&state, &actor, &form, admin, edit).await;
+    }
+    let username = form.username.trim().to_string();
 
     let error = if username.is_empty() {
         Some("Username is required.".to_string())
@@ -251,6 +284,57 @@ pub async fn create_account(
     }
 }
 
+/// A domain account: the person must exist in the server's domain. Its
+/// EasyDC name is their username with the domain, such as `ann@lab.test`.
+async fn create_domain_account(
+    state: &AppState,
+    actor: &str,
+    form: &NewAccountForm,
+    admin: bool,
+    edit: BTreeSet<Area>,
+) -> Response {
+    let typed = form.domain_user.trim();
+    let typed = typed.rsplit('\\').next().unwrap_or(typed);
+    let typed = typed.split('@').next().unwrap_or(typed).trim();
+    let server = match form.server_id.parse::<i64>() {
+        Ok(id) => db::server(&state.db, id).await,
+        Err(_) => None,
+    };
+    let found: Result<(String, String), String> = async {
+        let server = server.as_ref().ok_or("Choose the server whose domain the person is in.")?;
+        if typed.is_empty() {
+            return Err("Enter the person's domain username.".to_string());
+        }
+        let (mut conn, base_dn) = ldap::open(server).await?;
+        let user = ldap::find_domain_user(&mut conn, &base_dn, typed).await?;
+        let _ = conn.unbind().await;
+        let user = user.ok_or_else(|| format!("{} has no user named {typed}.", server.name))?;
+        let name = format!("{}@{}", user.username, ldap::base_dn_to_domain(&base_dn).to_lowercase());
+        if db::account_name_taken(&state.db, &name).await {
+            return Err(format!("An account named '{name}' already exists."));
+        }
+        Ok((name, user.username))
+    }
+    .await;
+    let server_id = server.as_ref().map(|s| s.id);
+    let (name, domain_user) = match found {
+        Ok(f) => f,
+        Err(e) => {
+            db::log_action(&state.db, actor, "settings.account_create", typed, server_id, &Err(e.clone())).await;
+            return render(state, actor, Some(e), None).await;
+        }
+    };
+    let result = db::create_domain_account(&state.db, &name, &domain_user, server_id.unwrap_or_default(), admin, &edit)
+        .await
+        .map_err(|e| e.to_string());
+    let target = format!("{name} ({})", described(admin, &edit));
+    db::log_action(&state.db, actor, "settings.account_create", &target, server_id, &result).await;
+    match result {
+        Err(e) => render(state, actor, Some(e), None).await,
+        Ok(()) => Redirect::to("/settings?done=created").into_response(),
+    }
+}
+
 pub async fn update_permissions(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
@@ -272,7 +356,10 @@ pub async fn update_permissions(
         Some(e) => Err(e),
         None => match db::set_permissions(&state.db, &username, admin, &edit).await {
             Ok(true) => Ok(()),
-            Ok(false) => Err(format!("{username} is the last admin, so stays one. Make another account an admin first.")),
+            Ok(false) => Err(format!(
+                "{username} is the last local admin, so stays one: someone must be able to sign in while the DC is down. \
+                 Make another local account an admin first."
+            )),
             Err(e) => Err(e.to_string()),
         },
     };
@@ -308,8 +395,10 @@ pub async fn delete_account(
     let result = match db::delete_account(&state.db, &username).await {
         Ok(true) => Ok(()),
         // The account existed a moment ago, so nothing deleted means it was the
-        // last admin — or it vanished in between; either way, report it.
-        Ok(false) => Err("At least one admin must remain.".to_string()),
+        // last local admin — or it vanished in between; either way, report it.
+        Ok(false) => Err(format!(
+            "{username} is the last local admin, so it stays: someone must be able to sign in while the DC is down."
+        )),
         Err(e) => Err(e.to_string()),
     };
     db::log_action(&state.db, &actor, "settings.account_delete", &username, None, &result).await;
@@ -343,6 +432,9 @@ mod tests {
         let a = Access { username: name.to_string(), admin, edit: edit.iter().copied().collect() };
         Account {
             username: name.to_string(),
+            domain: false,
+            server_name: None,
+            domain_user: String::new(),
             admin,
             edit: a.edit.iter().map(|x| x.key()).collect(),
             summary: a.summary(),
@@ -356,7 +448,38 @@ mod tests {
         c.insert("areas", &super::area_rows());
         c.insert("min_password_len", &super::MIN_PASSWORD_LEN);
         c.insert("access", &me.view());
+        c.insert("me_domain", &accounts.iter().any(|a| a.username == actor && a.domain));
+        c.insert("servers", &[serde_json::json!({ "id": 2, "name": "LAB" })]);
         c
+    }
+
+    fn domain(name: &str, admin: bool, server: Option<&str>) -> Account {
+        Account {
+            domain: true,
+            server_name: server.map(str::to_string),
+            domain_user: name.split('@').next().unwrap().to_string(),
+            ..account(name, admin, &[])
+        }
+    }
+
+    #[test]
+    fn domain_accounts_are_marked_and_sign_in_with_their_domain_password() {
+        let accounts = [account("alice", true, &[]), domain("ann@lab.test", true, Some("LAB")), domain("old@x.test", false, None)];
+        let me = Access { username: "alice".into(), admin: true, ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("alice", me, &accounts)).unwrap();
+        assert!(html.contains("Domain · LAB"));
+        assert!(html.contains("Server removed"));
+        assert!(html.contains(r#"name="kind" value="domain""#));
+        assert!(html.contains(r#"<option value="2">LAB</option>"#));
+        // alice is the only local admin: a domain admin does not count.
+        assert!(!html.contains("/settings/accounts/alice/delete"));
+        assert!(html.contains("/settings/accounts/ann%40lab%2Etest/delete"), "{html}");
+
+        let me = Access { username: "ann@lab.test".into(), admin: true, ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("ann@lab.test", me, &accounts)).unwrap();
+        assert!(html.contains("you sign in\n                    with your domain password"), "no password form for a domain account");
+        assert!(!html.contains(r#"name="current_password""#));
+        assert!(!html.contains("/settings/accounts/alice/delete"), "alice is still the last local admin");
     }
 
     /// Signed in as alice, an admin.

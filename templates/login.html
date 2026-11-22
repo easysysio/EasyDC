@@ -24,7 +24,11 @@
                 <form method="post" action="/login">
                     <div class="mb-3">
                         <label class="form-label fw-medium">Username</label>
-                        <input type="text" name="username" class="form-control" required autofocus>
+                        <input type="text" name="username" class="form-control" required autofocus
+                            autocomplete="username">
+                        {% if domain_accounts %}
+                        <div class="form-text">With a domain account, use your domain username and password.</div>
+                        {% endif %}
                     </div>
                     <div class="mb-4">
                         <label class="form-label fw-medium">Password</label>

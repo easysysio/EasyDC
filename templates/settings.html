@@ -52,7 +52,7 @@
     <i class="bi bi-gear fs-2 text-primary me-3"></i>
     <div>
         <h4 class="mb-0">Settings</h4>
-        <small class="text-muted">EasyDC sign-in accounts — not domain users</small>
+        <small class="text-muted">Who can sign in to EasyDC, and what they may change</small>
     </div>
 </div>
 
@@ -78,6 +78,12 @@
                 <i class="bi bi-key me-2 text-primary"></i><strong>Change your password</strong>
             </div>
             <div class="card-body">
+                {% if me_domain %}
+                <p class="text-muted small mb-0">
+                    Signed in as <span class="fw-semibold">{{ actor }}</span>, a domain account: you sign in
+                    with your domain password. Change it on a computer in the domain.
+                </p>
+                {% else %}
                 <p class="text-muted small">
                     Signed in as <span class="fw-semibold">{{ actor }}</span>. Changing your password
                     signs out your other sessions.
@@ -103,6 +109,7 @@
                         <i class="bi bi-check2 me-1"></i> Change password
                     </button>
                 </form>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -113,7 +120,7 @@
                 <span><i class="bi bi-people me-2 text-primary"></i><strong>EasyDC accounts</strong></span>
                 <span class="badge bg-light text-secondary border">{{ accounts | length }}</span>
             </div>
-            {% set admins = accounts | filter(attribute="admin", value=true) %}
+            {% set local_admins = accounts | filter(attribute="admin", value=true) | filter(attribute="domain", value=false) %}
             <ul class="list-group list-group-flush">
                 {% for a in accounts %}
                 <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
@@ -125,6 +132,15 @@
                         {% if a.admin %}
                         <span class="badge bg-dark-subtle text-dark border ms-1">Admin</span>
                         {% endif %}
+                        {% if a.domain %}
+                        <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1"
+                            title="Signs in with the domain password of {{ a.domain_user }}">
+                            <i class="bi bi-diagram-3 me-1"></i>Domain{% if a.server_name %} · {{ a.server_name }}{% endif %}</span>
+                        {% if not a.server_name %}
+                        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1"
+                            title="This account cannot sign in until it is added again with a server">Server removed</span>
+                        {% endif %}
+                        {% endif %}
                         <div class="small text-muted ms-4 js-summary">{{ a.summary }}</div>
                     </span>
                     {% if access.admin and a.username != actor %}
@@ -133,7 +149,7 @@
                             data-bs-target="#permissions{{ loop.index }}" title="Change permissions">
                             <i class="bi bi-shield-lock"></i>
                         </button>
-                        {% if not a.admin or admins | length > 1 %}
+                        {% if a.domain or not a.admin or local_admins | length > 1 %}
                         <form method="post" action="/settings/accounts/{{ a.username | urlencode_strict }}/delete"
                             class="js-delete-account" data-account="{{ a.username }}">
                             <button type="submit" class="btn btn-outline-danger btn-sm" title="Remove account">
@@ -152,7 +168,38 @@
                     Add an account so each person signs in as themselves and the audit log shows who
                     made a change. Everyone can view every page; choose what each person may change.
                 </p>
-                <form method="post" action="/settings/accounts/new">
+                <form method="post" action="/settings/accounts/new" class="js-new-account">
+                    <div class="btn-group w-100 mb-3" role="group" aria-label="Kind of account">
+                        <input type="radio" class="btn-check" name="kind" value="local" id="kind-local" checked>
+                        <label class="btn btn-outline-secondary" for="kind-local">
+                            <i class="bi bi-person me-1"></i>Local account</label>
+                        <input type="radio" class="btn-check" name="kind" value="domain" id="kind-domain"
+                            {% if servers | length == 0 %}disabled{% endif %}>
+                        <label class="btn btn-outline-secondary" for="kind-domain">
+                            <i class="bi bi-diagram-3 me-1"></i>Domain account</label>
+                    </div>
+                    <div class="js-kind-domain d-none">
+                        <p class="text-muted small">
+                            They sign in with their domain username and password. A disabled, expired or locked
+                            domain account cannot sign in to EasyDC either.
+                        </p>
+                        <div class="row g-2 mb-3">
+                            <div class="col-sm-5">
+                                <label class="form-label">Domain of</label>
+                                <select name="server_id" class="form-select">
+                                    {% for srv in servers %}
+                                    <option value="{{ srv.id }}">{{ srv.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-sm-7">
+                                <label class="form-label">Domain username</label>
+                                <input type="text" name="domain_user" class="form-control" maxlength="256"
+                                    autocomplete="off" placeholder="jsmith">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="js-kind-local">
                     <div class="mb-3">
                         <label class="form-label">Username</label>
                         <input type="text" name="username" class="form-control" required maxlength="64"
@@ -169,6 +216,7 @@
                             <input type="password" name="confirm_password" class="form-control" required
                                 minlength="{{ min_password_len }}" autocomplete="new-password">
                         </div>
+                    </div>
                     </div>
                     {{ self::permission_grid(id="new", admin=false, edit=[], areas=areas) }}
                     <button type="submit" class="btn btn-outline-primary mt-3">
@@ -222,6 +270,23 @@ document.querySelectorAll('.js-delete-account').forEach(function (form) {
             e.preventDefault();
         }
     });
+});
+
+// A domain account has no password here: only one kind's fields are sent.
+document.querySelectorAll('.js-new-account').forEach(function (form) {
+    function update() {
+        const domain = form.elements.kind.value === 'domain';
+        [['.js-kind-domain', domain], ['.js-kind-local', !domain]].forEach(function ([sel, on]) {
+            const part = form.querySelector(sel);
+            part.classList.toggle('d-none', !on);
+            part.querySelectorAll('input, select').forEach(function (i) {
+                i.disabled = !on;
+                if (i.name === 'domain_user') i.required = on;
+            });
+        });
+    }
+    form.querySelectorAll('input[name=kind]').forEach(r => r.addEventListener('change', update));
+    update();
 });
 
 // Admin covers every area: its areas show Edit and cannot be changed.

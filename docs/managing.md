@@ -244,20 +244,38 @@ Changes are recorded in the audit log as `pso.create`, `pso.update`, `pso.delete
 
 ## EasyDC accounts
 
-**Settings** in the top bar manages the accounts that sign in to *EasyDC* — not domain
-users. The first one is created by the setup wizard and is an admin.
+**Settings** in the top bar manages who can sign in to *EasyDC*. The first account is
+created by the setup wizard, and is a local admin.
 
 - **Change your password** — needs your current one. Your other sessions are signed out,
   so a changed password actually ends access anywhere else you were signed in.
 - **Add an account** — so each person signs in as themselves and the audit log names who
-  made a change. Choose what they may change (below).
+  made a change. Choose the kind (below) and what they may change.
 - **Change permissions** — the shield button next to an account. It applies from that
   person's next click.
 - **Remove an account** — their sessions are dropped immediately.
 
-Only admins can add, change or remove accounts. Usernames may contain letters, digits and
-`. _ - @`. You cannot change or delete the account you are signed in as, and at least one
-admin always remains — even when two admins remove each other at the same moment.
+Only admins can add, change or remove accounts. You cannot change or delete the account
+you are signed in as.
+
+### Local and domain accounts
+
+- A **local account** has a username and password kept in EasyDC's own database (bcrypt
+  hashed). Usernames may contain letters, digits and `. _ - @`.
+- A **domain account** is added by choosing a server and typing a domain username. EasyDC
+  keeps no password for it: signing in checks the password with that server's DC. Its
+  EasyDC name is `user@domain`, such as `jsmith@example.com`, and it can sign in with
+  that, with `jsmith`, or with `EXAMPLE\jsmith`. If a local account has the same short
+  name, the short name signs in as the local one.
+
+A domain account that is disabled, expired or locked out in the domain cannot sign in to
+EasyDC, nor one whose password must be changed first; the sign-in page says which. Its
+password is changed in the domain, not in EasyDC. If its server is removed from EasyDC, it
+cannot sign in until an admin adds it again.
+
+At least one **local** admin always remains — even when two admins remove each other at
+the same moment — so someone can sign in while the DC is down. Every sign-in, and every
+refused one, is recorded in the audit log as `auth.sign_in`.
 
 ### Permissions
 
@@ -287,9 +305,9 @@ greyed out; clicking it says why. A refused change is also recorded in the audit
 When upgrading from a version without permissions, every existing account becomes an admin.
 
 !!! note "Separate from the directory"
-    These accounts live in EasyDC's own database, with bcrypt-hashed passwords. EasyDC makes
-    every change with the server's bind account, after checking the person's permissions, so
-    people need no rights in the domain. Resetting a *domain* user's password is under
+    Accounts and their permissions live in EasyDC's own database. EasyDC makes every change
+    with the server's bind account, after checking the person's permissions, so people need
+    no rights in the domain — not even domain accounts. Resetting a *domain* user's password is under
     [Users](#users).
 
 ## Audit log

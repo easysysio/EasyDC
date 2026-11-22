@@ -22,6 +22,15 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE users SET is_admin = 1").execute(pool).await?;
     }
 
+    // Migration: domain accounts. A local account has a password hash; a
+    // domain account has none, and signs in with its password in the domain
+    // of `server_id`, as `domain_user` (its sAMAccountName).
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'local'")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN server_id INTEGER").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN domain_user TEXT").execute(pool).await;
+
     // What each account may change: a row per area it may edit. An area
     // without a row is View.
     sqlx::query(
@@ -227,6 +236,11 @@ pub async fn has_users(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Account {
     pub username: String,
+    /// Signs in with a domain password, not one kept by EasyDC.
+    pub domain: bool,
+    /// For a domain account: the server whose domain it is in, if it still exists.
+    pub server_name: Option<String>,
+    pub domain_user: String,
     pub admin: bool,
     /// The keys of the areas it may edit.
     pub edit: Vec<&'static str>,
@@ -236,14 +250,20 @@ pub struct Account {
 /// Every account, alphabetically, with its permissions.
 pub async fn list_accounts(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
     use sqlx::Row;
-    let rows = sqlx::query("SELECT username FROM users ORDER BY username COLLATE NOCASE")
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT u.username, u.kind, u.domain_user, s.name AS server_name \
+         FROM users u LEFT JOIN servers s ON s.id = u.server_id ORDER BY u.username COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
     let mut out = Vec::new();
     for r in rows {
         let username: String = r.get("username");
         let a = access_for(pool, &username).await?.unwrap_or_default();
         out.push(Account {
+            domain: r.get::<String, _>("kind") == "domain",
+            server_name: r.get("server_name"),
+            domain_user: r.get::<Option<String>, _>("domain_user").unwrap_or_default(),
             admin: a.admin,
             edit: a.edit.iter().map(|x| x.key()).collect(),
             summary: a.summary(),
@@ -366,8 +386,118 @@ pub async fn create_account(
     tx.commit().await
 }
 
+pub async fn create_domain_account(
+    pool: &SqlitePool,
+    username: &str,
+    domain_user: &str,
+    server_id: i64,
+    admin: bool,
+    edit: &std::collections::BTreeSet<crate::access::Area>,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO users (username, password_hash, is_admin, kind, server_id, domain_user) \
+         VALUES (?, '', ?, 'domain', ?, ?)",
+    )
+    .bind(username)
+    .bind(admin as i64)
+    .bind(server_id)
+    .bind(domain_user)
+    .execute(&mut *tx)
+    .await?;
+    write_areas(&mut tx, username, edit).await?;
+    tx.commit().await
+}
+
+pub async fn server(pool: &SqlitePool, id: i64) -> Option<crate::models::Server> {
+    sqlx::query_as::<_, crate::models::Server>("SELECT * FROM servers WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Every server's id and name, for choosing a domain.
+pub async fn server_names(pool: &SqlitePool) -> Vec<(i64, String)> {
+    sqlx::query_as::<_, (i64, String)>("SELECT id, name FROM servers ORDER BY name COLLATE NOCASE")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+}
+
+pub async fn has_domain_accounts(pool: &SqlitePool) -> bool {
+    sqlx::query("SELECT 1 FROM users WHERE kind = 'domain' LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// How an account signs in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignIn {
+    Local { username: String, hash: String },
+    Domain { username: String, domain_user: String, server_id: Option<i64> },
+}
+
+/// The account behind what someone typed at sign-in: its EasyDC name
+/// exactly, a domain account's name in any case (`ann@lab.test`), or a
+/// domain username alone (`ann`, or `LAB\ann`) when only one domain account
+/// has it and no local account is called that.
+pub async fn sign_in_account(pool: &SqlitePool, typed: &str) -> Option<SignIn> {
+    use sqlx::Row;
+    let row_to = |r: sqlx::sqlite::SqliteRow| {
+        let username: String = r.get("username");
+        if r.get::<String, _>("kind") == "domain" {
+            SignIn::Domain {
+                username,
+                domain_user: r.get::<Option<String>, _>("domain_user").unwrap_or_default(),
+                server_id: r.get("server_id"),
+            }
+        } else {
+            SignIn::Local { username, hash: r.get("password_hash") }
+        }
+    };
+    const COLS: &str = "SELECT username, kind, password_hash, domain_user, server_id FROM users";
+    if let Ok(Some(r)) = sqlx::query(&format!("{COLS} WHERE username = ?")).bind(typed).fetch_optional(pool).await {
+        return Some(row_to(r));
+    }
+    if let Ok(Some(r)) = sqlx::query(&format!("{COLS} WHERE kind = 'domain' AND username = ? COLLATE NOCASE"))
+        .bind(typed)
+        .fetch_optional(pool)
+        .await
+    {
+        return Some(row_to(r));
+    }
+    let short = typed.rsplit('\\').next().unwrap_or(typed);
+    if short.is_empty() || short.contains('@') {
+        return None;
+    }
+    let local_named = sqlx::query("SELECT 1 FROM users WHERE kind = 'local' AND username = ? COLLATE NOCASE")
+        .bind(short)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    if local_named {
+        return None;
+    }
+    let rows = sqlx::query(&format!("{COLS} WHERE kind = 'domain' AND domain_user = ? COLLATE NOCASE"))
+        .bind(short)
+        .fetch_all(pool)
+        .await
+        .ok()?;
+    match rows.len() {
+        1 => rows.into_iter().next().map(row_to),
+        _ => None,
+    }
+}
+
 /// Change an account's permissions. Returns false, changing nothing, when
-/// that would leave no admin. The count is part of the same statement, so
+/// that would leave no local admin — one who can sign in while the DC is down. The count is part of the same statement, so
 /// two admins removing each other's admin at the same moment cannot both
 /// succeed.
 pub async fn set_permissions(
@@ -379,7 +509,8 @@ pub async fn set_permissions(
     let mut tx = pool.begin().await?;
     let changed = sqlx::query(
         "UPDATE users SET is_admin = ? WHERE username = ? AND \
-         (? = 1 OR (SELECT COUNT(*) FROM users WHERE is_admin = 1 AND username != ?) > 0)",
+         (? = 1 OR is_admin = 0 OR kind != 'local' OR \
+          (SELECT COUNT(*) FROM users WHERE is_admin = 1 AND kind = 'local' AND username != ?) > 0)",
     )
     .bind(admin as i64)
     .bind(username)
@@ -397,7 +528,7 @@ pub async fn set_permissions(
     Ok(true)
 }
 
-/// Delete an account unless it is the last admin, in a single statement.
+/// Delete an account unless it is the last local admin, in a single statement.
 /// Returns whether a row was removed.
 ///
 /// The count is part of the DELETE rather than a check before it: two
@@ -407,7 +538,8 @@ pub async fn delete_account(pool: &SqlitePool, username: &str) -> Result<bool, s
     let mut tx = pool.begin().await?;
     let removed = sqlx::query(
         "DELETE FROM users WHERE username = ? AND \
-         (is_admin = 0 OR (SELECT COUNT(*) FROM users WHERE is_admin = 1 AND username != ?) > 0)",
+         (is_admin = 0 OR kind != 'local' OR \
+          (SELECT COUNT(*) FROM users WHERE is_admin = 1 AND kind = 'local' AND username != ?) > 0)",
     )
     .bind(username)
     .bind(username)
@@ -549,6 +681,50 @@ mod tests {
         // A new account with the same name starts from nothing.
         create_account(&pool, "helpdesk", "hash", false, &Default::default()).await.unwrap();
         assert!(access_for(&pool, "helpdesk").await.unwrap().unwrap().edit.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_local_admin_always_remains() {
+        let pool = pool().await;
+        add(&pool, "alice").await;
+        create_domain_account(&pool, "ann@lab.test", "ann", 2, true, &Default::default()).await.unwrap();
+        // Two admins, but only alice can sign in while the DC is down.
+        assert!(!delete_account(&pool, "alice").await.unwrap());
+        assert!(!set_permissions(&pool, "alice", false, &Default::default()).await.unwrap());
+        // The domain admin can go, or lose admin.
+        assert!(set_permissions(&pool, "ann@lab.test", false, &Default::default()).await.unwrap());
+        assert!(delete_account(&pool, "ann@lab.test").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn sign_in_finds_the_account_behind_what_was_typed() {
+        let pool = pool().await;
+        add(&pool, "alice").await;
+        create_domain_account(&pool, "Ann@lab.test", "Ann", 2, false, &Default::default()).await.unwrap();
+        create_domain_account(&pool, "bob@lab.test", "bob", 2, false, &Default::default()).await.unwrap();
+        create_domain_account(&pool, "bob@other.test", "bob", 3, false, &Default::default()).await.unwrap();
+        create_domain_account(&pool, "alice@lab.test", "alice", 2, false, &Default::default()).await.unwrap();
+        let domain = |name: &str| match name {
+            "" => None,
+            n => Some(n.to_string()),
+        };
+        let who = |s: Option<SignIn>| match s {
+            Some(SignIn::Local { username, .. }) => domain(&format!("local {username}")),
+            Some(SignIn::Domain { username, domain_user, server_id }) => {
+                domain(&format!("{username} as {domain_user} on {}", server_id.unwrap()))
+            }
+            None => None,
+        };
+        assert_eq!(who(sign_in_account(&pool, "alice").await).as_deref(), Some("local alice"));
+        assert_eq!(who(sign_in_account(&pool, "ann@LAB.TEST").await).as_deref(), Some("Ann@lab.test as Ann on 2"));
+        assert_eq!(who(sign_in_account(&pool, "ann").await).as_deref(), Some("Ann@lab.test as Ann on 2"));
+        assert_eq!(who(sign_in_account(&pool, "LAB\\ann").await).as_deref(), Some("Ann@lab.test as Ann on 2"));
+        assert_eq!(who(sign_in_account(&pool, "bob").await), None, "two domains have a bob: say which");
+        assert_eq!(who(sign_in_account(&pool, "bob@other.test").await).as_deref(), Some("bob@other.test as bob on 3"));
+        assert_eq!(who(sign_in_account(&pool, "Alice").await), None, "a local alice exists: no guessing");
+        assert_eq!(who(sign_in_account(&pool, "nobody").await), None);
+        // A local name is exact, as before.
+        assert_eq!(who(sign_in_account(&pool, "ALICE@lab.test").await).as_deref(), Some("alice@lab.test as alice on 2"));
     }
 
     /// Before permissions, every account was a full administrator; upgrading

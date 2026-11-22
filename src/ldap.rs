@@ -314,17 +314,27 @@ pub async fn connect_and_bind(server: &Server) -> LdapResult<ldap3::Ldap> {
 /// Bind to `url` with the server's account and TLS setting: how EasyDC reaches
 /// the domain's other DCs. A timeout keeps an unreachable DC from stalling a
 /// page.
-pub async fn connect_url(
+/// A connection to `url` with this server's TLS settings, before any sign-in.
+async fn connect_only(
     server: &Server,
     url: &str,
     timeout: Option<std::time::Duration>,
 ) -> LdapResult<ldap3::Ldap> {
     let wait = timeout.unwrap_or(CONNECT_TIMEOUT);
     let settings = LdapConnSettings::new().set_no_tls_verify(server.skip_tls).set_conn_timeout(wait);
-    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, url)
+    let (conn, ldap) = LdapConnAsync::with_settings(settings, url)
         .await
         .map_err(|e| connect_failed(url, wait, e))?;
     ldap3::drive!(conn);
+    Ok(ldap)
+}
+
+pub async fn connect_url(
+    server: &Server,
+    url: &str,
+    timeout: Option<std::time::Duration>,
+) -> LdapResult<ldap3::Ldap> {
+    let mut ldap = connect_only(server, url, timeout).await?;
     ldap.with_timeout(OP_TIMEOUT).simple_bind(&server.bind_dn, &server.bind_password)
         .await
         .map_err(|e| bind_failed(url, e))?
@@ -334,6 +344,120 @@ pub async fn connect_url(
             other => format!("Sign-in to the DC failed: {other}"),
         })?;
     Ok(ldap)
+}
+
+// ── signing in to EasyDC with a domain account ───────────────────────────────
+
+/// A domain user who may sign in to EasyDC, as found by the bind account.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DomainUser {
+    pub dn: String,
+    /// sAMAccountName, as the directory spells it.
+    pub username: String,
+    pub display_name: String,
+}
+
+/// The user (not computer) with this sAMAccountName, if any.
+pub async fn find_domain_user(
+    ldap: &mut ldap3::Ldap,
+    base_dn: &str,
+    username: &str,
+) -> LdapResult<Option<DomainUser>> {
+    let filter = format!(
+        "(&(objectClass=user)(!(objectClass=computer))(sAMAccountName={}))",
+        ldap_escape(username)
+    );
+    let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "displayName"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    Ok(entries.into_iter().next().map(SearchEntry::construct).map(|e| DomainUser {
+        username: attr(&e, "sAMAccountName"),
+        display_name: attr(&e, "displayName"),
+        dn: e.dn,
+    }))
+}
+
+/// Why a domain sign-in did not work.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DomainSignIn {
+    /// A wrong password, or no such user: the same answer for both.
+    Refused,
+    Disabled,
+    LockedOut,
+    AccountExpired,
+    /// Expired, or must be changed at the next sign-in.
+    PasswordChange,
+    /// EasyDC could not ask the DC.
+    Unavailable(String),
+}
+
+impl DomainSignIn {
+    pub fn message(&self) -> String {
+        match self {
+            DomainSignIn::Refused => "Invalid username or password".to_string(),
+            DomainSignIn::Disabled => "This domain account is disabled.".to_string(),
+            DomainSignIn::LockedOut => {
+                "This domain account is locked out after too many wrong passwords. It unlocks by itself \
+                 after the lockout time, or someone who manages users can unlock it."
+                    .to_string()
+            }
+            DomainSignIn::AccountExpired => "This domain account has expired.".to_string(),
+            DomainSignIn::PasswordChange => {
+                "Your domain password must be changed before you can sign in. Change it on a computer in \
+                 the domain, then sign in here with the new one."
+                    .to_string()
+            }
+            DomainSignIn::Unavailable(e) => format!(
+                "EasyDC could not check domain passwords just now: {e} Local EasyDC accounts can still sign in."
+            ),
+        }
+    }
+}
+
+/// What a refused bind means, from the "data" code in Samba's text.
+fn domain_refusal(res: &ldap3::LdapResult) -> DomainSignIn {
+    let reason = res.text.split("data ").nth(1).and_then(|s| s.split(',').next()).unwrap_or("").trim();
+    match (res.rc, reason) {
+        (49, "533") => DomainSignIn::Disabled,
+        (49, "775") => DomainSignIn::LockedOut,
+        (49, "701") => DomainSignIn::AccountExpired,
+        (49, "532") | (49, "773") => DomainSignIn::PasswordChange,
+        _ => DomainSignIn::Refused,
+    }
+}
+
+/// Check a domain user's password by signing in as them. The bind account
+/// finds them first, so the sign-in uses their DN, whatever form their name
+/// takes; Samba then says whether the account may sign in at all.
+pub async fn check_domain_password(server: &Server, username: &str, password: &str) -> Result<DomainUser, DomainSignIn> {
+    // An empty password is an anonymous bind, which "succeeds" without
+    // proving anything.
+    if password.is_empty() {
+        return Err(DomainSignIn::Refused);
+    }
+    let (mut ldap, base_dn) = open(server).await.map_err(DomainSignIn::Unavailable)?;
+    let found = find_domain_user(&mut ldap, &base_dn, username).await;
+    let _ = ldap.unbind().await;
+    let user = match found {
+        Ok(Some(u)) => u,
+        Ok(None) => return Err(DomainSignIn::Refused),
+        Err(e) => return Err(DomainSignIn::Unavailable(e)),
+    };
+    let mut as_user = connect_only(server, &server.ldap_url, None).await.map_err(DomainSignIn::Unavailable)?;
+    let result = as_user
+        .with_timeout(OP_TIMEOUT)
+        .simple_bind(&user.dn, password)
+        .await
+        .map_err(|e| DomainSignIn::Unavailable(bind_failed(&server.ldap_url, e)))?;
+    let _ = as_user.unbind().await;
+    match result.rc {
+        0 => Ok(user),
+        _ => Err(domain_refusal(&result)),
+    }
 }
 
 const EDIT_SERVER: &str = "with the Edit button on this server's card on the Dashboard";
@@ -5261,6 +5385,7 @@ mod user_tree_tests {
 
 #[cfg(test)]
 mod timeout_tests {
+    use super::{check_domain_password, domain_refusal, DomainSignIn, Server};
     use std::time::Duration;
 
     #[tokio::test]
@@ -5344,6 +5469,44 @@ mod timeout_tests {
         assert!(!may(&set(41), 512, Some(42 * day), now));
         assert!(!may(&set(400), 512, None, now), "passwords never expire");
         assert!(!may(&set(43), 512 | 0x1_0000, Some(42 * day), now), "password never expires");
+    }
+
+    #[test]
+    fn a_refused_domain_sign_in_says_why() {
+        let res = |rc: u32, text: &str| ldap3::LdapResult {
+            rc,
+            matched: String::new(),
+            text: text.to_string(),
+            refs: vec![],
+            ctrls: vec![],
+        };
+        let samba = |code: &str| format!("80090308: LdapErr: DSID-0C09030B, comment: AcceptSecurityContext error, data {code}, v893");
+        assert_eq!(domain_refusal(&res(49, &samba("52e"))), DomainSignIn::Refused);
+        assert_eq!(domain_refusal(&res(49, &samba("525"))), DomainSignIn::Refused, "no such user: the same answer");
+        assert_eq!(domain_refusal(&res(49, &samba("533"))), DomainSignIn::Disabled);
+        assert_eq!(domain_refusal(&res(49, &samba("775"))), DomainSignIn::LockedOut);
+        assert_eq!(domain_refusal(&res(49, &samba("701"))), DomainSignIn::AccountExpired);
+        assert_eq!(domain_refusal(&res(49, &samba("532"))), DomainSignIn::PasswordChange);
+        assert_eq!(domain_refusal(&res(49, &samba("773"))), DomainSignIn::PasswordChange);
+        assert_eq!(domain_refusal(&res(53, "")), DomainSignIn::Refused);
+        assert_eq!(DomainSignIn::Refused.message(), "Invalid username or password");
+        assert!(DomainSignIn::Unavailable("Connection failed: x.".into()).message().contains("Local EasyDC accounts can still sign in"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_domain_password_is_refused_before_asking_the_dc() {
+        let server = Server {
+            id: 1,
+            name: "x".into(),
+            ldap_url: "ldaps://192.0.2.1".into(),
+            bind_dn: String::new(),
+            bind_password: String::new(),
+            skip_tls: true,
+        };
+        // 192.0.2.1 is unreachable: an answer at once means nothing was asked.
+        let t = std::time::Instant::now();
+        assert_eq!(check_domain_password(&server, "ann", "").await, Err(DomainSignIn::Refused));
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]
