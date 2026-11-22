@@ -85,14 +85,28 @@ async fn find_server(conn: &mut ldap3::Ldap, p: &Partitions, name: &str) -> Ldap
 
 /// Whether anything accepts a connection on the DC's LDAP ports. A name that
 /// no longer resolves counts as not answering.
-async fn answers(host: &str) -> Option<u16> {
-    if host.is_empty() {
-        return None;
+/// Whether something answers on the LDAP ports at the DC's name, or at an
+/// address its name has in the directory's DNS: EasyDC's own host may not
+/// use the domain's DNS. Returns where, and the port.
+async fn answers(host: &str, addresses: &[String]) -> Option<(String, u16)> {
+    let mut tries = tokio::task::JoinSet::new();
+    let targets = std::iter::once(host.to_string()).filter(|h| !h.is_empty()).chain(addresses.iter().cloned());
+    for target in targets {
+        for port in [389u16, 636] {
+            let target = target.clone();
+            tries.spawn(async move {
+                let wait = Duration::from_secs(3);
+                let reached = match target.parse::<std::net::IpAddr>() {
+                    Ok(ip) => tokio::time::timeout(wait, tokio::net::TcpStream::connect((ip, port))).await,
+                    Err(_) => tokio::time::timeout(wait, tokio::net::TcpStream::connect((target.as_str(), port))).await,
+                };
+                matches!(reached, Ok(Ok(_))).then_some((target, port))
+            });
+        }
     }
-    for port in [389u16, 636] {
-        let attempt = tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect((host, port))).await;
-        if matches!(attempt, Ok(Ok(_))) {
-            return Some(port);
+    while let Some(done) = tries.join_next().await {
+        if let Ok(Some(found)) = done {
+            return Some(found);
         }
     }
     None
@@ -126,16 +140,30 @@ pub async fn plan(conn: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResu
             keys.join(", ")
         ));
     }
-    if plan.refusals.is_empty()
-        && let Some(port) = answers(&server.host).await
-    {
-        plan.refusals.push(format!(
-            "{dc} still answers at {} (port {port}), so it is not gone. Demote a running DC on itself: \
-             samba-tool domain demote. If it is shut down for good and the address now belongs to another machine, \
-             change or remove its DNS record first.",
-            server.host
-        ));
+    let mut dns = Dns::default();
+    if !server.host.is_empty() {
+        let others: Vec<String> = overview.dcs.iter().filter(|d| !d.name.eq_ignore_ascii_case(&dc)).map(|d| d.host.clone()).collect();
+        dns = dns_records(conn, &p, &server.host, &others).await;
     }
+    let addresses: Vec<String> = dns.addresses.iter().map(|(a, _)| a.clone()).collect();
+    if plan.refusals.is_empty()
+        && let Some((at, port)) = answers(&server.host, &addresses).await
+    {
+        let host = &server.host;
+        let other = dns.addresses.iter().find(|(a, _)| *a == at).and_then(|(_, o)| o.as_ref());
+        plan.refusals.push(match other {
+            Some(other) => format!(
+                "In DNS, {host} points at {at}, which is also the address of {other}, and something answers there. \
+                 Change or remove the A record of {host} on the DNS page first, so it no longer points at a live machine."
+            ),
+            None => format!(
+                "{dc} still answers at {at} (port {port}), so it is not gone. Demote a running DC on itself: \
+                 samba-tool domain demote. If it is shut down for good and the address now belongs to another machine, \
+                 change or remove the A record of {host} first."
+            ),
+        });
+    }
+    plan.records = dns.records;
 
     // Connections on other DCs that replicate from it.
     let ntds_dn = format!("CN=NTDS Settings,{}", server.dn);
@@ -190,9 +218,6 @@ pub async fn plan(conn: &mut ldap3::Ldap, base_dn: &str, name: &str) -> LdapResu
         plan.objects.push(Object { what: "Computer account, with its RID Set".into(), dn: server.computer.clone() });
     }
 
-    if !server.host.is_empty() {
-        plan.records = dns_records(conn, &p, &server.host).await;
-    }
     plan.objects.push(Object { what: "Server object, with its NTDS Settings".into(), dn: server.dn.clone() });
     Ok(plan)
 }
@@ -234,10 +259,49 @@ fn pointing_at(node: &str, zone: &str, records: &[(String, String)], host: &str,
         .collect()
 }
 
+/// The DC's addresses, from the A/AAAA records of its own name, less any
+/// address another DC's name also has: a dead DC's name may point at an
+/// address a live DC now uses (or was registered from it), and the live DC's
+/// records on the shared names must stay.
+fn own_addresses(names: &[(String, Vec<(String, String)>)], host: &str, others: &[String]) -> HashSet<String> {
+    name_addresses(names, host, others).into_iter().filter(|(_, other)| other.is_none()).map(|(a, _)| a).collect()
+}
+
+/// The A/AAAA addresses of `host`'s own name, each with the other DC whose
+/// name has it too, if one does.
+fn name_addresses(names: &[(String, Vec<(String, String)>)], host: &str, others: &[String]) -> Vec<(String, Option<String>)> {
+    let of = |h: &str| -> Vec<String> {
+        let h = plain(h);
+        let mut v: Vec<String> = names
+            .iter()
+            .filter(|(full, _)| *full == h)
+            .flat_map(|(_, recs)| recs.iter().filter(|(t, _)| t == "A" || t == "AAAA").map(|(_, v)| v.clone()))
+            .collect();
+        v.dedup();
+        v
+    };
+    of(host)
+        .into_iter()
+        .map(|a| {
+            let other = others.iter().filter(|o| !o.is_empty()).find(|o| of(o).contains(&a)).cloned();
+            (a, other)
+        })
+        .collect()
+}
+
+/// What DNS says about the DC.
+#[derive(Default)]
+struct Dns {
+    /// The records to delete.
+    records: Vec<Record>,
+    /// Its own name's addresses, with another DC sharing each.
+    addresses: Vec<(String, Option<String>)>,
+}
+
 /// Every DNS record pointing at `host`, in all the zones kept in the
 /// directory: the domain's and the forest's DNS partitions, and the old place
-/// under the domain's System container.
-async fn dns_records(conn: &mut ldap3::Ldap, p: &Partitions, host: &str) -> Vec<Record> {
+/// under the domain's System container. `others` are the other DCs' names.
+async fn dns_records(conn: &mut ldap3::Ldap, p: &Partitions, host: &str, others: &[String]) -> Dns {
     let mut nodes: Vec<(String, String, String, Vec<Vec<u8>>)> = Vec::new(); // dn, node, zone, records
     for base in [
         format!("DC=DomainDnsZones,{}", p.domain),
@@ -253,31 +317,25 @@ async fn dns_records(conn: &mut ldap3::Ldap, p: &Partitions, host: &str) -> Vec<
             nodes.push((e.dn.clone(), attr_ci(&e, "dc"), zone, raw));
         }
     }
-    // The DC's own addresses, from its own name.
-    let host_plain = plain(host);
-    let mut addresses = HashSet::new();
-    for (_, node, zone, raw) in &nodes {
-        let full = if node == "@" { plain(zone) } else { plain(&format!("{node}.{zone}")) };
-        if full == host_plain {
-            for r in raw {
-                if let Some((t, v, _)) = ldap::parse_dns_record_binary(r)
-                    && (t == "A" || t == "AAAA")
-                {
-                    addresses.insert(v);
-                }
-            }
-        }
-    }
+    let parse = |raw: &[Vec<u8>]| -> Vec<(String, String)> {
+        raw.iter().map(|r| ldap::parse_dns_record_binary(r).map(|(t, v, _)| (t, v)).unwrap_or_default()).collect()
+    };
+    let names: Vec<(String, Vec<(String, String)>)> = nodes
+        .iter()
+        .map(|(_, node, zone, raw)| (if node == "@" { plain(zone) } else { plain(&format!("{node}.{zone}")) }, parse(raw)))
+        .collect();
+    let addresses = own_addresses(&names, host, others);
+    let named = name_addresses(&names, host, others);
     let mut out = Vec::new();
     for (dn, node, zone, raw) in nodes {
-        let parsed: Vec<(String, String)> = raw.iter().map(|r| ldap::parse_dns_record_binary(r).map(|(t, v, _)| (t, v)).unwrap_or_default()).collect();
+        let parsed = parse(&raw);
         for i in pointing_at(&node, &zone, &parsed, host, &addresses) {
             let name = if node == "@" { zone.clone() } else { format!("{node}.{zone}") };
             out.push(Record { name, rtype: parsed[i].0.clone(), value: parsed[i].1.clone(), node_dn: dn.clone(), raw: raw[i].clone() });
         }
     }
     out.sort_by(|a, b| (a.name.to_lowercase(), &a.rtype).cmp(&(b.name.to_lowercase(), &b.rtype)));
-    out
+    Dns { records: out, addresses: named }
 }
 
 fn bin_values(e: &SearchEntry, key: &str) -> Vec<Vec<u8>> {
@@ -354,6 +412,27 @@ mod tests {
         assert_eq!(pointing_at("DomainDnsZones", "lab.test", &r, HOST, &ips()), [1, 3]);
         // Another name sharing the address is not the DC's.
         assert_eq!(pointing_at("printer", "lab.test", &recs(&[("A", "192.168.7.12")]), HOST, &ips()), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn an_address_a_live_dc_uses_is_not_its() {
+        let r = |v: &[(&str, &str)]| v.iter().map(|(t, x)| (t.to_string(), x.to_string())).collect::<Vec<_>>();
+        let names = vec![
+            ("deaddc.lab.test".to_string(), r(&[("A", "192.168.7.11"), ("A", "192.168.7.99")])),
+            ("testdc.lab.test".to_string(), r(&[("A", "192.168.7.11")])),
+            ("lab.test".to_string(), r(&[("A", "192.168.7.11"), ("A", "192.168.7.99")])),
+        ];
+        let others = ["testdc.lab.test".to_string(), String::new()];
+        let mine = own_addresses(&names, "DEADDC.lab.test.", &others);
+        assert_eq!(
+            name_addresses(&names, "deaddc.lab.test", &others),
+            [("192.168.7.11".to_string(), Some("testdc.lab.test".to_string())), ("192.168.7.99".to_string(), None)]
+        );
+        assert_eq!(mine, HashSet::from(["192.168.7.99".to_string()]));
+        // So on the shared names only its own address goes; its own name loses both.
+        let shared = r(&[("A", "192.168.7.11"), ("A", "192.168.7.99")]);
+        assert_eq!(pointing_at("@", "lab.test", &shared, "deaddc.lab.test", &mine), [1]);
+        assert_eq!(pointing_at("deaddc", "lab.test", &shared, "deaddc.lab.test", &mine), [0, 1]);
     }
 
     #[test]

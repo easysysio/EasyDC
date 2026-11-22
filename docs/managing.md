@@ -267,8 +267,12 @@ the other DCs keep trying to replicate with it and DNS keeps sending clients to 
 - The dialog first lists everything that will be deleted: replication connections from
   it, its SYSVOL replication entries, its Samba DNS account, its computer account, its
   server object, and the DNS records that point at it. Type the DC's name to confirm.
-- EasyDC refuses while the DC still answers on the network, while it holds an FSMO role
-  (seize the role on a live DC first), and for the DC EasyDC itself connects to.
+- EasyDC refuses while the DC still answers on the network, at its name or at the address
+  its name has in DNS; while it holds an FSMO role (seize the role on a live DC first); and
+  for the DC EasyDC itself connects to. If its name points at an address another machine
+  now has, change or remove that A record on the DNS page first.
+- An address the DC's name shares with another DC is never removed from the names all
+  DCs share, such as the domain's own name.
 - A DC that is still running is removed by demoting it, on itself:
   `samba-tool domain demote`.
 
