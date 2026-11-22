@@ -51,7 +51,7 @@ async fn render_groups(
         let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
         let groups = ldap::list_groups(&mut conn, &base_dn).await?;
         let objects_in: Vec<&str> = groups.iter().map(|g| g.container.as_str()).collect();
-        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in).await?;
+        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in, &format!("CN=Users,{base_dn}")).await?;
         Ok((base_dn, groups, tree))
     }
     .await;
@@ -330,49 +330,85 @@ pub async fn remove_member(
     }
 }
 
-pub async fn computers(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+pub async fn computers(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(view): Query<ListView>,
+) -> Response {
     match get_server(&state, id).await {
         None => redirect_home(),
-        Some(server) => render_computers(&state, &server, None).await,
+        Some(server) => render_computers(&state, &server, &view, None).await,
     }
 }
 
 /// The computers page, with `flash_error` when an action on it just failed.
-async fn render_computers(state: &AppState, server: &Server, flash_error: Option<String>) -> Response {
-    let list = match ldap::open_after(server, flash_error.as_deref()).await {
-        Err(e) => Err(e),
-        Ok((mut conn, base_dn)) => ldap::list_computers(&mut conn, &base_dn).await,
+async fn render_computers(
+    state: &AppState,
+    server: &Server,
+    view: &ListView,
+    flash_error: Option<String>,
+) -> Response {
+    let mut ctx = Context::new();
+    ctx.insert("server", server);
+    let loaded: Result<_, String> = async {
+        let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
+        let computers = ldap::list_computers(&mut conn, &base_dn).await?;
+        let objects_in: Vec<&str> = computers.iter().map(|c| c.container.as_str()).collect();
+        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in, &format!("CN=Computers,{base_dn}")).await?;
+        Ok((base_dn, computers, tree))
+    }
+    .await;
+    let load_error = match loaded {
+        Ok((base_dn, computers, tree)) => computers_context(&mut ctx, server, &base_dn, &computers, &tree, view),
+        Err(e) => {
+            computers_failed_context(&mut ctx, view);
+            Some(e)
+        }
     };
-    let ctx = computers_context(server, list, flash_error);
+    // The action's own failure says more than a list that did not load after it.
+    if let Some(e) = flash_error.or(load_error) {
+        ctx.insert("error", &e);
+    }
     Html(crate::access::render(&state.tera, "computers.html", &ctx)).into_response()
 }
 
+/// The computers page's list and tree; like [`groups_context`].
 fn computers_context(
+    ctx: &mut Context,
     server: &Server,
-    list: Result<Vec<ldap::LdapComputer>, String>,
-    flash_error: Option<String>,
-) -> Context {
-    let mut ctx = Context::new();
-    ctx.insert("server", server);
-    match list {
-        Ok(list) => ctx.insert("computers", &list),
-        Err(e) => {
-            ctx.insert("computers", &Vec::<ldap::LdapComputer>::new());
-            ctx.insert("error", &e);
-        }
-    }
-    // The action's own failure says more than a list that did not load after it.
-    if let Some(e) = flash_error {
-        ctx.insert("error", &e);
-    }
-    ctx
+    base_dn: &str,
+    all: &[ldap::LdapComputer],
+    tree: &[ldap::UserContainer],
+    requested: &ListView,
+) -> Option<String> {
+    let (mut view, selected, error) = resolve_view(requested, base_dn, tree, "computers");
+    view.status.clear();
+    let page = |v: &ListView| format!("/servers/{}/computers{}", server.id, v.query());
+    insert_tree(ctx, &page, base_dn, all.len(), tree, &view, selected);
+    let computers: Vec<&ldap::LdapComputer> = all.iter().filter(|c| view.holds(&c.container)).collect();
+    ctx.insert("computers", &computers);
+    ctx.insert("any_computers", &!all.is_empty());
+    // Not somewhere to move a computer to: its policies are for DCs.
+    ctx.insert("move_skip", &format!("ou=domain controllers,{}", base_dn.to_lowercase()));
+    error
 }
 
-/// Back to the computers list on success; the list with the reason on failure.
-async fn after_computer_action(state: &AppState, server: &Server, result: Result<(), String>) -> Response {
+/// When the DC could not be read: an empty list, and the view the forms carry.
+fn computers_failed_context(ctx: &mut Context, view: &ListView) {
+    ctx.insert("computers", &Vec::<ldap::LdapComputer>::new());
+    ctx.insert("view_qs", &view.query());
+}
+
+/// Back to the same view on success; the view with the reason on failure.
+async fn after_computer_action(
+    state: &AppState,
+    server: &Server,
+    view: &ListView,
+    result: Result<(), String>,
+) -> Response {
     match result {
-        Ok(()) => Redirect::to(&format!("/servers/{}/computers", server.id)).into_response(),
-        Err(e) => render_computers(state, server, Some(e)).await,
+        Ok(()) => Redirect::to(&format!("/servers/{}/computers{}", server.id, view.query())).into_response(),
+        Err(e) => render_computers(state, server, view, Some(e)).await,
     }
 }
 
@@ -380,6 +416,7 @@ pub async fn delete_computer(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, name)): Path<(i64, String)>,
+    Query(view): Query<ListView>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -392,13 +429,14 @@ pub async fn delete_computer(
     }
     .await;
     db::log_action(&state.db, &actor, "computer.delete", &name, Some(id), &result).await;
-    after_computer_action(&state, &server, result).await
+    after_computer_action(&state, &server, &view, result).await
 }
 
 pub async fn toggle_computer(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, name)): Path<(i64, String)>,
+    Query(view): Query<ListView>,
     Form(form): Form<ToggleForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -414,7 +452,80 @@ pub async fn toggle_computer(
     .await;
     let action = if enable { "computer.enable" } else { "computer.disable" };
     db::log_action(&state.db, &actor, action, &name, Some(id), &result).await;
-    after_computer_action(&state, &server, result).await
+    after_computer_action(&state, &server, &view, result).await
+}
+
+/// Enable, disable or move several computers; a big selection comes in
+/// parts, as on the Users page ([`bulk_users`]).
+pub async fn bulk_computers(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path(id): Path<i64>,
+    Query(view): Query<ListView>,
+    Form(form): Form<BulkForm>,
+) -> Response {
+    let server = match get_server(&state, id).await {
+        None => return redirect_home(),
+        Some(s) => s,
+    };
+    let outcome = run_bulk_computers(&state, &actor, &server, &form).await;
+    if form.part == "1" {
+        return match outcome {
+            Ok(o) => axum::Json(o).into_response(),
+            Err(e) => axum::Json(serde_json::json!({ "error": e })).into_response(),
+        };
+    }
+    let result = outcome.and_then(|o| {
+        if o.failed.is_empty() {
+            Ok(())
+        } else {
+            Err(bulk_summary(o.verb, &o.place, o.total, COMPUTERS, &o.failed))
+        }
+    });
+    after_computer_action(&state, &server, &view, result).await
+}
+
+async fn run_bulk_computers(
+    state: &AppState,
+    actor: &str,
+    server: &Server,
+    form: &BulkForm,
+) -> Result<BulkOutcome, String> {
+    let names = selected_names(&form.names);
+    let target = form.target.trim();
+    let action = form.action.as_str();
+    let (verb, audit) = match action {
+        "enable" => ("Enabled", "computer.enable"),
+        "disable" => ("Disabled", "computer.disable"),
+        "move" => ("Moved", "computer.move"),
+        other => return Err(format!("Unknown action '{other}'")),
+    };
+    if names.is_empty() {
+        return Err("No computers were selected".to_string());
+    }
+    let (mut conn, base_dn) = ldap::open(server).await?;
+    let place = if action == "move" {
+        if target.is_empty() {
+            return Err("Pick an OU or container to move to".to_string());
+        }
+        format!(" to {}", ldap::container_name(&mut conn, &base_dn, target).await?)
+    } else {
+        String::new()
+    };
+
+    let mut failed = Vec::new();
+    for name in &names {
+        let r = match action {
+            "move" => ldap::move_computer(&mut conn, &base_dn, name, target).await,
+            _ => ldap::set_computer_enabled(&mut conn, &base_dn, name, action == "enable").await,
+        };
+        let logged = if action == "move" { format!("{name} → {target}") } else { name.to_string() };
+        db::log_action(&state.db, actor, audit, &logged, Some(server.id), &r).await;
+        if let Err(e) = r {
+            failed.push(format!("{name} ({e})"));
+        }
+    }
+    Ok(BulkOutcome { verb, place, total: names.len(), failed })
 }
 
 // ── OU list ───────────────────────────────────────────────────────────────────
@@ -598,7 +709,13 @@ pub async fn ou_move_object(
             db::log_action(&state.db, &actor, "access.refused", &target, Some(id), &Err(reason.clone())).await;
             return Err(reason);
         }
-        ldap::move_object_to_ou(&mut conn, &base_dn, &dn, &form.target_ou_dn).await
+        match kind {
+            // A domain controller stays where it is.
+            ldap::ObjectKind::Computer => {
+                ldap::move_computer(&mut conn, &base_dn, &form.sam_account, &form.target_ou_dn).await
+            }
+            _ => ldap::move_object_to_ou(&mut conn, &base_dn, &dn, &form.target_ou_dn).await,
+        }
     }
     .await;
     db::log_action(&state.db, &actor, "ou.move_object", &target, Some(id), &result).await;
@@ -1437,7 +1554,7 @@ async fn render_users(
         let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
         let users = ldap::list_users(&mut conn, &base_dn).await?;
         let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
-        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in).await?;
+        let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in, &format!("CN=Users,{base_dn}")).await?;
         let groups = ldap::group_names(&mut conn, &base_dn).await?;
         Ok((base_dn, users, tree, groups))
     }
@@ -1720,11 +1837,12 @@ fn refuse_bind_account(is_bind: bool, username: &str, doing: &str) -> Result<(),
 // ── several users at once ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-pub struct BulkUsersForm {
-    /// `enable`, `disable`, `move` or `add_to_group`.
+pub struct BulkForm {
+    /// `enable`, `disable`, `move`, or for users `add_to_group`.
     pub action: String,
-    /// The selected usernames, one per line.
-    pub users: String,
+    /// The selected usernames or computer account names, one per line.
+    #[serde(alias = "users")]
+    pub names: String,
     /// The OU or container DN to move to, or the group to add to.
     #[serde(default)]
     pub target: String,
@@ -1748,9 +1866,13 @@ fn selected_names(users: &str) -> Vec<&str> {
 /// script lists the same number when it sends a selection in parts.)
 const FAILURES_LISTED: usize = 20;
 
-fn bulk_summary(verb: &str, place: &str, total: usize, failed: &[String]) -> String {
+/// What a bulk action acts on, as one and as several.
+const USERS: (&str, &str) = ("user", "users");
+const COMPUTERS: (&str, &str) = ("computer", "computers");
+
+fn bulk_summary(verb: &str, place: &str, total: usize, noun: (&str, &str), failed: &[String]) -> String {
     let done = total - failed.len();
-    let users = if total == 1 { "user" } else { "users" };
+    let users = if total == 1 { noun.0 } else { noun.1 };
     let mut listed = failed.iter().take(FAILURES_LISTED).cloned().collect::<Vec<_>>().join("; ");
     if failed.len() > FAILURES_LISTED {
         listed += &format!("; and {} more, listed in the Audit Log", failed.len() - FAILURES_LISTED);
@@ -1779,7 +1901,7 @@ pub async fn bulk_users(
     CurrentUser(actor): CurrentUser,
     Path(id): Path<i64>,
     Query(view): Query<ListView>,
-    Form(form): Form<BulkUsersForm>,
+    Form(form): Form<BulkForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
         None => return redirect_home(),
@@ -1788,7 +1910,7 @@ pub async fn bulk_users(
     // The route needs Edit on Users; adding them to a group changes the group.
     if form.action == "add_to_group" && !access::current().can_edit(Area::Groups) {
         let reason = access::refusal(access::Need::Edit(Area::Groups));
-        let target = format!("{} users → {}", selected_names(&form.users).len(), form.target.trim());
+        let target = format!("{} users → {}", selected_names(&form.names).len(), form.target.trim());
         db::log_action(&state.db, &actor, "access.refused", &target, Some(id), &Err(reason.clone())).await;
         if form.part == "1" {
             return axum::Json(serde_json::json!({ "error": reason })).into_response();
@@ -1803,13 +1925,13 @@ pub async fn bulk_users(
         };
     }
     let result = outcome.and_then(|o| {
-        if o.failed.is_empty() { Ok(()) } else { Err(bulk_summary(o.verb, &o.place, o.total, &o.failed)) }
+        if o.failed.is_empty() { Ok(()) } else { Err(bulk_summary(o.verb, &o.place, o.total, USERS, &o.failed)) }
     });
     after_user_action(&state, &server, &view, result).await
 }
 
-async fn run_bulk(state: &AppState, actor: &str, server: &Server, form: &BulkUsersForm) -> Result<BulkOutcome, String> {
-    let names = selected_names(&form.users);
+async fn run_bulk(state: &AppState, actor: &str, server: &Server, form: &BulkForm) -> Result<BulkOutcome, String> {
+    let names = selected_names(&form.names);
     let target = form.target.trim();
     let action = form.action.as_str();
     let (verb, audit) = match action {
@@ -2143,7 +2265,7 @@ mod users_page_tests {
 
     fn tree_of(found: Vec<(String, bool)>, users: &[LdapUser]) -> Vec<ldap::UserContainer> {
         let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
-        ldap::container_tree(BASE, found, &objects_in)
+        ldap::container_tree(BASE, found, &objects_in, "")
     }
 
     fn user_in(name: &str, container: &str) -> LdapUser {
@@ -2274,11 +2396,11 @@ mod users_page_tests {
     fn a_partial_bulk_action_says_what_failed() {
         let failed = vec!["bob (Sales already holds an object named Bob)".to_string()];
         assert_eq!(
-            super::bulk_summary("Moved", " to Sales", 3, &failed),
+            super::bulk_summary("Moved", " to Sales", 3, super::USERS, &failed),
             "Moved 2 of 3 users to Sales. Not done: bob (Sales already holds an object named Bob)"
         );
         assert_eq!(
-            super::bulk_summary("Disabled", "", 1, &["admin (no)".into()]),
+            super::bulk_summary("Disabled", "", 1, super::USERS, &["admin (no)".into()]),
             "Disabled 0 of 1 user. Not done: admin (no)"
         );
     }
@@ -2286,21 +2408,31 @@ mod users_page_tests {
     #[test]
     fn a_long_list_of_failures_is_cut_short() {
         let failed: Vec<String> = (1..=25).map(|i| format!("u{i} (no)")).collect();
-        let e = super::bulk_summary("Disabled", "", 100, &failed);
+        let e = super::bulk_summary("Disabled", "", 100, super::USERS, &failed);
         assert!(e.starts_with("Disabled 75 of 100 users. Not done: u1 (no); "), "{e}");
         assert!(e.contains("u20 (no)") && !e.contains("u21 (no)"), "{e}");
         assert!(e.ends_with("; and 5 more, listed in the Audit Log"), "{e}");
     }
 
-    /// The Users page script reads these names when it sends a selection in parts.
+    /// The bulk script (bulk.html) reads these names when it sends a selection in parts.
     #[test]
     fn a_part_is_answered_with_what_the_page_reads() {
         let o = super::BulkOutcome { verb: "Moved", place: " to Sales".into(), total: 100, failed: vec!["bob (x)".into()] };
         let v = serde_json::to_value(&o).unwrap();
         assert_eq!(v, serde_json::json!({ "verb": "Moved", "place": " to Sales", "total": 100, "failed": ["bob (x)"] }));
-        let page = std::fs::read_to_string("templates/users.html").unwrap();
-        for read in ["answer.error", "answer.failed", "outcome.verb", "outcome.place", "part: '1'"] {
-            assert!(page.contains(read), "users.html no longer reads {read}");
+        let page = std::fs::read_to_string("templates/bulk.html").unwrap();
+        for read in ["answer.error", "answer.failed", "outcome.verb", "outcome.place", "part: '1'", "names: part"] {
+            assert!(page.contains(read), "bulk.html no longer reads {read}");
+        }
+        // And sends what the form reads, from the Users and Computers pages.
+        let f: super::BulkForm = serde_urlencoded::from_str("action=move&names=a%0Ab&target=x&part=1").unwrap();
+        assert_eq!((f.names.as_str(), f.part.as_str()), ("a\nb", "1"));
+        let f: super::BulkForm = serde_urlencoded::from_str("action=enable&users=a").unwrap();
+        assert_eq!(f.names, "a", "a page loaded before the change still works");
+        for page in ["users", "computers"] {
+            let html = std::fs::read_to_string(format!("templates/{page}.html")).unwrap();
+            assert!(html.contains(r#"<input type="hidden" name="names">"#), "{page}.html");
+            assert!(html.contains(r#"{% include "bulk.html" %}"#), "{page}.html");
         }
     }
 
@@ -2514,7 +2646,7 @@ mod groups_page_tests {
             (format!("OU=Europe,OU=Sales,{BASE}"), true),
         ];
         let objects_in: Vec<&str> = groups.iter().map(|g| g.container.as_str()).collect();
-        let tree = ldap::container_tree(BASE, found, &objects_in);
+        let tree = ldap::container_tree(BASE, found, &objects_in, "");
         let mut c = Context::new();
         c.insert("server", &server());
         let err = groups_context(&mut c, &server(), BASE, groups, &tree, view);
@@ -2701,8 +2833,8 @@ mod groups_page_tests {
 
 #[cfg(test)]
 mod computer_gpo_page_tests {
-    use super::{computers_context, gpo_context, gpo_links_context, GpoLinks};
-    use crate::ldap::{GpoLink, LdapComputer, LdapGpo, LdapOu};
+    use super::{computers_context, computers_failed_context, gpo_context, gpo_links_context, GpoLinks, ListView};
+    use crate::ldap::{self, GpoLink, LdapComputer, LdapGpo, LdapOu};
     use crate::models::Server;
     use tera::{Context, Tera};
 
@@ -2729,16 +2861,117 @@ mod computer_gpo_page_tests {
         }
     }
 
+    const BASE: &str = "DC=example,DC=com";
+
     fn computer(name: &str) -> LdapComputer {
+        computer_in(name, "CN=Computers", "Computers")
+    }
+
+    fn computer_in(name: &str, container: &str, location: &str) -> LdapComputer {
         LdapComputer {
-            dn: format!("CN={name},CN=Computers,DC=example,DC=com"),
+            dn: format!("CN={name},{container},{BASE}"),
             name: name.to_string(),
             sam_account: format!("{name}$"),
+            account: name.to_string(),
             dns_hostname: format!("{}.example.com", name.to_lowercase()),
             os: "Windows 11 Pro".to_string(),
             os_version: "10.0".to_string(),
             enabled: true,
+            is_dc: false,
+            container: format!("{container},{BASE}"),
+            location: location.to_string(),
         }
+    }
+
+    /// The computers page as the handler builds it, for a view, with an
+    /// action's failure if any.
+    fn computers_page(computers: &[LdapComputer], view: &ListView, flash: Option<&str>) -> String {
+        let found = vec![
+            (format!("CN=Computers,{BASE}"), false),
+            (format!("OU=Domain Controllers,{BASE}"), true),
+            (format!("OU=Sales,{BASE}"), true),
+            (format!("OU=Laptops,OU=Sales,{BASE}"), true),
+        ];
+        let objects_in: Vec<&str> = computers.iter().map(|c| c.container.as_str()).collect();
+        let tree = ldap::container_tree(BASE, found, &objects_in, &format!("CN=Computers,{BASE}"));
+        let mut c = Context::new();
+        c.insert("server", &server());
+        if let Some(e) = computers_context(&mut c, &server(), BASE, computers, &tree, view) {
+            c.insert("error", &e);
+        }
+        if let Some(e) = flash {
+            c.insert("error", e);
+        }
+        render("computers.html", &c)
+    }
+
+    fn listed(html: &str) -> Vec<String> {
+        html.split(r#" me-1 text-secondary"></i>"#)
+            .skip(1)
+            .map(|s| s.split(['\n', '<']).next().unwrap_or_default().trim().to_string())
+            .collect()
+    }
+
+    fn ou(ou: &str, nested: bool) -> ListView {
+        ListView { ou: format!("{ou},{BASE}"), sub: if nested { "1".into() } else { String::new() }, status: String::new() }
+    }
+
+    fn sample() -> Vec<LdapComputer> {
+        vec![
+            LdapComputer { is_dc: true, ..computer_in("DC1", "OU=Domain Controllers", "Domain Controllers") },
+            computer_in("PC-01", "CN=Computers", "Computers"),
+            computer_in("SALES-01", "OU=Sales", "Sales"),
+            LdapComputer { enabled: false, ..computer_in("LAP-01", "OU=Laptops,OU=Sales", "Sales › Laptops") },
+        ]
+    }
+
+    #[test]
+    fn computers_can_be_browsed_by_ou() {
+        let html = computers_page(&sample(), &ListView::default(), None);
+        assert_eq!(listed(&html), ["DC1", "PC-01", "SALES-01", "LAP-01"]);
+        assert!(html.contains("bi-folder2 me-1\"></i>Sales › Laptops</div>"), "location shown");
+        assert!(html.contains(r#"<option value="OU=Laptops,OU=Sales,DC=example,DC=com">"#), "the Move dialog offers OUs");
+
+        let html = computers_page(&sample(), &ou("OU=Sales", false), None);
+        assert_eq!(listed(&html), ["SALES-01"]);
+        assert!(html.contains(r#"<span class="text-muted fw-normal">in Sales</span>"#));
+        // Actions come back to this view.
+        let qs = "?ou=OU%3DSales%2CDC%3Dexample%2CDC%3Dcom";
+        assert!(html.contains(&format!("/computers/SALES%2D01/toggle{qs}")), "{html}");
+        assert!(html.contains(&format!("/computers/bulk{qs}")));
+
+        let html = computers_page(&sample(), &ou("OU=Sales", true), None);
+        assert_eq!(listed(&html), ["SALES-01", "LAP-01"]);
+
+        let html = computers_page(&sample()[3..], &ou("OU=Sales", false), None);
+        assert!(html.contains("No computers here") && html.contains("to see the computers below it"));
+    }
+
+    #[test]
+    fn computers_move_to_any_ou_but_domain_controllers() {
+        // Every computer is out of CN=Computers: it is still somewhere to move back to.
+        let html = computers_page(&sample()[2..], &ListView::default(), None);
+        let move_list = html.split(r#"id="moveTarget""#).nth(1).unwrap().split("</select>").next().unwrap();
+        assert!(move_list.contains(r#"<option value="CN=Computers,DC=example,DC=com">"#), "{move_list}");
+        assert!(move_list.contains(r#"<option value="OU=Sales,DC=example,DC=com">"#));
+        assert!(!move_list.contains("Domain Controllers"), "{move_list}");
+    }
+
+    #[test]
+    fn a_domain_controller_is_left_alone() {
+        let html = computers_page(&sample()[..1], &ListView::default(), None);
+        assert!(html.contains("Domain controller</span>"));
+        assert!(html.contains(r#"value="DC1" disabled"#), "it cannot be selected");
+        assert!(!html.contains("/computers/DC1/toggle") && !html.contains("/computers/DC1/delete"));
+        assert!(!html.contains("btn-sm js-move-one"));
+    }
+
+    #[test]
+    fn computers_are_acted_on_by_account_name() {
+        let pc = LdapComputer { name: "Front desk".into(), account: "FRONTDESK".into(), ..computer("x") };
+        let html = computers_page(&[pc], &ListView::default(), None);
+        assert!(html.contains(r#"value="FRONTDESK""#));
+        assert!(html.contains("/computers/FRONTDESK/toggle") && html.contains("/computers/FRONTDESK/delete"));
     }
 
     const GUID: &str = "31B2F340-016D-11D2-945F-00C04FB984F9";
@@ -2761,19 +2994,18 @@ mod computer_gpo_page_tests {
 
     #[test]
     fn a_failed_computer_action_is_shown_above_the_list() {
-        let c = computers_context(&server(), Ok(vec![computer("PC-01")]), Some(REFUSED.into()));
-        let html = render("computers.html", &c);
+        let html = computers_page(&[computer("PC-01")], &ListView::default(), Some(REFUSED));
         assert!(html.contains(REFUSED));
         assert!(html.contains("PC-01"));
     }
 
     #[test]
     fn the_computers_page_renders_when_the_list_did_not_load() {
-        let html = render("computers.html", &computers_context(&server(), Err(SILENT.into()), None));
-        assert!(html.contains(SILENT));
-        // And the action's reason wins over the list's.
-        let c = computers_context(&server(), Err(SILENT.into()), Some(REFUSED.into()));
-        assert!(render("computers.html", &c).contains(REFUSED));
+        let mut c = Context::new();
+        c.insert("server", &server());
+        computers_failed_context(&mut c, &ListView::default());
+        c.insert("error", SILENT);
+        assert!(render("computers.html", &c).contains(SILENT));
     }
 
     #[test]

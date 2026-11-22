@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Computers - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
 <nav aria-label="breadcrumb" class="mb-4">
@@ -10,11 +11,14 @@
     </ol>
 </nav>
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0"><i class="bi bi-pc-display me-2 text-info"></i>Computers</h4>
+<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">
+        <i class="bi bi-pc-display me-2 text-info"></i>Computers{% if selected %}
+        <span class="text-muted fw-normal">in {{ selected }}</span>{% endif %}
+    </h4>
     <span class="text-muted small">
         <i class="bi bi-info-circle me-1"></i>
-        Computers join the domain via the OS — add from here is not supported.
+        Computers are added by joining them to the domain from the computer itself.
     </span>
 </div>
 
@@ -23,92 +27,83 @@
     <i class="bi bi-exclamation-triangle me-1"></i> {{ error }}
 </div>
 {% endif %}
+<div id="bulkNote"></div>
 
+<div class="row g-4">
+{% include "ou_tree.html" %}
+
+<div class="{% if tree %}col-lg-9 col-xxl-10{% else %}col-12{% endif %}">
 {% if computers | length == 0 and not error %}
 <div class="text-center py-5 text-muted">
     <i class="bi bi-pc-display fs-1"></i>
+    {% if any_computers %}
+    <p class="mt-3 fs-5">No computers here</p>
+    <p class="small">This OU or container holds no computers.{% if not nested and below > 0 %} Turn on <strong>Include nested OUs</strong> to see the computers below it.{% endif %}</p>
+    {% else %}
     <p class="mt-3 fs-5">No computers found</p>
     <p class="small">Computers appear here after joining the domain.</p>
+    {% endif %}
 </div>
 {% else %}
 <div class="d-flex mb-3">
     <input type="search" id="listSearch" class="form-control form-control-sm ms-auto" style="max-width: 16rem;"
         placeholder="Search name, hostname, OS…" aria-label="Search computers">
 </div>
+<div id="bulkBar" class="alert alert-primary py-2 px-3 mb-3 d-none" data-needs="computers">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+        <strong class="me-2"><span id="bulkCount">0</span> selected</strong>
+        <button type="button" class="btn btn-sm btn-outline-success js-bulk" data-action="enable">
+            <i class="bi bi-play-circle me-1"></i>Enable
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-warning js-bulk" data-action="disable">
+            <i class="bi bi-pause-circle me-1"></i>Disable
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-primary js-bulk-move">
+            <i class="bi bi-folder-symlink me-1"></i>Move…
+        </button>
+        <button type="button" class="btn btn-sm btn-link d-none" id="selectMatching" data-needs=""></button>
+        <button type="button" class="btn btn-sm btn-link ms-auto" id="bulkClear" data-needs="">Clear selection</button>
+    </div>
+</div>
+<form id="bulkForm" method="post" action="/servers/{{ server.id }}/computers/bulk{{ view_qs }}" class="d-none">
+    <input type="hidden" name="action">
+    <input type="hidden" name="names">
+    <input type="hidden" name="target">
+</form>
 <div class="card shadow-sm">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
+                    <th style="width: 2rem;">
+                        <input type="checkbox" class="form-check-input" id="selectAll"
+                            aria-label="Select the computers on this page">
+                    </th>
                     <th>Name</th>
                     <th>DNS Hostname</th>
                     <th>Operating System</th>
-                    <th>Version</th>
                     <th>Status</th>
                     <th class="text-end">Actions</th>
                 </tr>
             </thead>
             <tbody data-paged="computers" data-search-input="listSearch">
+                {#- A domain can hold thousands of computers, so each row is kept short. #}
                 {% for computer in computers %}
-                <tr
-                    data-search="{{ computer.name }} {{ computer.dns_hostname }} {{ computer.os }} {{ computer.os_version }} {% if computer.enabled %}enabled{% else %}disabled{% endif %}">
-                    <td class="fw-medium">
-                        <i class="bi bi-pc-display me-1 text-secondary"></i>
-                        {{ computer.name }}
-                    </td>
-                    <td class="text-muted small">{{ computer.dns_hostname }}</td>
-                    <td>
-                        {% if computer.os %}
-                        <span class="small">{{ computer.os }}</span>
-                        {% else %}
-                        <span class="text-muted small">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="text-muted small">
-                        {% if computer.os_version %}{{ computer.os_version }}{% else %}—{% endif %}
-                    </td>
-                    <td>
-                        {% if computer.enabled %}
-                        <span class="badge bg-success-subtle text-success border border-success-subtle">
-                            <i class="bi bi-check-circle me-1"></i>Enabled
-                        </span>
-                        {% else %}
-                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle">
-                            <i class="bi bi-x-circle me-1"></i>Disabled
-                        </span>
-                        {% endif %}
-                    </td>
-                    <td class="text-end" data-needs="computers">
-                        <div class="btn-group btn-group-sm">
-                            <!-- Toggle -->
-                            <form method="post"
-                                action="/servers/{{ server.id }}/computers/{{ computer.name }}/toggle"
-                                class="d-inline">
-                                {% if computer.enabled %}
-                                <input type="hidden" name="enable" value="false">
-                                <button type="submit" class="btn btn-outline-warning btn-sm"
-                                    title="Disable computer account">
-                                    <i class="bi bi-pause-circle"></i>
-                                </button>
-                                {% else %}
-                                <input type="hidden" name="enable" value="true">
-                                <button type="submit" class="btn btn-outline-success btn-sm"
-                                    title="Enable computer account">
-                                    <i class="bi bi-play-circle"></i>
-                                </button>
-                                {% endif %}
-                            </form>
-                            <!-- Delete -->
-                            <button type="button" class="btn btn-outline-danger btn-sm"
-                                data-bs-toggle="modal" data-bs-target="#deleteComputerModal"
-                                data-name="{{ computer.name }}"
-                                data-url="/servers/{{ server.id }}/computers/{{ computer.name | urlencode_strict }}/delete"
-                                title="Remove from domain">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
+<tr data-search="{{ computer.name }} {{ computer.dns_hostname }} {{ computer.os }} {{ computer.os_version }} {{ computer.location }} {% if computer.is_dc %}domain controller{% endif %} {% if computer.enabled %}enabled{% else %}disabled{% endif %}">
+<td>{% if computer.is_dc %}<input type="checkbox" class="form-check-input js-select" value="{{ computer.account }}" disabled title="A domain controller stays as it is" aria-label="{{ computer.name }} is a domain controller and cannot be selected">{% else %}<input type="checkbox" class="form-check-input js-select" value="{{ computer.account }}" aria-label="Select {{ computer.name }}">{% endif %}</td>
+<td class="fw-medium"><i class="bi bi-{% if computer.is_dc %}hdd-rack{% else %}pc-display{% endif %} me-1 text-secondary"></i>{{ computer.name }}
+{% if computer.is_dc %}<span class="badge bg-primary-subtle text-primary border border-primary-subtle ms-1">Domain controller</span>{% endif %}
+{% if show_location and computer.location %}<div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ computer.location }}</div>{% endif %}</td>
+<td class="text-muted small">{{ computer.dns_hostname }}</td>
+<td>{% if computer.os %}<span class="small">{{ computer.os }}</span>{% if computer.os_version %}<div class="small text-muted">{{ computer.os_version }}</div>{% endif %}{% else %}<span class="text-muted small">—</span>{% endif %}</td>
+<td>{% if computer.enabled %}<span class="badge bg-success-subtle text-success border border-success-subtle"><i class="bi bi-check-circle me-1"></i>Enabled</span>
+{% else %}<span class="badge bg-danger-subtle text-danger border border-danger-subtle"><i class="bi bi-x-circle me-1"></i>Disabled</span>{% endif %}</td>
+<td class="text-end">{% if computer.is_dc %}<span class="small text-muted" title="Disabling, moving or deleting a domain controller's account would stop it working as one">—</span>{% else %}<div class="btn-group btn-group-sm" data-needs="computers">
+<form method="post" action="/servers/{{ server.id }}/computers/{{ computer.account | urlencode_strict }}/toggle{{ view_qs }}" class="d-inline">{% if computer.enabled %}<input type="hidden" name="enable" value="false"><button type="submit" class="btn btn-outline-warning btn-sm" title="Disable computer account"><i class="bi bi-pause-circle"></i></button>{% else %}<input type="hidden" name="enable" value="true"><button type="submit" class="btn btn-outline-success btn-sm" title="Enable computer account"><i class="bi bi-play-circle"></i></button>{% endif %}</form>
+<button type="button" class="btn btn-outline-secondary btn-sm js-move-one" title="Move to another OU"><i class="bi bi-folder-symlink"></i></button>
+<button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteComputerModal" data-name="{{ computer.name }}" data-url="/servers/{{ server.id }}/computers/{{ computer.account | urlencode_strict }}/delete{{ view_qs }}" title="Remove from domain"><i class="bi bi-trash"></i></button>
+</div>{% endif %}</td>
+</tr>
                 {% endfor %}
                 <tr class="js-no-match d-none">
                     <td colspan="6" class="text-center text-muted py-4">No computer matches the search.</td>
@@ -118,6 +113,8 @@
     </div>
 </div>
 {% endif %}
+</div>
+</div>
 
 <!-- Delete: one dialog, filled from the row's button -->
 <div class="modal fade js-row-dialog" id="deleteComputerModal" tabindex="-1">
@@ -146,5 +143,11 @@
         </div>
     </div>
 </div>
+
+{% set move_hint = "Computers keep their name, groups and the domain trust. Group Policy linked to the new OU applies from their next refresh." %}
+{% include "bulk.html" %}
+<script>
+EasyBulk.setup({ table: 'computers', one: 'computer', many: 'computers' });
+</script>
 
 {% endblock %}

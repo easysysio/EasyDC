@@ -100,8 +100,16 @@ a user, the list comes back on the same page with the same search.
 
 ## Computers
 
-List the computer accounts in the domain, **enable or disable** them, and **delete**
-accounts for machines that are gone.
+Computers are listed by **OU and container**, as users are, with **Include nested OUs** to
+add the ones below. **Enable or disable** a computer account, **move** it to another OU, or
+**delete** the account of a machine that is gone. Tick computers to enable, disable or
+move many at once; a big selection is sent in parts, as on the Users page.
+
+Computers are added by joining them to the domain from the computer itself. **Domain
+controllers** are marked and left alone: EasyDC does not disable, move or delete a DC's
+account, since that would stop it working as one. To remove a DC, demote it first
+(`samba-tool domain demote` on that DC). Domain Controllers is not offered as a place to
+move other computers to, because its policies are meant for DCs.
 
 ## DNS
 

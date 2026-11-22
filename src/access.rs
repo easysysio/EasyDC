@@ -273,6 +273,7 @@ mod tests {
         assert_eq!(post("/servers/:id/users/bulk"), Need::Edit(Area::Users));
         assert_eq!(post("/servers/:id/groups/:name/members/add"), Need::Edit(Area::Groups));
         assert_eq!(post("/servers/:id/computers/:name/toggle"), Need::Edit(Area::Computers));
+        assert_eq!(post("/servers/:id/computers/bulk"), Need::Edit(Area::Computers));
         assert_eq!(post("/servers/:id/dns/:zone/add"), Need::Edit(Area::DnsRecords));
         assert_eq!(post("/servers/:id/dns-zones/:zone/delete"), Need::Edit(Area::DnsZones));
         assert_eq!(post("/servers/:id/gpo/:guid/links/add"), Need::Edit(Area::Gpos));

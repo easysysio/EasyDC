@@ -130,6 +130,7 @@ async fn main() {
         .route("/servers/:id/ous/delete", post(handlers::ldap_mgmt::ou_delete))
         .route("/servers/:id/ous/move", post(handlers::ldap_mgmt::ou_move_object))
         .route("/servers/:id/computers", get(handlers::ldap_mgmt::computers))
+        .route("/servers/:id/computers/bulk", post(handlers::ldap_mgmt::bulk_computers))
         .route("/servers/:id/computers/:name/delete", post(handlers::ldap_mgmt::delete_computer))
         .route("/servers/:id/computers/:name/toggle", post(handlers::ldap_mgmt::toggle_computer))
         .route("/servers/:id/dns", get(handlers::ldap_mgmt::dns))

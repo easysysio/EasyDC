@@ -842,10 +842,13 @@ pub struct UserContainer {
 /// containers (such as `CN=Users` or `CN=Builtin`) that hold one of the
 /// objects listed, given by the DN of the container each is in. Like Active
 /// Directory Users and Computers, "advanced" ones such as `CN=System` are left out.
+/// `keep` names a container shown even when empty — the page's default one
+/// (`CN=Users`, `CN=Computers`), so there is always somewhere to move back to.
 pub async fn list_containers(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
     objects_in: &[&str],
+    keep: &str,
 ) -> LdapResult<Vec<UserContainer>> {
     let (entries, _) = ldap
         .with_timeout(OP_TIMEOUT)
@@ -870,10 +873,15 @@ pub async fn list_containers(
             (e.dn, is_ou)
         })
         .collect();
-    Ok(container_tree(base_dn, found, objects_in))
+    Ok(container_tree(base_dn, found, objects_in, keep))
 }
 
-pub(crate) fn container_tree(base_dn: &str, mut found: Vec<(String, bool)>, objects_in: &[&str]) -> Vec<UserContainer> {
+pub(crate) fn container_tree(
+    base_dn: &str,
+    mut found: Vec<(String, bool)>,
+    objects_in: &[&str],
+    keep: &str,
+) -> Vec<UserContainer> {
     found.sort_by_cached_key(|(dn, _)| dn_tree_sort_key(dn));
 
     let mut direct: std::collections::HashMap<String, usize> = Default::default();
@@ -898,7 +906,7 @@ pub(crate) fn container_tree(base_dn: &str, mut found: Vec<(String, bool)>, obje
         let count = total.get(&key).copied().unwrap_or(0);
         // A container with none of the objects (Computers on the Users page,
         // ForeignSecurityPrincipals…) is noise here. An OU stays: it is the domain's own structure.
-        if !in_tree || (!is_ou && count == 0) {
+        if !in_tree || (!is_ou && count == 0 && !key.eq_ignore_ascii_case(keep)) {
             continue;
         }
         kept.insert(key.clone());
@@ -1264,22 +1272,6 @@ pub async fn delete_user(
 /// turning its account into a workstation's.
 fn with_account_disabled(uac: i64, disabled: bool) -> i64 {
     if disabled { uac | 0x2 } else { uac & !0x2 }
-}
-
-async fn read_uac(ldap: &mut ldap3::Ldap, dn: &str) -> LdapResult<i64> {
-    let (entries, _) = ldap
-        .with_timeout(OP_TIMEOUT)
-        .search(dn, Scope::Base, "(objectClass=*)", vec!["userAccountControl"])
-        .await
-        .map_err(ldap_err)?
-        .success()
-        .map_err(ldap_err)?;
-    entries
-        .into_iter()
-        .next()
-        .map(SearchEntry::construct)
-        .and_then(|e| attr(&e, "userAccountControl").parse::<i64>().ok())
-        .ok_or_else(|| format!("Could not read userAccountControl of {}", dn))
 }
 
 /// Enable or disable a user found with [`find_user_for_change`]. A user
@@ -2161,31 +2153,81 @@ pub struct LdapComputer {
     pub dn: String,
     pub name: String,
     pub sam_account: String,
+    /// The account name without its `$`: unique in the domain, unlike the
+    /// name, so the page acts on computers by it.
+    pub account: String,
     pub dns_hostname: String,
     pub os: String,
     pub os_version: String,
     pub enabled: bool,
+    /// A domain controller's own account, which EasyDC leaves alone.
+    pub is_dc: bool,
+    /// DN of the OU or container it is in.
+    pub container: String,
+    /// Where that is, read top down: `Sales › Laptops`.
+    pub location: String,
 }
 
-async fn find_computer_dn(
-    ldap: &mut ldap3::Ldap,
-    base_dn: &str,
-    name: &str,
-) -> LdapResult<String> {
-    let filter = format!("(&(objectClass=computer)(cn={}))", ldap_escape(name));
+/// userAccountControl's SERVER_TRUST_ACCOUNT: the account of a domain controller.
+const SERVER_TRUST_ACCOUNT: i64 = 0x2000;
+
+/// A computer about to be changed: its entry, and whether it is a DC.
+struct ComputerEntry {
+    dn: String,
+    name: String,
+    uac: i64,
+}
+
+impl ComputerEntry {
+    fn is_dc(&self) -> bool {
+        self.uac & SERVER_TRUST_ACCOUNT != 0
+    }
+
+    /// Refuse a change that would take a domain controller out of the domain.
+    fn refuse_dc(&self, doing: &str) -> LdapResult<()> {
+        if !self.is_dc() {
+            return Ok(());
+        }
+        if doing == "delete" {
+            return Err(format!(
+                "{} is a domain controller, so EasyDC does not delete it. To remove a DC, demote it first \
+                 (samba-tool domain demote on that DC).",
+                self.name
+            ));
+        }
+        Err(format!(
+            "{} is a domain controller, so EasyDC does not {doing} it: that would stop it working as one.",
+            self.name
+        ))
+    }
+}
+
+/// The computer whose account name is `account` (with or without its `$`).
+async fn find_computer(ldap: &mut ldap3::Ldap, base_dn: &str, account: &str) -> LdapResult<ComputerEntry> {
+    let account = account.trim().trim_end_matches('$');
+    let filter = format!("(&(objectClass=computer)(sAMAccountName={}$))", ldap_escape(account));
     let (entries, _) = ldap
         .with_timeout(OP_TIMEOUT)
-        .search(base_dn, Scope::Subtree, &filter, vec!["dn"])
+        .search(base_dn, Scope::Subtree, &filter, vec!["cn", "userAccountControl"])
         .await
         .map_err(ldap_err)?
         .success()
         .map_err(ldap_err)?;
 
-    entries
+    let e = entries
         .into_iter()
         .next()
-        .map(|e| SearchEntry::construct(e).dn)
-        .ok_or_else(|| format!("Computer '{}' not found", name))
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("Computer '{}' not found", account))?;
+    // Read, not assumed: it is written back with one bit changed.
+    let uac = attr(&e, "userAccountControl")
+        .parse()
+        .map_err(|_| format!("Could not read userAccountControl of {}", e.dn))?;
+    Ok(ComputerEntry {
+        name: Some(attr(&e, "cn")).filter(|n| !n.is_empty()).unwrap_or_else(|| account.to_string()),
+        uac,
+        dn: e.dn,
+    })
 }
 
 pub async fn list_computers(
@@ -2217,17 +2259,23 @@ pub async fn list_computers(
         .map(|e| {
             let e = SearchEntry::construct(e);
             let uac: i64 = attr(&e, "userAccountControl").parse().unwrap_or(4096);
+            let sam_account = attr(&e, "sAMAccountName");
+            let container = parent_dn(&e.dn).to_string();
             LdapComputer {
-                dn: e.dn.clone(),
                 name: attr(&e, "cn"),
-                sam_account: attr(&e, "sAMAccountName"),
+                account: sam_account.trim_end_matches('$').to_string(),
+                sam_account,
                 dns_hostname: attr(&e, "dNSHostName"),
                 os: attr(&e, "operatingSystem"),
                 os_version: attr(&e, "operatingSystemVersion"),
                 enabled: (uac & 2) == 0,
+                is_dc: uac & SERVER_TRUST_ACCOUNT != 0,
+                location: location(&container, base_dn),
+                container,
+                dn: e.dn,
             }
         })
-        .filter(|c| !c.name.is_empty())
+        .filter(|c| !c.name.is_empty() && !c.account.is_empty())
         .collect();
 
     computers.sort_by_key(|a| a.name.to_lowercase());
@@ -2237,10 +2285,12 @@ pub async fn list_computers(
 pub async fn delete_computer(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
-    name: &str,
+    account: &str,
 ) -> LdapResult<()> {
-    let dn = find_computer_dn(ldap, base_dn, name).await?;
-    let res = ldap.with_timeout(OP_TIMEOUT).delete(&dn).await.map_err(ldap_err)?;
+    let computer = find_computer(ldap, base_dn, account).await?;
+    computer.refuse_dc("delete")?;
+    let name = computer.name.as_str();
+    let res = ldap.with_timeout(OP_TIMEOUT).delete(&computer.dn).await.map_err(ldap_err)?;
     let what = format!("{name} was not deleted");
     match res.rc {
         0 => Ok(()),
@@ -2255,21 +2305,36 @@ pub async fn delete_computer(
 pub async fn set_computer_enabled(
     ldap: &mut ldap3::Ldap,
     base_dn: &str,
-    name: &str,
+    account: &str,
     enable: bool,
 ) -> LdapResult<()> {
-    let dn = find_computer_dn(ldap, base_dn, name).await?;
-    let uac = with_account_disabled(read_uac(ldap, &dn).await?, !enable);
+    let computer = find_computer(ldap, base_dn, account).await?;
+    if !enable {
+        computer.refuse_dc("disable")?;
+    }
+    let name = computer.name.as_str();
+    let uac = with_account_disabled(computer.uac, !enable);
+    if uac == computer.uac {
+        return Ok(());
+    }
     let mods: Vec<Mod<Vec<u8>>> = vec![Mod::Replace(
         sv("userAccountControl"),
         HashSet::from([sv(&uac.to_string())]),
     )];
-    let res = ldap.with_timeout(OP_TIMEOUT).modify(&dn, mods).await.map_err(ldap_err)?;
+    let res = ldap.with_timeout(OP_TIMEOUT).modify(&computer.dn, mods).await.map_err(ldap_err)?;
     if res.rc != 0 {
         let what = format!("{name} was not {}", if enable { "enabled" } else { "disabled" });
         return Err(refused(&what, &format!("computer {name}"), &res));
     }
     Ok(())
+}
+
+/// Move a computer into the OU or container `target`. A domain controller
+/// stays in Domain Controllers, where the policies DCs need apply.
+pub async fn move_computer(ldap: &mut ldap3::Ldap, base_dn: &str, account: &str, target: &str) -> LdapResult<()> {
+    let computer = find_computer(ldap, base_dn, account).await?;
+    computer.refuse_dc("move")?;
+    move_entry(ldap, base_dn, &computer.dn, target).await
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4748,6 +4813,16 @@ mod account_toggle_tests {
         assert_eq!(with_account_disabled(514, true), 514);
         assert_eq!(with_account_disabled(512, false), 512);
     }
+
+    /// EasyDC does not disable, move or delete a DC's own account.
+    #[test]
+    fn a_domain_controller_is_refused_changes() {
+        let entry = |uac| super::ComputerEntry { dn: "CN=DC1,OU=Domain Controllers,DC=x".into(), name: "DC1".into(), uac };
+        let e = entry(0x2000 | 0x80000).refuse_dc("disable").unwrap_err();
+        assert_eq!(e, "DC1 is a domain controller, so EasyDC does not disable it: that would stop it working as one.");
+        assert!(entry(4096).refuse_dc("move").is_ok(), "a workstation may be moved");
+        assert!(entry(0x2000).refuse_dc("delete").unwrap_err().contains("demote it first"));
+    }
 }
 
 #[cfg(test)]
@@ -5367,7 +5442,7 @@ mod user_tree_tests {
         ];
         let users = [u("CN=Users"), u("OU=Sales"), u("OU=Europe,OU=Sales"), u("OU=Europe,OU=Sales")];
         let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
-        let tree = container_tree(BASE, found, &objects_in);
+        let tree = container_tree(BASE, found, &objects_in, "");
         let shown: Vec<(&str, usize, usize, usize)> =
             tree.iter().map(|c| (c.name.as_str(), c.depth, c.direct, c.total)).collect();
         assert_eq!(

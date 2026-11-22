@@ -1,0 +1,216 @@
+{# Selecting rows and acting on all of them at once, shared by the Users and
+   Computers pages. The page has a table registered with EasyTable whose rows
+   carry a `.js-select` checkbox (its value is what the action is given; a
+   disabled one cannot be selected), `#selectAll`, `#bulkBar` with
+   `#bulkCount`, `.js-bulk` buttons (data-action), `.js-bulk-move`,
+   `#selectMatching` and `#bulkClear`, `#bulkForm` (action, names, target),
+   `#bulkNote`, and `.js-move-one` buttons in rows. Expects `tree` for the
+   Move dialog, `move_hint` under it, and optionally `move_skip`, the lowercase
+   DN of an OU not to offer. The page then calls
+   EasyBulk.setup({ table, one, many }, function (api) { … }). #}
+<div class="modal fade" id="moveModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-folder-symlink me-1"></i> Move <span id="moveWho"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="form-label" for="moveTarget">To</label>
+                <select id="moveTarget" class="form-select">
+                    {% for node in tree | default(value=[]) %}{% if node.dn and node.dn | lower != move_skip | default(value="") %}
+                    <option value="{{ node.dn }}">{% for i in range(end=node.depth - 1) %}&nbsp;&nbsp;&nbsp;{% endfor %}{{ node.name }}</option>
+                    {% endif %}{% endfor %}
+                </select>
+                <div class="form-text">{{ move_hint }}</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="moveGo">Move</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- A big selection is sent in parts; this shows how far it has got. -->
+<div class="modal fade" id="bulkProgress" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body">
+                <p class="fw-medium mb-2 js-doing"></p>
+                <div class="progress mb-2" role="progressbar" aria-label="Progress">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+                </div>
+                <p class="small text-muted mb-0"><span class="js-progress">Starting…</span>. Keep this page open until it finishes.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// What a bulk action sent in parts did, carried over its reload.
+(function () {
+    let saved = null;
+    try {
+        saved = JSON.parse(sessionStorage.getItem('easydc.bulkNote') || 'null');
+        sessionStorage.removeItem('easydc.bulkNote');
+    } catch (e) { /* storage blocked */ }
+    if (!saved || Date.now() - saved.at > 60000) return;
+    const place = document.getElementById('bulkNote');
+    saved.notes.forEach(function (note) {
+        const div = document.createElement('div');
+        div.className = 'alert ' + (note.ok ? 'alert-success' : 'alert-danger');
+        const icon = document.createElement('i');
+        icon.className = 'bi me-1 ' + (note.ok ? 'bi-check-circle' : 'bi-exclamation-triangle');
+        div.append(icon, ' ', note.text);
+        place.appendChild(div);
+    });
+})();
+
+// Select rows, then act on all of them at once. Selected rows stay
+// selected from page to page; the search unselects the ones it hides, so
+// an action only ever touches rows that match what is on screen.
+const EasyBulk = {
+    setup: function (o, more) {
+        EasyTable.ready(function () {
+            const list = EasyTable.get(o.table);
+            const bulkBar = document.getElementById('bulkBar');
+            if (!list || !bulkBar) return;
+            const box = row => row.querySelector('.js-select');
+            const usable = row => box(row) && !box(row).disabled;
+            const selectAll = document.getElementById('selectAll');
+            const bulkForm = document.getElementById('bulkForm');
+            const everyone = document.getElementById('selectMatching');
+            let moving = [];
+
+            const selected = () => list.rows.filter(r => usable(r) && box(r).checked).map(r => box(r).value);
+            const countText = n => n === 1 ? '1 ' + o.one : n.toLocaleString() + ' ' + o.many;
+
+            function update() {
+                const n = selected().length;
+                bulkBar.classList.toggle('d-none', n === 0);
+                document.getElementById('bulkCount').textContent = n.toLocaleString();
+                document.querySelectorAll('.js-bulk-count').forEach(e => { e.textContent = countText(n); });
+                const page = list.shown.filter(usable).map(box);
+                selectAll.checked = page.length > 0 && page.every(b => b.checked);
+                selectAll.indeterminate = !selectAll.checked && page.some(b => b.checked);
+                selectAll.disabled = page.length === 0;
+                const all = list.matching.filter(usable).length;
+                everyone.classList.toggle('d-none', !selectAll.checked || n >= all);
+                everyone.textContent = 'Select all ' + countText(all);
+            }
+
+            list.on(function () {
+                const keep = new Set(list.matching);
+                list.rows.forEach(r => { if (box(r) && !keep.has(r)) box(r).checked = false; });
+                update();
+            });
+            list.body.addEventListener('change', e => { if (e.target.classList.contains('js-select')) update(); });
+            selectAll.addEventListener('change', function () {
+                list.shown.filter(usable).forEach(r => { box(r).checked = selectAll.checked; });
+                update();
+            });
+            everyone.addEventListener('click', function () {
+                list.matching.filter(usable).forEach(r => { box(r).checked = true; });
+                update();
+            });
+            document.getElementById('bulkClear').addEventListener('click', function () {
+                list.rows.filter(usable).forEach(r => { box(r).checked = false; });
+                update();
+            });
+
+            function submit(action, names, target) {
+                if (names.length > PART) return sendInParts(action, names, target || '');
+                bulkForm.elements.action.value = action;
+                bulkForm.elements.names.value = names.join('\n');
+                bulkForm.elements.target.value = target || '';
+                bulkForm.requestSubmit();
+            }
+
+            // The DC makes about 30 changes a second, so a big selection goes in
+            // parts of a few seconds each: no request runs long enough for a proxy
+            // in front of EasyDC to give up on it, and the dialog shows progress.
+            const PART = 100;
+            const LISTED = 20; // as many failures as the page lists after a bulk action
+            const doing = { enable: 'Enabling', disable: 'Disabling', move: 'Moving', add_to_group: 'Adding' };
+            // Not bulkForm.action: the form has a field named "action", which hides it.
+            const bulkUrl = bulkForm.getAttribute('action');
+            async function sendInParts(action, names, target) {
+                document.querySelectorAll('.modal.show').forEach(m => bootstrap.Modal.getInstance(m).hide());
+                const dialog = document.getElementById('bulkProgress');
+                const bar = dialog.querySelector('.progress-bar');
+                const progress = dialog.querySelector('.js-progress');
+                dialog.querySelector('.js-doing').textContent = doing[action] + ' ' + countText(names.length) + '…';
+                bootstrap.Modal.getOrCreateInstance(dialog).show();
+                const leaving = e => { e.preventDefault(); e.returnValue = ''; };
+                window.addEventListener('beforeunload', leaving);
+
+                let sent = 0, failed = [], outcome = null, stopped = null;
+                while (sent < names.length && !stopped) {
+                    const part = names.slice(sent, sent + PART);
+                    const body = new URLSearchParams({ action: action, names: part.join('\n'), target: target, part: '1' });
+                    try {
+                        const answer = await (await fetch(bulkUrl, { method: 'POST', body: body, headers: { Accept: 'application/json' } })).json();
+                        if (answer.error) {
+                            stopped = answer.error;
+                        } else {
+                            outcome = answer;
+                            failed = failed.concat(answer.failed);
+                            sent += part.length;
+                        }
+                    } catch (e) {
+                        // Not an answer from the bulk action: the network, or a sign-in page.
+                        stopped = 'EasyDC did not answer as expected.';
+                    }
+                    bar.style.width = (100 * sent / names.length) + '%';
+                    progress.textContent = sent.toLocaleString() + ' of ' + names.length.toLocaleString() + ' done';
+                }
+                window.removeEventListener('beforeunload', leaving);
+
+                const notes = [];
+                if (outcome) {
+                    const done = sent - failed.length;
+                    if (failed.length === 0) {
+                        notes.push({ ok: true, text: outcome.verb + ' ' + countText(done) + outcome.place + '.' });
+                    } else {
+                        let listed = failed.slice(0, LISTED).join('; ');
+                        if (failed.length > LISTED) listed += '; and ' + (failed.length - LISTED).toLocaleString() + ' more, listed in the Audit Log';
+                        notes.push({ text: outcome.verb + ' ' + done.toLocaleString() + ' of ' + countText(sent) + outcome.place + '. Not done: ' + listed });
+                    }
+                }
+                if (stopped) {
+                    notes.push({ text: 'Stopped after ' + sent.toLocaleString() + ' of ' + countText(names.length) + ': ' + stopped +
+                        ' The other ' + (names.length - sent).toLocaleString() + ' were not changed.' });
+                }
+                try { sessionStorage.setItem('easydc.bulkNote', JSON.stringify({ at: Date.now(), notes: notes })); } catch (e) { /* ignore */ }
+                EasyTable.remember();
+                location.href = bulkUrl.replace('/bulk', '');
+            }
+            document.querySelectorAll('.js-bulk').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    const names = selected();
+                    const action = button.dataset.action;
+                    if (action === 'disable' && !confirm('Disable ' + countText(names.length) + '?')) return;
+                    submit(action, names);
+                });
+            });
+
+            function openMove(names) {
+                moving = names;
+                document.getElementById('moveWho').textContent = names.length === 1 ? names[0] : countText(names.length);
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('moveModal')).show();
+            }
+            document.querySelector('.js-bulk-move').addEventListener('click', () => openMove(selected()));
+            list.body.addEventListener('click', function (e) {
+                const one = e.target.closest('.js-move-one');
+                if (one) openMove([box(one.closest('tr')).value]);
+            });
+            document.getElementById('moveGo').addEventListener('click', function () {
+                submit('move', moving, document.getElementById('moveTarget').value);
+            });
+            if (more) more({ selected: selected, submit: submit, countText: countText });
+            update();
+        });
+    }
+};
+</script>
