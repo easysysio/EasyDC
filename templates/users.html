@@ -264,7 +264,7 @@
 </div>
 
 <!-- ── Edit, Reset password and Delete: one of each, filled from the row ── -->
-<div id="userActions" data-base="/servers/{{ server.id }}/users/" data-qs="{{ view_qs }}">
+<div id="userActions" data-base="/servers/{{ server.id }}/users/" data-qs="{{ view_qs }}" data-groups="/servers/{{ server.id }}/groups/">
 <div class="modal fade" id="editUserModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -274,76 +274,111 @@
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form method="post" data-path="edit" data-needs="users">
+            <ul class="nav nav-tabs px-3 pt-2" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button type="button" class="nav-link active js-details-tab" data-bs-toggle="tab"
+                        data-bs-target="#editDetails" role="tab" aria-controls="editDetails">Details</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button type="button" class="nav-link js-groups-tab" data-bs-toggle="tab"
+                        data-bs-target="#editGroups" role="tab" aria-controls="editGroups">Groups</button>
+                </li>
+            </ul>
+            <div class="tab-content">
+            <div class="tab-pane fade show active" id="editDetails" role="tabpanel">
+                <form method="post" data-path="edit" data-needs="users">
+                    <div class="modal-body">
+                        <div class="row">
+                            <div class="col mb-3">
+                                <label class="form-label">First Name</label>
+                                <input type="text" name="first_name" class="form-control">
+                            </div>
+                            <div class="col mb-3">
+                                <label class="form-label">Last Name</label>
+                                <input type="text" name="last_name" class="form-control">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email</label>
+                            <input type="email" name="email" class="form-control">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description</label>
+                            <input type="text" name="description" class="form-control" maxlength="1024">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">New Password</label>
+                            <input type="password" name="password" class="form-control"
+                                placeholder="Leave blank to keep current">
+                        </div>
+                        <h6 class="text-muted text-uppercase small mt-2 mb-3">Profile</h6>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Job Title</label>
+                                <input type="text" name="title" class="form-control" maxlength="128">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Department</label>
+                                <input type="text" name="department" class="form-control" maxlength="64">
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Office</label>
+                                <input type="text" name="office" class="form-control" maxlength="128">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Manager</label>
+                                <input type="text" name="manager" class="form-control" list="userDirectory"
+                                    placeholder="Username">
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Phone</label>
+                                <input type="tel" name="phone" class="form-control" maxlength="64">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Mobile</label>
+                                <input type="tel" name="mobile" class="form-control" maxlength="64">
+                            </div>
+                        </div>
+                        <div class="mb-1">
+                            <label class="form-label">Account Expires</label>
+                            <input type="date" name="expires" class="form-control w-auto">
+                            <div class="form-text">
+                                Leave blank for never. The account can be used until the end of this day (UTC).
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+            <div class="tab-pane fade" id="editGroups" role="tabpanel">
                 <div class="modal-body">
-                    <div class="row">
-                        <div class="col mb-3">
-                            <label class="form-label">First Name</label>
-                            <input type="text" name="first_name" class="form-control">
-                        </div>
-                        <div class="col mb-3">
-                            <label class="form-label">Last Name</label>
-                            <input type="text" name="last_name" class="form-control">
-                        </div>
+                    <div class="js-groups-error"></div>
+                    <ul class="list-group mb-3 js-groups-list"></ul>
+                    <label class="form-label" for="editGroupName">Add to a group</label>
+                    <div class="input-group" data-needs="groups">
+                        <input type="text" id="editGroupName" class="form-control js-group-name" list="groupNames"
+                            autocomplete="off" placeholder="Group name">
+                        <button type="button" class="btn btn-outline-primary js-group-add">
+                            <i class="bi bi-plus-lg me-1"></i>Add
+                        </button>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Email</label>
-                        <input type="email" name="email" class="form-control">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Description</label>
-                        <input type="text" name="description" class="form-control" maxlength="1024">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">New Password</label>
-                        <input type="password" name="password" class="form-control"
-                            placeholder="Leave blank to keep current">
-                    </div>
-                    <h6 class="text-muted text-uppercase small mt-2 mb-3">Profile</h6>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Job Title</label>
-                            <input type="text" name="title" class="form-control" maxlength="128">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Department</label>
-                            <input type="text" name="department" class="form-control" maxlength="64">
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Office</label>
-                            <input type="text" name="office" class="form-control" maxlength="128">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Manager</label>
-                            <input type="text" name="manager" class="form-control" list="userDirectory"
-                                placeholder="Username">
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Phone</label>
-                            <input type="tel" name="phone" class="form-control" maxlength="64">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Mobile</label>
-                            <input type="tel" name="mobile" class="form-control" maxlength="64">
-                        </div>
-                    </div>
-                    <div class="mb-1">
-                        <label class="form-label">Account Expires</label>
-                        <input type="date" name="expires" class="form-control w-auto">
-                        <div class="form-text">
-                            Leave blank for never. The account can be used until the end of this day (UTC).
-                        </div>
+                    <div class="form-text">
+                        Changes are made at once. The groups the user is directly in are listed; the
+                        primary group is kept on the user itself, so it is not removed here.
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 </div>
-            </form>
+            </div>
+            </div>
         </div>
     </div>
 </div>
@@ -414,10 +449,13 @@
 // The path of an action on one user. Dots are encoded too, so a name can
 // never read as "." or ".." in the URL.
 const userActions = document.getElementById('userActions');
-function userUrl(user, path) {
-    const name = encodeURIComponent(user).replace(/[.!'()*~]/g,
+// A name as one URL path segment, encoded as the server's own links are.
+function segment(name) {
+    return encodeURIComponent(name).replace(/[.!'()*~]/g,
         c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
-    return userActions.dataset.base + name + '/' + path + userActions.dataset.qs;
+}
+function userUrl(user, path) {
+    return userActions.dataset.base + segment(user) + '/' + path + userActions.dataset.qs;
 }
 
 // Edit, Reset password and Delete are one dialog each, filled from the row
@@ -441,6 +479,114 @@ userActions.querySelectorAll('.modal').forEach(function (modal) {
         }
     });
 });
+
+// The Edit dialog's Groups tab: read when it is opened, changed in place.
+(function () {
+    const modal = document.getElementById('editUserModal');
+    const list = modal.querySelector('.js-groups-list');
+    const problem = modal.querySelector('.js-groups-error');
+    const input = modal.querySelector('.js-group-name');
+    const addButton = modal.querySelector('.js-group-add');
+    let user = null, dn = null;
+
+    function say(text) {
+        problem.replaceChildren();
+        if (!text) return;
+        const box = document.createElement('div');
+        box.className = 'alert alert-danger py-2 small';
+        box.textContent = text;
+        problem.append(box);
+    }
+    function line(text) {
+        const li = document.createElement('li');
+        li.className = 'list-group-item text-muted small';
+        li.textContent = text;
+        return li;
+    }
+    async function ask(url, body) {
+        const options = { headers: { Accept: 'application/json' } };
+        if (body) Object.assign(options, { method: 'POST', body: new URLSearchParams(body) });
+        try {
+            return await (await fetch(url, options)).json();
+        } catch (e) {
+            // Not an answer from EasyDC: the network, or a sign-in page.
+            return { error: 'EasyDC did not answer as expected.' };
+        }
+    }
+    function show(groups) {
+        list.replaceChildren();
+        if (!groups.length) list.append(line('Not in any group.'));
+        groups.forEach(function (g) {
+            const li = document.createElement('li');
+            li.className = 'list-group-item d-flex align-items-center gap-2';
+            const text = document.createElement('div');
+            text.className = 'me-auto';
+            const name = document.createElement('div');
+            name.className = 'fw-medium';
+            name.textContent = g.name;
+            if (g.primary) {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-secondary-subtle text-secondary border border-secondary-subtle ms-2';
+                badge.textContent = 'Primary group';
+                name.append(badge);
+            }
+            const where = document.createElement('div');
+            where.className = 'small text-muted';
+            where.textContent = [g.location, g.description].filter(Boolean).join(' · ');
+            text.append(name, where);
+            li.append(text);
+            if (!g.primary) {
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'btn btn-sm btn-outline-danger';
+                remove.dataset.needs = 'groups';
+                remove.title = 'Remove from ' + g.name;
+                remove.setAttribute('aria-label', remove.title);
+                remove.innerHTML = '<i class="bi bi-x-lg"></i>';
+                remove.addEventListener('click', () => change(g.name, 'remove', { member_dn: dn }, remove));
+                li.append(remove);
+            }
+            list.append(li);
+        });
+    }
+    async function load() {
+        say(null);
+        list.replaceChildren(line('Loading…'));
+        const answer = await ask(userUrl(user, 'groups'));
+        if (answer.error) {
+            list.replaceChildren();
+            return say(answer.error);
+        }
+        dn = answer.dn;
+        show(answer.groups);
+    }
+    async function change(group, how, body, button) {
+        button.disabled = true;
+        const answer = await ask(userActions.dataset.groups + segment(group) + '/members/' + how, body);
+        button.disabled = false;
+        if (answer.error) return say(answer.error);
+        if (how === 'add') input.value = '';
+        await load();
+    }
+    addButton.addEventListener('click', function () {
+        const group = input.value.trim();
+        if (group) change(group, 'add', { member: user }, addButton);
+    });
+    input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); addButton.click(); }
+    });
+    modal.addEventListener('show.bs.modal', function (event) {
+        const row = event.relatedTarget && event.relatedTarget.closest('tr');
+        if (!row) return;
+        user = row.dataset.user;
+        dn = null;
+        input.value = '';
+        say(null);
+        list.replaceChildren();
+        bootstrap.Tab.getOrCreateInstance(modal.querySelector('.js-details-tab')).show();
+    });
+    modal.querySelector('.js-groups-tab').addEventListener('show.bs.tab', load);
+})();
 
 // Select users and act on them at once (bulk.html); adding them to a group is the Users page's own.
 EasyBulk.setup({ table: 'users', one: 'user', many: 'users' }, function (bulk) {

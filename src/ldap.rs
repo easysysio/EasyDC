@@ -1558,6 +1558,78 @@ async fn parent_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapR
     search_groups(ldap, base_dn, &format!("(member={})", ldap_escape(dn)), Members::Skip).await
 }
 
+/// One group a user is in, for the Edit dialog.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct UserGroup {
+    pub name: String,
+    pub dn: String,
+    pub description: String,
+    /// Where the group is: `Sales › Europe`.
+    pub location: String,
+    /// The user's primary group (usually Domain Users). AD keeps it as a
+    /// number on the user, not in the group's members, so it cannot be removed.
+    pub primary: bool,
+}
+
+/// The groups a user is directly in, the primary group first, and the user's DN.
+pub async fn user_groups(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) -> LdapResult<(String, Vec<UserGroup>)> {
+    let filter = format!(
+        "(&(objectClass=user)(!(objectClass=computer))(sAMAccountName={}))",
+        ldap_escape(username.trim())
+    );
+    let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(base_dn, Scope::Subtree, &filter, vec!["primaryGroupID", "objectSid"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    let user = entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .ok_or_else(|| format!("User '{}' not found", username.trim()))?;
+
+    let as_row = |g: LdapGroup, primary: bool| UserGroup {
+        location: location(&g.container, base_dn),
+        name: g.name,
+        dn: g.dn,
+        description: g.description,
+        primary,
+    };
+    let mut groups: Vec<UserGroup> =
+        parent_groups(ldap, base_dn, &user.dn).await?.into_iter().map(|g| as_row(g, false)).collect();
+
+    // The primary group's SID is the domain's SID and primaryGroupID.
+    let sid = user.bin_attrs.get("objectSid").and_then(|v| v.first()).and_then(|b| sid_string(b));
+    let rid = attr(&user, "primaryGroupID").parse::<u32>().ok();
+    if let (Some(sid), Some(rid)) = (sid, rid)
+        && let Some((domain, _)) = sid.rsplit_once('-')
+    {
+        let filter = format!("(objectSid={domain}-{rid})");
+        if let Some(g) = search_groups(ldap, base_dn, &filter, Members::Skip).await?.into_iter().next() {
+            groups.retain(|x| !x.dn.eq_ignore_ascii_case(&g.dn));
+            groups.insert(0, as_row(g, true));
+        }
+    }
+    Ok((user.dn, groups))
+}
+
+/// A binary SID as text: `S-1-5-21-…-1105` (revision, 48-bit authority,
+/// then the sub-authorities, little-endian).
+fn sid_string(b: &[u8]) -> Option<String> {
+    let count = usize::from(*b.get(1)?);
+    if b.len() != 8 + 4 * count {
+        return None;
+    }
+    let authority = b[2..8].iter().fold(0u64, |a, &x| (a << 8) | u64::from(x));
+    let mut sid = format!("S-{}-{}", b[0], authority);
+    for sub in b[8..].chunks_exact(4) {
+        sid += &format!("-{}", u32::from_le_bytes([sub[0], sub[1], sub[2], sub[3]]));
+    }
+    Some(sid)
+}
+
 /// Groups that are direct members of the group `dn`.
 async fn child_groups(ldap: &mut ldap3::Ldap, base_dn: &str, dn: &str) -> LdapResult<Vec<LdapGroup>> {
     search_groups(ldap, base_dn, &format!("(memberOf={})", ldap_escape(dn)), Members::Skip).await
@@ -4812,6 +4884,18 @@ mod account_toggle_tests {
     fn toggling_is_idempotent() {
         assert_eq!(with_account_disabled(514, true), 514);
         assert_eq!(with_account_disabled(512, false), 512);
+    }
+
+    #[test]
+    fn a_binary_sid_reads_as_text() {
+        // S-1-5-21-1004336348-1177238915-682003330-513 (Domain Users).
+        let mut b = vec![1u8, 5, 0, 0, 0, 0, 0, 5];
+        for sub in [21u32, 1004336348, 1177238915, 682003330, 513] {
+            b.extend(sub.to_le_bytes());
+        }
+        assert_eq!(super::sid_string(&b).as_deref(), Some("S-1-5-21-1004336348-1177238915-682003330-513"));
+        assert_eq!(super::sid_string(&b[..10]), None, "cut short");
+        assert_eq!(super::sid_string(&[]), None);
     }
 
     /// EasyDC does not disable, move or delete a DC's own account.

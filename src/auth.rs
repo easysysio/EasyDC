@@ -153,11 +153,7 @@ pub async fn refuse(state: &AppState, actor: &str, headers: &HeaderMap, path: &s
         .and_then(|id| id.parse::<i64>().ok());
     db::log_action(&state.db, actor, "access.refused", path, server_id, &Err(reason.clone())).await;
 
-    let wants_json = headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/json"));
-    if wants_json {
+    if wants_json(headers) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": reason }))).into_response();
     }
     let mut response = Redirect::to(&back_to(headers)).into_response();
@@ -165,6 +161,14 @@ pub async fn refuse(state: &AppState, actor: &str, headers: &HeaderMap, path: &s
         response.headers_mut().insert(header::SET_COOKIE, v);
     }
     response
+}
+
+/// Whether a script sent the request and wants JSON back, not a page.
+pub fn wants_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/json"))
 }
 
 /// The page a form was sent from, when the browser says and it is this site;
@@ -283,6 +287,16 @@ mod tests {
         assert_eq!(back_to(&h("easydc:3000", "http://easydc:3000//evil.example/")), "/");
         assert_eq!(back_to(&h("easydc:3000", "http://easydc:3000")), "/");
         assert_eq!(back_to(&headers(&[("host", "easydc")])), "/");
+    }
+
+    #[test]
+    fn a_script_asking_for_json_is_told_in_json() {
+        let mut h = HeaderMap::new();
+        assert!(!wants_json(&h));
+        h.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        assert!(wants_json(&h));
+        h.insert(header::ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml"));
+        assert!(!wants_json(&h));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
@@ -9,7 +10,7 @@ use tera::Context;
 use super::path_segment;
 use crate::{
     access::{self, Area},
-    auth::CurrentUser,
+    auth::{wants_json, CurrentUser},
     db, ldap,
     models::Server,
     AppState,
@@ -278,6 +279,7 @@ pub async fn add_member(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, group_name)): Path<(i64, String)>,
+    headers: HeaderMap,
     Form(form): Form<AddMemberForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -294,6 +296,10 @@ pub async fn add_member(
     let target = format!("{} → {}", member, group_name);
     db::log_action(&state.db, &actor, "group.add_member", &target, Some(id), &result).await;
 
+    // From a user's Edit dialog, which updates in place.
+    if wants_json(&headers) {
+        return json_result(result);
+    }
     match result {
         Ok(()) => Redirect::to(&group_page(id, &group_name)).into_response(),
         Err(e) => render_group(&state, &server, &group_name, Some(e)).await,
@@ -309,6 +315,7 @@ pub async fn remove_member(
     State(state): State<AppState>,
     CurrentUser(actor): CurrentUser,
     Path((id, group_name)): Path<(i64, String)>,
+    headers: HeaderMap,
     Form(form): Form<RemoveMemberForm>,
 ) -> Response {
     let server = match get_server(&state, id).await {
@@ -324,9 +331,37 @@ pub async fn remove_member(
     let target = format!("{} ✕ {}", form.member_dn, group_name);
     db::log_action(&state.db, &actor, "group.remove_member", &target, Some(id), &result).await;
 
+    if wants_json(&headers) {
+        return json_result(result);
+    }
     match result {
         Ok(()) => Redirect::to(&group_page(id, &group_name)).into_response(),
         Err(e) => render_group(&state, &server, &group_name, Some(e)).await,
+    }
+}
+
+/// `{"ok": true}`, or `{"error": reason}`, for a script.
+fn json_result(result: Result<(), String>) -> Response {
+    match result {
+        Ok(()) => axum::Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => axum::Json(serde_json::json!({ "error": e })).into_response(),
+    }
+}
+
+/// GET: the groups a user is directly in, as JSON for the Edit dialog:
+/// `{"dn": …, "groups": [{name, dn, description, location, primary}]}`.
+pub async fn user_groups(State(state): State<AppState>, Path((id, username)): Path<(i64, String)>) -> Response {
+    let Some(server) = get_server(&state, id).await else {
+        return axum::Json(serde_json::json!({ "error": "This server is no longer in EasyDC" })).into_response();
+    };
+    let loaded: Result<_, String> = async {
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        ldap::user_groups(&mut conn, &base_dn, &username).await
+    }
+    .await;
+    match loaded {
+        Ok((dn, groups)) => axum::Json(serde_json::json!({ "dn": dn, "groups": groups })).into_response(),
+        Err(e) => axum::Json(serde_json::json!({ "error": e })).into_response(),
     }
 }
 
@@ -2371,6 +2406,28 @@ mod users_page_tests {
             assert_eq!(html.matches(&format!(r#"id="{id}""#)).count(), 1, "{id}");
         }
         assert!(!html.contains("editModal1"));
+    }
+
+    /// The Edit dialog's Groups tab reads the user's groups, and changes them
+    /// through the group member routes, which need Edit on Groups.
+    #[test]
+    fn the_edit_dialog_has_a_groups_tab() {
+        let html = render(&people());
+        let dialog = html.split(r#"id="editUserModal""#).nth(1).unwrap().split(r#"id="resetUserModal""#).next().unwrap();
+        assert!(dialog.contains(r##"data-bs-target="#editGroups""##));
+        assert!(dialog.contains(r#"<div class="input-group" data-needs="groups">"#));
+        assert!(dialog.contains(r#"list="groupNames""#), "group names are suggested");
+        assert!(dialog.contains(r#"<form method="post" data-path="edit" data-needs="users">"#), "details stay a Users change");
+        assert!(html.contains(r#"data-groups="/servers/1/groups/""#));
+        assert!(html.contains("userUrl(user, 'groups')") && html.contains("'/members/' + how"));
+        assert_eq!(crate::access::need(&axum::http::Method::GET, "/servers/:id/users/:username/groups"), crate::access::Need::Anyone);
+        for how in ["add", "remove"] {
+            let route = format!("/servers/:id/groups/:name/members/{how}");
+            assert_eq!(
+                crate::access::need(&axum::http::Method::POST, &route),
+                crate::access::Need::Edit(crate::access::Area::Groups)
+            );
+        }
     }
 
     #[test]

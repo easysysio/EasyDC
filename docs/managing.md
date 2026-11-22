@@ -42,6 +42,10 @@ take no time.
 - **Profile**: job title, department, office, phone, mobile and manager, in both the
   Add and Edit dialogs. The manager field suggests usernames as you type. Clearing a
   field removes the value from the directory.
+- **Groups**, a tab in the Edit dialog, lists the groups the user is directly in, with the
+  primary group (usually Domain Users) marked. Add a group by name, or remove one with ×;
+  each change is made at once. The primary group is kept on the user rather than in the
+  group's members, so it is not removed here. Adding and removing need Edit on Groups.
 - **Account expires** sets the last day the account can be used, for contractors and
   other temporary accounts. Leave it blank for an account that never expires. The day
   ends at midnight UTC. The list shows **Until *date*** on accounts with an end date,

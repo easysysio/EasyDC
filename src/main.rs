@@ -113,6 +113,7 @@ async fn main() {
         .route("/servers/:id/users/new", post(handlers::ldap_mgmt::create_user))
         .route("/servers/:id/users/bulk", post(handlers::ldap_mgmt::bulk_users))
         .route("/servers/:id/users/:username/edit", post(handlers::ldap_mgmt::update_user))
+        .route("/servers/:id/users/:username/groups", get(handlers::ldap_mgmt::user_groups))
         .route("/servers/:id/users/:username/delete", post(handlers::ldap_mgmt::delete_user))
         .route("/servers/:id/users/:username/toggle", post(handlers::ldap_mgmt::toggle_user))
         .route("/servers/:id/users/:username/reset-password", post(handlers::ldap_mgmt::reset_password))
