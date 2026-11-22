@@ -3,7 +3,7 @@
 # Upgrade:                     docker compose pull && docker compose up -d
 services:
   easydc:
-    image: ghcr.io/easysysio/easydc:latest
+    image: easysysio/easydc:latest
     restart: unless-stopped
     ports:
       - "3000:3000"

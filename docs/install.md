@@ -214,7 +214,7 @@ is a good starting point.
 ## Docker
 
 EasyDC is also a container image for **x86_64** and **arm64**,
-`ghcr.io/easysysio/easydc`, published with each release and tagged with its version
+[`easysysio/easydc` on Docker Hub](https://hub.docker.com/r/easysysio/easydc), published with each release and tagged with its version
 (`0.5.0`), its minor version (`0.5`) and `latest`. It runs anywhere Docker or Podman
 does.
 
@@ -223,7 +223,7 @@ does.
     ```bash
     docker run -d --name easydc --restart unless-stopped \
       -p 3000:3000 -v easydc-data:/data \
-      ghcr.io/easysysio/easydc:latest
+      easysysio/easydc:latest
     ```
 
 === "Docker Compose"
@@ -235,7 +235,7 @@ does.
     ```yaml
     services:
       easydc:
-        image: ghcr.io/easysysio/easydc:latest
+        image: easysysio/easydc:latest
         restart: unless-stopped
         ports:
           - "3000:3000"

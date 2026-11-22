@@ -1,6 +1,6 @@
 # Release pipeline: on a v* tag, build .deb + .rpm for x86_64 and arm64, then
 # publish a GitHub Release whose body is the matching CHANGELOG section, with
-# the packages attached, and a container image on ghcr.io.
+# the packages attached, and a container image on Docker Hub.
 #
 # The binary is linked statically against musl, so it needs no glibc at all and
 # the same package runs on any Linux distribution — RHEL 8 included. It is
@@ -133,17 +133,28 @@ jobs:
           if-no-files-found: error
 
   # The same static binaries, as a container image for amd64 and arm64 on
-  # GitHub's registry: ghcr.io/<owner>/easydc:<version>, :<major>.<minor> and
-  # :latest. Nothing is compiled here; the Dockerfile's release stage copies
-  # each architecture's binary in.
+  # Docker Hub: easysysio/easydc:<version>, :<major>.<minor> and :latest.
+  # Nothing is compiled here; the Dockerfile's release stage copies each
+  # architecture's binary in. It signs in with two repository secrets,
+  # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub access token that can
+  # write to easysysio/easydc).
   docker:
     name: Publish container image
     needs: build
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: write
     steps:
+      - name: Check the Docker Hub secrets are set
+        env:
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          [ -n "$USERNAME" ] && [ -n "$TOKEN" ] || {
+            echo "::error::Add the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets."
+            exit 1
+          }
+
       - uses: actions/checkout@v7
 
       - name: Download the binaries
@@ -164,14 +175,13 @@ jobs:
 
       - uses: docker/login-action@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/easydc
+          images: docker.io/easysysio/easydc
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

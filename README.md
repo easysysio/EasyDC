@@ -59,7 +59,7 @@ Or with Docker, on any system:
 
 ```bash
 docker run -d --name easydc --restart unless-stopped \
-  -p 3000:3000 -v easydc-data:/data ghcr.io/easysysio/easydc:latest
+  -p 3000:3000 -v easydc-data:/data easysysio/easydc:latest
 ```
 
 The [installation guide](https://easydc.easysys.io/install/) covers RHEL / Fedora,
