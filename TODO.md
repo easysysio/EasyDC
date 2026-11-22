@@ -28,9 +28,8 @@ writes, and Microsoft's MS-ADTS for the rules, but do not copy its code. Admins 
 
 - ~~**Move FSMO roles** between DCs (`samba-tool fsmo transfer`).~~ Done, on the Domain
   Controllers page. Seizing a role from a dead DC stays in samba-tool.
-- **Remove a dead DC** (`samba-tool domain demote --remove-other-dead-server`): delete its
-  NTDS Settings and server objects, its computer account and its DNS records. Refuse while
-  it still answers, or while it holds an FSMO role.
+- ~~**Remove a dead DC** (`samba-tool domain demote --remove-other-dead-server`).~~ Done,
+  on the Domain Controllers page.
 - **Delegate control of an OU** (`samba-tool dsacl`): show who has rights on an OU, and give
   a group a common task there, such as resetting passwords or managing users. Edits the
   OU's `nTSecurityDescriptor`.

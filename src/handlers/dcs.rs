@@ -12,7 +12,7 @@ use tera::Context;
 use super::{ldap_mgmt::get_server, path_segment};
 use crate::{
     auth::CurrentUser,
-    db,
+    dc_removal, db,
     fsmo::{self, Role},
     ldap,
     models::Server,
@@ -25,6 +25,10 @@ use crate::{
 pub struct Moved {
     moved: String,
     to: String,
+    /// A DC just removed, and how many objects and DNS records went with it.
+    removed: String,
+    objects: usize,
+    records: usize,
     /// When a move this DC had not seen yet was made (unix seconds).
     at: i64,
 }
@@ -50,7 +54,7 @@ async fn render(state: &AppState, server: &Server, flash_error: Option<String>, 
     let mut error = flash_error;
     match loaded {
         Ok(o) => {
-            if let Some(done) = done_message(&o, moved) {
+            if let Some(done) = removed_message(&o, moved).or_else(|| done_message(&o, moved)) {
                 ctx.insert("done", &done);
             } else if let Some(note) = pending_message(&o, moved, crate::health::now_unix()) {
                 ctx.insert("pending", &note);
@@ -80,6 +84,19 @@ fn done_message(o: &fsmo::Overview, m: &Moved) -> Option<String> {
     o.roles.iter().find(|h| h.role == role && holds(h)).map(|h| format!("The {} is now on {}.", h.label, h.dc))
 }
 
+/// "OLDDC was removed: …" when it is no longer listed.
+fn removed_message(o: &fsmo::Overview, m: &Moved) -> Option<String> {
+    if m.removed.is_empty() || o.dcs.iter().any(|d| d.name.eq_ignore_ascii_case(&m.removed)) {
+        return None;
+    }
+    let records = match m.records {
+        0 => String::new(),
+        1 => " and 1 DNS record".to_string(),
+        n => format!(" and {n} DNS records"),
+    };
+    Some(format!("{} was removed from the domain: {} objects{records}.", m.removed, m.objects))
+}
+
 /// Right after a move this DC has not seen yet: what to expect.
 fn pending_message(o: &fsmo::Overview, m: &Moved, now: i64) -> Option<String> {
     if m.to.is_empty() || m.at == 0 || now - m.at > CATCHING_UP || now < m.at {
@@ -91,6 +108,59 @@ fn pending_message(o: &fsmo::Overview, m: &Moved, now: i64) -> Option<String> {
         "{what} moved to {}. This page shows what {here} knows, and {here} lists the new holder once it replicates, within a few minutes.",
         m.to
     ))
+}
+
+/// GET (JSON): what removing a DC would delete, and why it may not be removed.
+pub async fn removal_plan(State(state): State<AppState>, Path((id, name)): Path<(i64, String)>) -> Response {
+    let Some(server) = get_server(&state, id).await else {
+        return axum::Json(serde_json::json!({ "error": "There is no such server." })).into_response();
+    };
+    let plan = async {
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        dc_removal::plan(&mut conn, &base_dn, &name).await
+    }
+    .await;
+    match plan {
+        Ok(p) => axum::Json(p).into_response(),
+        Err(e) => axum::Json(serde_json::json!({ "error": e })).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RemoveForm {
+    /// The DC's name typed again.
+    #[serde(default)]
+    confirm: String,
+}
+
+pub async fn remove(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path((id, name)): Path<(i64, String)>,
+    Form(f): Form<RemoveForm>,
+) -> Response {
+    let Some(server) = get_server(&state, id).await else {
+        return Redirect::to("/").into_response();
+    };
+    let result = async {
+        if !f.confirm.trim().eq_ignore_ascii_case(&name) {
+            return Err(format!("Type the DC's name, {name}, to confirm."));
+        }
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        dc_removal::remove(&mut conn, &base_dn, &name).await
+    }
+    .await;
+    db::log_action(&state.db, &actor, "dc.remove", &name, Some(id), &result.as_ref().map(|_| ()).map_err(Clone::clone)).await;
+    match result {
+        Ok(done) => Redirect::to(&format!(
+            "/servers/{id}/dcs?removed={}&objects={}&records={}",
+            path_segment(&name),
+            done.objects,
+            done.records
+        ))
+        .into_response(),
+        Err(e) => render(&state, &server, Some(e), &Moved::default()).await,
+    }
 }
 
 #[derive(Deserialize)]
@@ -203,7 +273,7 @@ mod tests {
     #[test]
     fn a_move_is_reported_only_when_true() {
         let o = overview("DC2");
-        let m = |moved: &str, to: &str| Moved { moved: moved.into(), to: to.into(), at: 0 };
+        let m = |moved: &str, to: &str| Moved { moved: moved.into(), to: to.into(), ..Default::default() };
         assert_eq!(done_message(&o, &m("pdc", "DC2")).unwrap(), "The PDC emulator is now on DC2.");
         assert_eq!(done_message(&o, &m("pdc", "DC1")), None, "a stale link says nothing");
         assert_eq!(done_message(&o, &m("nonsense", "DC2")), None);
@@ -214,14 +284,32 @@ mod tests {
     }
 
     #[test]
+    fn a_removal_is_reported_once_the_dc_is_gone() {
+        let o = overview("DC1");
+        let m = |name: &str, records: usize| Moved { removed: name.into(), objects: 4, records, ..Default::default() };
+        assert_eq!(removed_message(&o, &m("OLDDC", 23)).unwrap(), "OLDDC was removed from the domain: 4 objects and 23 DNS records.");
+        assert_eq!(removed_message(&o, &m("OLDDC", 0)).unwrap(), "OLDDC was removed from the domain: 4 objects.");
+        assert_eq!(removed_message(&o, &m("DC2", 3)), None, "a DC still listed was not removed");
+        assert_eq!(crate::access::need(&axum::http::Method::POST, "/servers/:id/dcs/:name/remove"), crate::access::Need::Admin);
+    }
+
+    #[test]
+    fn the_page_offers_removal_except_for_its_own_dc() {
+        let html = render(&overview("DC1"));
+        assert!(html.contains(r#"data-remove="DC2""#));
+        assert!(!html.contains(r#"data-remove="DC1""#), "the DC EasyDC is connected to is running");
+        assert!(html.contains("/dcs/' + segment(name) + '/removal"));
+    }
+
+    #[test]
     fn a_move_still_on_its_way_says_so_for_a_while() {
         let o = overview("DC1");
-        let m = Moved { moved: "domaindns".into(), to: "DC2".into(), at: 1_000 };
+        let m = Moved { moved: "domaindns".into(), to: "DC2".into(), at: 1_000, ..Default::default() };
         let note = pending_message(&o, &m, 1_030).unwrap();
         assert_eq!(note, "The Domain DNS zones master was moved to DC2. This page shows what DC1 knows, and DC1 lists the new holder once it replicates, within a few minutes.");
         assert_eq!(pending_message(&o, &m, 1_000 + CATCHING_UP + 1), None, "an old link says nothing");
         assert_eq!(pending_message(&o, &Moved { at: 0, ..m }, 1_030), None);
-        let all = Moved { moved: "all".into(), to: "DC2".into(), at: 1_000 };
+        let all = Moved { moved: "all".into(), to: "DC2".into(), at: 1_000, ..Default::default() };
         assert!(pending_message(&o, &all, 1_010).unwrap().starts_with("The roles were moved to DC2."));
     }
 }

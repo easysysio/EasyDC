@@ -239,6 +239,21 @@ Move them off a DC before you take it out of service.
   a DC with `samba-tool fsmo seize --role=<role>`, and only once the old DC is gone for
   good: seizing a role from a DC that comes back splits the domain.
 
+### Removing a dead DC
+
+When a DC is gone for good (its server died, or it was switched off without being demoted),
+the other DCs keep trying to replicate with it and DNS keeps sending clients to it.
+**Remove…** next to that DC cleans up what it left behind, like
+`samba-tool domain demote --remove-other-dead-server`. Only admins can do this.
+
+- The dialog first lists everything that will be deleted: replication connections from
+  it, its SYSVOL replication entries, its Samba DNS account, its computer account, its
+  server object, and the DNS records that point at it. Type the DC's name to confirm.
+- EasyDC refuses while the DC still answers on the network, while it holds an FSMO role
+  (seize the role on a live DC first), and for the DC EasyDC itself connects to.
+- A DC that is still running is removed by demoting it, on itself:
+  `samba-tool domain demote`.
+
 ## Replication
 
 **Replication** shows, for each domain controller, which DC it receives each partition from
@@ -388,7 +403,7 @@ For each area, an account is set to **View** or **Edit**:
 
 **View all** and **Edit all** set every area at once. An **Admin** may change everything,
 and is the only one who can manage EasyDC accounts, add, edit or remove servers, apply
-the Health Check's fixes, and move FSMO roles.
+the Health Check's fixes, move FSMO roles, and remove a dead DC.
 
 An action needs Edit on what it changes: adding users to a group needs Groups, and moving a
 group or computer to another OU needs Groups or Computers. What an account may not change is

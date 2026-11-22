@@ -408,7 +408,7 @@ pub async fn delete_site(conn: &mut ldap3::Ldap, config: &str, name: &str) -> Ld
 }
 
 /// Delete an object and everything below it, deepest first.
-async fn delete_tree(conn: &mut ldap3::Ldap, dn: &str) -> LdapResult<()> {
+pub(crate) async fn delete_tree(conn: &mut ldap3::Ldap, dn: &str) -> LdapResult<()> {
     let mut all: Vec<SearchEntry> = search(conn, dn, Scope::Subtree, "(objectClass=*)", vec!["1.1"]).await?;
     all.sort_by_key(|e| std::cmp::Reverse(ldap::dn_parts(&e.dn).len()));
     for e in all {
