@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-23
+
 ### Added
 - HTTPS on port 3000, with a self-signed certificate from the first start or your own from Settings. Plain HTTP on the same port redirects to it.
 - Two-factor sign-in for local accounts with an authenticator app, with recovery codes. Admins can reset it for others and require it for local admins.
@@ -19,7 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Upgrade notes
 - A reverse proxy must send `X-Forwarded-Proto`, or set `EASYDC_TLS=off`; otherwise it gets the redirect to HTTPS.
-- Creating a GPO now needs TCP port 445 from EasyDC to the PDC emulator.
+- Creating a GPO now needs TCP port 445 from EasyDC to the PDC emulator. Samba does not replicate SYSVOL, so other DCs need your own sync.
 
 ## [0.5.1] - 2026-11-22
 

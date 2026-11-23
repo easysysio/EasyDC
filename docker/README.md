@@ -96,8 +96,8 @@ proxy that handles HTTPS, have it send `X-Forwarded-Proto`, or set `-e EASYDC_TL
 ## Tags
 
 * `latest`: the newest release
-* `X.Y`: the newest release of a minor version, e.g. `0.5`
-* `X.Y.Z`: one release, e.g. `0.5.1`
+* `X.Y`: the newest release of a minor version, e.g. `0.6`
+* `X.Y.Z`: one release, e.g. `0.6.0`
 
 Multi-arch: `linux/amd64` and `linux/arm64`. The image is Alpine with a static binary,
 and runs as a non-root user.

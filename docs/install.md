@@ -223,8 +223,8 @@ same static binary as the packages, and runs as its own non-root user.
 | Tag | What it is |
 |---|---|
 | `latest` | The newest release |
-| `0.5` | The newest 0.5.x release |
-| `0.5.1` | That release only |
+| `0.6` | The newest 0.6.x release |
+| `0.6.0` | That release only |
 
 === "docker run"
 

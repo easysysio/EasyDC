@@ -1,6 +1,6 @@
 [package]
 name = "EasyDC"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 description = "A web GUI for managing Samba Active Directory domain controllers"
 license = "MIT"
