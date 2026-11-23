@@ -363,7 +363,7 @@
         fetch(el.dataset.url, { headers: { Accept: 'application/json' } })
             .then(r => r.ok ? r.json() : Promise.reject())
             .then(l => { el.textContent = l.text; el.title = l.title; })
-            .catch(() => { el.textContent = 'Level unknown'; el.title = 'EasyDC could not read the level from this server.'; });
+            .catch(() => { el.textContent = 'Functional level unknown'; el.title = 'EasyDC could not read the level from this server.'; });
     });
     </script>
 </body>

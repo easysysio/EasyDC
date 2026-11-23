@@ -31,7 +31,7 @@ pub fn label(level: i64) -> String {
     }
 }
 
-/// The short label shown beside a server, and the detail behind it.
+/// The short text shown with a server's details, and the detail behind it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Badge {
     pub text: String,
@@ -44,9 +44,9 @@ pub fn badge(domain: i64, forest: i64, dc: i64) -> Badge {
         name => name.to_string(),
     };
     let text = if domain == forest {
-        format!("Level {}", short(domain))
+        format!("Functional level {}", short(domain))
     } else {
-        format!("Domain {} · Forest {}", short(domain), short(forest))
+        format!("Domain level {} · Forest level {}", short(domain), short(forest))
     };
     let title = format!("Domain: {}. Forest: {}. This DC can run at: {}.", label(domain), label(forest), label(dc));
     Badge { text, title }
@@ -506,10 +506,10 @@ mod tests {
 
     #[test]
     fn the_badge_is_short_and_shows_a_difference() {
-        assert_eq!(badge(7, 7, 7).text, "Level 2016");
-        assert_eq!(badge(4, 4, 7).text, "Level 2008 R2");
-        assert_eq!(badge(5, 4, 7).text, "Domain 2012 · Forest 2008 R2");
-        assert_eq!(badge(9, 9, 9).text, "Level 9");
+        assert_eq!(badge(7, 7, 7).text, "Functional level 2016");
+        assert_eq!(badge(4, 4, 7).text, "Functional level 2008 R2");
+        assert_eq!(badge(5, 4, 7).text, "Domain level 2012 · Forest level 2008 R2");
+        assert_eq!(badge(9, 9, 9).text, "Functional level 9");
         assert_eq!(badge(4, 4, 7).title, "Domain: Windows Server 2008 R2. Forest: Windows Server 2008 R2. This DC can run at: Windows Server 2016.");
     }
 

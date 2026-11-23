@@ -162,7 +162,7 @@ pub async fn server_detail(
     }
 }
 
-/// The server's functional level, for the badge beside its name. Pages load
+/// The server's functional level, for its details on the page. Pages load
 /// it afterwards, so a DC that is down cannot hold them up.
 pub async fn server_level(State(state): State<AppState>, Path(id): Path<i64>) -> axum::response::Response {
     let server = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?").bind(id).fetch_optional(&state.db).await;

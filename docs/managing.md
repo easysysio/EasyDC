@@ -272,7 +272,7 @@ Move them off a DC before you take it out of service.
 
 The **Functional level** card shows the level of the domain and the forest, and the highest
 level each DC can run at. A DC's highest level comes from `ad dc functional level` in its
-`smb.conf`. The level also shows as a badge on the Dashboard and the server page, and each
+`smb.conf`. The level also shows with the server's details on the Dashboard and the server page, and each
 DC's level is in the DC table.
 
 Samba allows a raise only from a shell on a DC, so EasyDC guides it instead of making it.
