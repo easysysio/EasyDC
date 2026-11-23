@@ -117,7 +117,295 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Two-factor sign-in. `enabled` is 0 during setup. `last_step` stops a
+    // code being used twice; `failures` and `locked_until` limit guessing.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_totp (
+            username TEXT PRIMARY KEY,
+            secret TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            last_step INTEGER NOT NULL DEFAULT 0,
+            failures INTEGER NOT NULL DEFAULT 0,
+            locked_until INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_recovery_codes (
+            username TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            PRIMARY KEY (username, code_hash)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    // A sign-in whose password was right and whose code is still to come. Not
+    // a session: nothing but the code page reads this table.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sign_in_challenges (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        .execute(pool)
+        .await?;
+
     Ok(())
+}
+
+// ── two-factor sign-in ───────────────────────────────────────────────────────
+
+const REQUIRE_TWO_FACTOR: &str = "require_two_factor_admins";
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TwoFactor {
+    pub secret: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub locked_until: i64,
+}
+
+/// An error is returned, not hidden: sign-in must not skip the code because
+/// the database could not say whether the account has one.
+pub async fn two_factor(pool: &SqlitePool, username: &str) -> Result<Option<TwoFactor>, sqlx::Error> {
+    sqlx::query_as("SELECT secret, enabled, created_at, locked_until FROM user_totp WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn is_local_account(pool: &SqlitePool, username: &str) -> bool {
+    sqlx::query("SELECT 1 FROM users WHERE username = ? AND kind = 'local'")
+        .bind(username)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// Start or restart setup. False, changing nothing, when it is already on.
+pub async fn begin_two_factor(pool: &SqlitePool, username: &str, secret: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query(
+        "INSERT INTO user_totp (username, secret, enabled, created_at) VALUES (?, ?, 0, ?)
+         ON CONFLICT (username) DO UPDATE SET secret = excluded.secret, created_at = excluded.created_at
+         WHERE user_totp.enabled = 0",
+    )
+    .bind(username)
+    .bind(secret)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Turn it on, with the code that proved the app works already spent.
+pub async fn enable_two_factor(
+    pool: &SqlitePool,
+    username: &str,
+    secret: &str,
+    step: i64,
+    code_hashes: &[String],
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let changed = sqlx::query(
+        "UPDATE user_totp SET enabled = 1, last_step = ?, failures = 0, locked_until = 0
+         WHERE username = ? AND secret = ? AND enabled = 0",
+    )
+    .bind(step)
+    .bind(username)
+    .bind(secret)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+    if !changed {
+        return Ok(false);
+    }
+    write_recovery_codes(&mut tx, username, code_hashes).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+async fn write_recovery_codes(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    username: &str,
+    code_hashes: &[String],
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM user_recovery_codes WHERE username = ?")
+        .bind(username)
+        .execute(&mut **tx)
+        .await?;
+    for hash in code_hashes {
+        sqlx::query("INSERT INTO user_recovery_codes (username, code_hash) VALUES (?, ?)")
+            .bind(username)
+            .bind(hash)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn replace_recovery_codes(pool: &SqlitePool, username: &str, code_hashes: &[String]) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    write_recovery_codes(&mut tx, username, code_hashes).await?;
+    tx.commit().await
+}
+
+pub async fn recovery_codes_left(pool: &SqlitePool, username: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM user_recovery_codes WHERE username = ?")
+        .bind(username)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0)
+}
+
+/// Remove an account's two-factor, codes and open sign-ins. True when it was on.
+pub async fn remove_two_factor(pool: &SqlitePool, username: &str) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let was_on = sqlx::query("SELECT 1 FROM user_totp WHERE username = ? AND enabled = 1")
+        .bind(username)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+    clear_two_factor(&mut tx, username).await?;
+    tx.commit().await?;
+    Ok(was_on)
+}
+
+async fn clear_two_factor(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, username: &str) -> Result<(), sqlx::Error> {
+    for table in ["user_totp", "user_recovery_codes", "sign_in_challenges"] {
+        // The table names are the fixed list above; the username is bound.
+        sqlx::query(AssertSqlSafe(format!("DELETE FROM {table} WHERE username = ?")))
+            .bind(username)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Count one attempt at a code, in one statement so that requests sent at the
+/// same moment each count. False when the account is not taking codes now.
+pub async fn count_code_attempt(pool: &SqlitePool, username: &str, now: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query(
+        "UPDATE user_totp SET
+            failures = CASE WHEN locked_until > 0 THEN 1 ELSE failures + 1 END,
+            locked_until = CASE WHEN locked_until = 0 AND failures + 1 >= ? THEN ? ELSE 0 END
+         WHERE username = ? AND enabled = 1 AND locked_until <= ?",
+    )
+    .bind(crate::totp::MAX_WRONG_CODES)
+    .bind(now + crate::totp::LOCK_SECONDS)
+    .bind(username)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+pub async fn clear_code_failures(pool: &SqlitePool, username: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE user_totp SET failures = 0, locked_until = 0 WHERE username = ?")
+        .bind(username)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+/// Spend a code's time step. False when it, or a later one, was already used.
+pub async fn claim_code_step(pool: &SqlitePool, username: &str, step: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query("UPDATE user_totp SET last_step = ? WHERE username = ? AND enabled = 1 AND last_step < ?")
+        .bind(step)
+        .bind(username)
+        .bind(step)
+        .execute(pool)
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Spend a recovery code. False when there is no such unused code.
+pub async fn use_recovery_code(pool: &SqlitePool, username: &str, code_hash: &str) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query("DELETE FROM user_recovery_codes WHERE username = ? AND code_hash = ?")
+        .bind(username)
+        .bind(code_hash)
+        .execute(pool)
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+pub async fn create_challenge(pool: &SqlitePool, token: &str, username: &str, now: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM sign_in_challenges WHERE created_at <= ?")
+        .bind(now - crate::totp::CHALLENGE_SECONDS)
+        .execute(pool)
+        .await?;
+    sqlx::query("INSERT INTO sign_in_challenges (token, username, created_at) VALUES (?, ?, ?)")
+        .bind(token)
+        .bind(username)
+        .bind(now)
+        .execute(pool)
+        .await
+        .map(|_| ())
+}
+
+/// The account of an open sign-in, if it has not timed out.
+pub async fn challenge_user(pool: &SqlitePool, token: &str, now: i64) -> Option<String> {
+    sqlx::query_scalar("SELECT username FROM sign_in_challenges WHERE token = ? AND created_at > ?")
+        .bind(token)
+        .bind(now - crate::totp::CHALLENGE_SECONDS)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// True for the one request that closes this sign-in.
+pub async fn close_challenge(pool: &SqlitePool, token: &str) -> bool {
+    sqlx::query("DELETE FROM sign_in_challenges WHERE token = ?")
+        .bind(token)
+        .execute(pool)
+        .await
+        .is_ok_and(|d| d.rows_affected() > 0)
+}
+
+pub async fn two_factor_required(pool: &SqlitePool) -> bool {
+    sqlx::query("SELECT 1 FROM app_settings WHERE key = ? AND value = '1'")
+        .bind(REQUIRE_TWO_FACTOR)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+pub async fn set_two_factor_required(pool: &SqlitePool, required: bool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(REQUIRE_TWO_FACTOR)
+    .bind(if required { "1" } else { "0" })
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// Whether this account is a local admin who has to set up two-factor before
+/// doing anything else. If the database cannot say, the answer is yes.
+pub async fn must_set_up_two_factor(pool: &SqlitePool, username: &str) -> bool {
+    sqlx::query(
+        "SELECT 1 FROM users u JOIN app_settings s ON s.key = ? AND s.value = '1'
+         WHERE u.username = ? AND u.kind = 'local' AND u.is_admin = 1
+           AND NOT EXISTS (SELECT 1 FROM user_totp t WHERE t.username = u.username AND t.enabled = 1)",
+    )
+    .bind(REQUIRE_TWO_FACTOR)
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    .map_or(true, |row| row.is_some())
 }
 
 pub async fn tls_pair(pool: &SqlitePool) -> Option<crate::tls::Pair> {
@@ -278,6 +566,8 @@ pub struct Account {
     pub server_name: Option<String>,
     pub domain_user: String,
     pub admin: bool,
+    /// Signs in with a code from an authenticator app as well.
+    pub two_factor: bool,
     /// The keys of the areas it may edit.
     pub edit: Vec<&'static str>,
     pub summary: String,
@@ -287,7 +577,8 @@ pub struct Account {
 pub async fn list_accounts(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT u.username, u.kind, u.domain_user, s.name AS server_name \
+        "SELECT u.username, u.kind, u.domain_user, s.name AS server_name, \
+         EXISTS (SELECT 1 FROM user_totp t WHERE t.username = u.username AND t.enabled = 1) AS two_factor \
          FROM users u LEFT JOIN servers s ON s.id = u.server_id ORDER BY u.username COLLATE NOCASE",
     )
     .fetch_all(pool)
@@ -301,6 +592,7 @@ pub async fn list_accounts(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Erro
             server_name: r.get("server_name"),
             domain_user: r.get::<Option<String>, _>("domain_user").unwrap_or_default(),
             admin: a.admin,
+            two_factor: r.get::<i64, _>("two_factor") != 0,
             edit: a.edit.iter().map(|x| x.key()).collect(),
             summary: a.summary(),
             username,
@@ -589,6 +881,8 @@ pub async fn delete_account(pool: &SqlitePool, username: &str) -> Result<bool, s
             .bind(username)
             .execute(&mut *tx)
             .await?;
+        // A later account with this name must not inherit it.
+        clear_two_factor(&mut tx, username).await?;
     }
     tx.commit().await?;
     Ok(removed)
@@ -598,6 +892,11 @@ pub async fn delete_account(pool: &SqlitePool, username: &str) -> Result<bool, s
 /// deleted administrator out everywhere, and to leave only the current browser
 /// signed in after a password change.
 pub async fn delete_sessions_for(pool: &SqlitePool, username: &str, except: Option<&str>) {
+    // A sign-in waiting for its code ends with them.
+    let _ = sqlx::query("DELETE FROM sign_in_challenges WHERE username = ?")
+        .bind(username)
+        .execute(pool)
+        .await;
     let _ = match except {
         Some(token) => {
             sqlx::query("DELETE FROM sessions WHERE username = ? AND token != ?")
@@ -636,6 +935,131 @@ mod tests {
             .unwrap();
         init_tables(&pool).await.unwrap();
         pool
+    }
+
+    async fn with_two_factor(pool: &SqlitePool, name: &str, admin: bool) {
+        create_account(pool, name, "hash", admin, &Default::default()).await.unwrap();
+        assert!(begin_two_factor(pool, name, "SECRET", 1000).await.unwrap());
+        assert!(enable_two_factor(pool, name, "SECRET", 50, &["h1".into(), "h2".into()]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn setup_only_counts_once_confirmed_and_cannot_replace_a_live_secret() {
+        let pool = pool().await;
+        create_account(&pool, "alice", "hash", true, &Default::default()).await.unwrap();
+        assert!(begin_two_factor(&pool, "alice", "FIRST", 1000).await.unwrap());
+        assert!(!two_factor(&pool, "alice").await.unwrap().unwrap().enabled);
+        assert!(begin_two_factor(&pool, "alice", "SECOND", 1001).await.unwrap(), "setup can restart");
+        assert!(!enable_two_factor(&pool, "alice", "FIRST", 50, &[]).await.unwrap(), "the old QR code is dead");
+        assert!(enable_two_factor(&pool, "alice", "SECOND", 50, &["h".into()]).await.unwrap());
+        assert!(!begin_two_factor(&pool, "alice", "THIRD", 1002).await.unwrap());
+        assert_eq!(two_factor(&pool, "alice").await.unwrap().unwrap().secret, "SECOND");
+    }
+
+    #[tokio::test]
+    async fn a_code_and_a_recovery_code_each_work_once() {
+        let pool = pool().await;
+        with_two_factor(&pool, "alice", true).await;
+        assert!(!claim_code_step(&pool, "alice", 50).await.unwrap(), "spent when setup confirmed it");
+        assert!(claim_code_step(&pool, "alice", 51).await.unwrap());
+        assert!(!claim_code_step(&pool, "alice", 51).await.unwrap());
+        assert!(!claim_code_step(&pool, "alice", 50).await.unwrap(), "no going back");
+
+        assert!(use_recovery_code(&pool, "alice", "h1").await.unwrap());
+        assert!(!use_recovery_code(&pool, "alice", "h1").await.unwrap());
+        assert_eq!(recovery_codes_left(&pool, "alice").await, 1);
+    }
+
+    #[tokio::test]
+    async fn guesses_are_limited_even_when_sent_together() {
+        let pool = pool().await;
+        with_two_factor(&pool, "alice", true).await;
+        let now = 10_000;
+        let tries: Vec<_> = (0..40)
+            .map(|_| {
+                let pool = pool.clone();
+                tokio::spawn(async move { count_code_attempt(&pool, "alice", now).await.unwrap() })
+            })
+            .collect();
+        let mut allowed = 0;
+        for t in tries {
+            allowed += t.await.unwrap() as i64;
+        }
+        assert_eq!(allowed, crate::totp::MAX_WRONG_CODES);
+
+        let until = now + crate::totp::LOCK_SECONDS;
+        assert!(!count_code_attempt(&pool, "alice", until - 1).await.unwrap(), "still locked");
+        assert!(count_code_attempt(&pool, "alice", until).await.unwrap(), "open again");
+        for _ in 1..crate::totp::MAX_WRONG_CODES {
+            assert!(count_code_attempt(&pool, "alice", until).await.unwrap(), "the count restarted");
+        }
+        assert!(!count_code_attempt(&pool, "alice", until).await.unwrap());
+
+        clear_code_failures(&pool, "alice").await.unwrap();
+        assert!(count_code_attempt(&pool, "alice", until).await.unwrap(), "a right code clears it");
+    }
+
+    #[tokio::test]
+    async fn a_removed_account_leaves_nothing_for_the_next_one_with_its_name() {
+        let pool = pool().await;
+        create_account(&pool, "root", "hash", true, &Default::default()).await.unwrap();
+        with_two_factor(&pool, "bob", false).await;
+        create_challenge(&pool, "tok", "bob", unix_now()).await.unwrap();
+        assert!(delete_account(&pool, "bob").await.unwrap());
+        create_account(&pool, "bob", "hash2", false, &Default::default()).await.unwrap();
+        assert!(two_factor(&pool, "bob").await.unwrap().is_none());
+        assert_eq!(recovery_codes_left(&pool, "bob").await, 0);
+        assert!(challenge_user(&pool, "tok", unix_now()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_open_sign_in_ends_with_a_password_change_and_after_five_minutes() {
+        let pool = pool().await;
+        with_two_factor(&pool, "alice", true).await;
+        let now = unix_now();
+        create_challenge(&pool, "a", "alice", now).await.unwrap();
+        assert_eq!(challenge_user(&pool, "a", now).await.as_deref(), Some("alice"));
+        assert!(challenge_user(&pool, "a", now + crate::totp::CHALLENGE_SECONDS).await.is_none());
+        delete_sessions_for(&pool, "alice", Some("current")).await;
+        assert!(challenge_user(&pool, "a", now).await.is_none());
+
+        create_challenge(&pool, "b", "alice", now).await.unwrap();
+        assert!(close_challenge(&pool, "b").await);
+        assert!(!close_challenge(&pool, "b").await, "one session per sign-in");
+    }
+
+    #[tokio::test]
+    async fn only_local_admins_without_it_must_set_it_up() {
+        let pool = pool().await;
+        create_account(&pool, "plain", "hash", true, &Default::default()).await.unwrap();
+        create_account(&pool, "viewer", "hash", false, &Default::default()).await.unwrap();
+        with_two_factor(&pool, "secured", true).await;
+        create_domain_account(&pool, "ann@lab.test", "ann", 1, true, &Default::default()).await.unwrap();
+
+        assert!(!must_set_up_two_factor(&pool, "plain").await, "off until required");
+        set_two_factor_required(&pool, true).await.unwrap();
+        assert!(two_factor_required(&pool).await);
+        assert!(must_set_up_two_factor(&pool, "plain").await);
+        assert!(!must_set_up_two_factor(&pool, "viewer").await);
+        assert!(!must_set_up_two_factor(&pool, "secured").await);
+        assert!(!must_set_up_two_factor(&pool, "ann@lab.test").await);
+
+        assert!(remove_two_factor(&pool, "secured").await.unwrap());
+        assert!(must_set_up_two_factor(&pool, "secured").await);
+        assert!(!remove_two_factor(&pool, "secured").await.unwrap(), "nothing left to remove");
+
+        set_two_factor_required(&pool, false).await.unwrap();
+        assert!(!must_set_up_two_factor(&pool, "plain").await);
+    }
+
+    #[tokio::test]
+    async fn the_account_list_says_who_has_it() {
+        let pool = pool().await;
+        create_account(&pool, "plain", "hash", true, &Default::default()).await.unwrap();
+        with_two_factor(&pool, "secured", false).await;
+        let accounts = list_accounts(&pool).await.unwrap();
+        let has = |n: &str| accounts.iter().find(|a| a.username == n).unwrap().two_factor;
+        assert!(!has("plain") && has("secured"));
     }
 
     #[tokio::test]

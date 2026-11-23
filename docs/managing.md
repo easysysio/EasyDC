@@ -406,6 +406,43 @@ At least one **local** admin always remains — even when two admins remove each
 the same moment — so someone can sign in while the DC is down. Every sign-in, and every
 refused one, is recorded in the audit log as `auth.sign_in`.
 
+### Two-factor sign-in
+
+A local account can also ask for a code from an authenticator app, such as Google
+Authenticator, Microsoft Authenticator, 1Password or Bitwarden. Open **Settings → Two-factor
+sign-in → Set up**, enter your password, scan the QR code and type the code it shows.
+
+EasyDC then shows **10 recovery codes, once**. Keep them away from your phone: each signs
+you in one time if the phone is lost. After 5 wrong codes, the account takes no codes for
+15 minutes.
+
+To move to a new phone, turn two-factor off on the same page and set it up again.
+
+**Admins** can:
+
+- turn on **Require it for local admins**. A local admin without it must set it up at their
+  next click, before doing anything else;
+- reset it for someone who lost both their phone and recovery codes, with the shield button
+  beside the account. That person is signed out, and signs in with the password alone until
+  they set it up again.
+
+Domain accounts are not covered, even when they are admins: they sign in with their domain
+password only.
+
+If the only admin is locked out, reset it on the EasyDC host:
+
+=== "Package"
+
+    ```bash
+    sudo -u easydc sh -c 'cd /var/lib/easydc && easydc --reset-2fa alice'
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker exec easydc easydc --reset-2fa alice
+    ```
+
 ### Permissions
 
 Everyone can view every page, including Replication, the Health Check and the Audit Log.

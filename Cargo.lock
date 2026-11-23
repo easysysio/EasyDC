@@ -12,6 +12,7 @@ dependencies = [
  "hyper-util",
  "ldap3",
  "openssl",
+ "qrcode",
  "rust-embed",
  "serde",
  "serde_json",
@@ -1300,6 +1301,12 @@ checksum = "200b9ff220857e53e184257720a14553b2f4aa02577d2ed9842d45d4b9654810"
 dependencies = [
  "cc",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ace1a365f55004297f2cf24acfd96d02966246ca423385273b58a7dc873ee14d"
 
 [[package]]
 name = "quote"

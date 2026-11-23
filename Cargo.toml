@@ -31,6 +31,8 @@ tokio-openssl = "0.6"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tower-service = "0.3"
+# Draws the two-factor QR code as SVG. No image library.
+qrcode = { version = "0.15", default-features = false, features = ["std", "svg"] }
 rust-embed = { version = "8", features = ["include-exclude"] }
 
 [dev-dependencies]

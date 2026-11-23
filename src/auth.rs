@@ -76,6 +76,35 @@ pub fn session_cookie(token: &str, secure: bool) -> String {
     c
 }
 
+/// The cookie of a sign-in waiting for its code. Sent only to the sign-in pages.
+pub fn challenge_cookie(token: &str, secure: bool) -> String {
+    let mut c = format!(
+        "easydc_challenge={token}; Path=/login; HttpOnly; SameSite=Strict; Max-Age={}",
+        crate::totp::CHALLENGE_SECONDS
+    );
+    if secure {
+        c.push_str("; Secure");
+    }
+    c
+}
+
+pub fn clear_challenge_cookie(secure: bool) -> HeaderValue {
+    HeaderValue::from_static(if secure {
+        "easydc_challenge=; Path=/login; HttpOnly; SameSite=Strict; Max-Age=0; Secure"
+    } else {
+        "easydc_challenge=; Path=/login; HttpOnly; SameSite=Strict; Max-Age=0"
+    })
+}
+
+pub fn extract_challenge_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .find_map(|s| s.trim().strip_prefix("easydc_challenge=").map(String::from))
+}
+
 pub fn clear_session_cookie(secure: bool) -> HeaderValue {
     HeaderValue::from_static(if secure {
         "session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0; Secure"
@@ -136,11 +165,24 @@ pub async fn require_auth(
         .get::<MatchedPath>()
         .map(|m| m.as_str().to_string())
         .unwrap_or_default();
+    if access.admin && !open_before_two_factor(&route) && db::must_set_up_two_factor(&state.db, &access.username).await {
+        if wants_json(request.headers()) {
+            let error = "EasyDC requires two-factor sign-in for admins. Set it up first.";
+            return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": error }))).into_response();
+        }
+        return Redirect::to("/settings/two-factor").into_response();
+    }
     let need = access::need(request.method(), &route);
     if !access.allows(need) {
         return refuse(&state, &access.username, request.headers(), request.uri().path(), need).await;
     }
     access::scope(access, next.run(request)).await
+}
+
+/// What a local admin can still reach while two-factor is required of them
+/// and not set up yet.
+fn open_before_two_factor(route: &str) -> bool {
+    matches!(route, "/logout" | "/settings/two-factor" | "/settings/two-factor/start" | "/settings/two-factor/confirm")
 }
 
 /// Answer a change the account may not make: a line in the audit log, and

@@ -1,15 +1,19 @@
 use axum::{
     extract::{Query, State},
     http::{header, HeaderMap, HeaderValue},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
 use serde::Deserialize;
 use tera::Context;
 use uuid::Uuid;
 
+use super::two_factor::{self, Used};
 use crate::{
-    auth::{clear_session_cookie, extract_session_cookie, session_cookie, via_https},
+    auth::{
+        challenge_cookie, clear_challenge_cookie, clear_session_cookie, extract_challenge_cookie,
+        extract_session_cookie, session_cookie, via_https,
+    },
     db, ldap, AppState,
 };
 
@@ -58,6 +62,12 @@ pub async fn post_login(
             if !bcrypt::verify(&form.password, &hash).unwrap_or(false) {
                 return refused(&state, "Invalid username or password").await;
             }
+            // If the database cannot say whether a code is needed, no sign-in.
+            match db::two_factor(&state.db, &username).await {
+                Ok(Some(t)) if t.enabled => return ask_for_code(&state, &headers, &username).await,
+                Ok(_) => {}
+                Err(_) => return refused(&state, "Sign-in is not available right now. Try again.").await,
+            }
             username
         }
         Some(db::SignIn::Domain { username, domain_user, server_id }) => {
@@ -82,6 +92,87 @@ pub async fn post_login(
         }
     };
 
+    start_session(&state, &headers, &username, "/").await
+}
+
+/// The password was right and the account has two-factor: open the code step.
+async fn ask_for_code(state: &AppState, headers: &HeaderMap, username: &str) -> Response {
+    let token = Uuid::new_v4().to_string();
+    if db::create_challenge(&state.db, &token, username, db::unix_now()).await.is_err() {
+        return refused(state, "Sign-in is not available right now. Try again.").await;
+    }
+    let mut response = Redirect::to("/login/code").into_response();
+    if let Ok(v) = HeaderValue::from_str(&challenge_cookie(&token, via_https(headers))) {
+        response.headers_mut().insert(header::SET_COOKIE, v);
+    }
+    response
+}
+
+/// Back to the password, with the code step closed.
+fn start_over(headers: &HeaderMap) -> Response {
+    let mut response = Redirect::to("/login?expired=1").into_response();
+    response.headers_mut().insert(header::SET_COOKIE, clear_challenge_cookie(via_https(headers)));
+    response
+}
+
+fn code_page(state: &AppState, error: Option<&str>) -> Response {
+    let mut ctx = Context::new();
+    if let Some(e) = error {
+        ctx.insert("error", e);
+    }
+    let mut response = Html(state.tera.render("login_code.html", &ctx).unwrap_or_default()).into_response();
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+pub async fn get_login_code(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let open = match extract_challenge_cookie(&headers) {
+        Some(token) => db::challenge_user(&state.db, &token, db::unix_now()).await.is_some(),
+        None => false,
+    };
+    if open { code_page(&state, None) } else { start_over(&headers) }
+}
+
+#[derive(Deserialize)]
+pub struct LoginCodeForm {
+    pub code: String,
+}
+
+pub async fn post_login_code(State(state): State<AppState>, headers: HeaderMap, Form(form): Form<LoginCodeForm>) -> Response {
+    let Some(token) = extract_challenge_cookie(&headers) else {
+        return start_over(&headers);
+    };
+    let Some(username) = db::challenge_user(&state.db, &token, db::unix_now()).await else {
+        return start_over(&headers);
+    };
+    // Turned off, or reset by an admin, since the password was typed.
+    let secret = match db::two_factor(&state.db, &username).await {
+        Ok(Some(t)) if t.enabled => t.secret,
+        _ => {
+            db::close_challenge(&state.db, &token).await;
+            return start_over(&headers);
+        }
+    };
+    let used = match two_factor::check_code(&state, &username, &secret, &form.code).await {
+        Ok(used) => used,
+        Err(e) => {
+            db::log_action(&state.db, &username, "auth.two_factor", &username, None, &Err(e.clone())).await;
+            return code_page(&state, Some(&e));
+        }
+    };
+    if !db::close_challenge(&state.db, &token).await {
+        return start_over(&headers);
+    }
+    let action = if used == Used::Recovery { "auth.two_factor_recovery" } else { "auth.two_factor" };
+    db::log_action(&state.db, &username, action, &username, None, &Ok(())).await;
+    let to = if used == Used::Recovery { "/settings/two-factor?done=recovery" } else { "/" };
+    let mut response = start_session(&state, &headers, &username, to).await;
+    response.headers_mut().append(header::SET_COOKIE, clear_challenge_cookie(via_https(&headers)));
+    response
+}
+
+/// Everything needed is proven: create the session and send the browser on.
+async fn start_session(state: &AppState, headers: &HeaderMap, username: &str, to: &str) -> Response {
     db::purge_expired_sessions(&state.db).await;
 
     let token = Uuid::new_v4().to_string();
@@ -91,13 +182,13 @@ pub async fn post_login(
         .bind(&token)
         .bind(now)
         .bind(now)
-        .bind(&username)
+        .bind(username)
         .execute(&state.db)
         .await
         .unwrap();
 
-    let cookie = session_cookie(&token, via_https(&headers));
-    let mut response = Redirect::to("/").into_response();
+    let cookie = session_cookie(&token, via_https(headers));
+    let mut response = Redirect::to(to).into_response();
     response
         .headers_mut()
         .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());

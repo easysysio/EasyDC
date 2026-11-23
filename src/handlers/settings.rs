@@ -45,6 +45,9 @@ fn done_message(code: &str) -> Option<&'static str> {
         "permissions" => Some("Permissions saved. They apply from that account's next click."),
         "certificate" => Some("Certificate saved. New connections use it now, with no restart."),
         "generated" => Some("A new self-signed certificate is in use. Your browser will warn about it once."),
+        "two_factor_reset" => Some("Two-factor sign-in removed and the account signed out. They can set it up again."),
+        "two_factor_required" => Some("Local admins must now use two-factor sign-in. Those without it set it up at their next click."),
+        "two_factor_optional" => Some("Two-factor sign-in is now optional for admins."),
         _ => None,
     }
 }
@@ -61,6 +64,8 @@ async fn render(
     ctx.insert("actor", actor);
     let accounts = db::list_accounts(&state.db).await.unwrap_or_default();
     ctx.insert("me_domain", &accounts.iter().any(|a| a.username == actor && a.domain));
+    ctx.insert("me_two_factor", &accounts.iter().any(|a| a.username == actor && a.two_factor));
+    ctx.insert("two_factor_required", &db::two_factor_required(&state.db).await);
     ctx.insert("accounts", &accounts);
     let servers: Vec<_> = db::server_names(&state.db)
         .await
@@ -80,6 +85,11 @@ async fn render(
         ctx.insert("done", d);
     }
     Html(access::render(&state.tera, "settings.html", &ctx)).into_response()
+}
+
+/// The settings page with why something was refused.
+pub async fn show_error(state: &AppState, actor: &str, error: String) -> Response {
+    render(state, actor, Some(error), None).await
 }
 
 pub async fn settings(
@@ -481,6 +491,7 @@ mod tests {
             server_name: None,
             domain_user: String::new(),
             admin,
+            two_factor: false,
             edit: a.edit.iter().map(|x| x.key()).collect(),
             summary: a.summary(),
         }
@@ -690,6 +701,24 @@ mod tests {
 
         let html = render(None, true);
         assert!(html.contains("EASYDC_TLS=off") && !html.contains(r#"action="/settings/certificate""#));
+    }
+
+    #[test]
+    fn the_two_factor_card_and_its_admin_controls() {
+        let mut bob = account("bob", false, &[]);
+        bob.two_factor = true;
+        let accounts = [account("alice", true, &[]), bob, account("carol", false, &[])];
+        let me = Access { username: "alice".into(), admin: true, ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("alice", me, &accounts)).unwrap();
+        assert!(html.contains(r#"href="/settings/two-factor""#));
+        assert!(html.contains(r#"action="/settings/two-factor/require""#));
+        assert!(html.contains("/settings/accounts/bob/two-factor/reset"));
+        assert!(!html.contains("/settings/accounts/carol/two-factor/reset"), "carol has none to reset");
+
+        let me = Access { username: "carol".into(), ..Default::default() };
+        let html = tera().render("settings.html", &ctx_for("carol", me, &accounts)).unwrap();
+        assert!(html.contains(r#"href="/settings/two-factor""#), "anyone can set up their own");
+        assert!(!html.contains("/settings/two-factor/require") && !html.contains("two-factor/reset"));
     }
 
     #[test]

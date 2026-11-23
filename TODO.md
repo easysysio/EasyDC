@@ -9,9 +9,9 @@ EasyDC keeps the bind passwords of accounts that can change the whole domain.
 
 - ~~**HTTPS built in.**~~ Done: on port 3000, with plain HTTP redirected, a self-signed
   certificate or your own from Settings, and `EASYDC_TLS=off` for reverse proxies.
-- **Two-factor sign-in** with an authenticator app (TOTP) for local EasyDC accounts: set
-  up from a QR code, with recovery codes, and a way for an admin to reset it. Admins may be
-  required to use it. Domain accounts keep signing in with their domain password.
+- ~~**Two-factor sign-in.**~~ Done: an authenticator app for local accounts, with recovery
+  codes, an admin reset, `--reset-2fa` on the host, and a switch to require it for local
+  admins. Domain accounts keep signing in with their domain password.
 
 ## Group Policy
 

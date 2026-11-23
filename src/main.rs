@@ -15,6 +15,7 @@ mod csv;
 mod sd;
 mod sites;
 mod tls;
+mod totp;
 
 use std::sync::Arc;
 
@@ -52,6 +53,7 @@ async fn main() {
             println!("{}", version_line());
             return;
         }
+        Ok(Command::ResetTwoFactor(name)) => std::process::exit(reset_two_factor(&name).await),
         Ok(Command::Serve(p)) => p,
         Err(e) => {
             eprintln!("EasyDC: {}\n\n{}", e, USAGE);
@@ -120,6 +122,7 @@ async fn main() {
     let public = Router::new()
         .route("/setup", get(handlers::setup::get_setup).post(handlers::setup::post_setup))
         .route("/login", get(handlers::auth_handlers::get_login).post(handlers::auth_handlers::post_login))
+        .route("/login/code", get(handlers::auth_handlers::get_login_code).post(handlers::auth_handlers::post_login_code))
         .route("/healthz", get(|| async { "ok" }))
         .route("/static/*path", get(assets::serve));
 
@@ -130,6 +133,13 @@ async fn main() {
         .route("/settings/password", post(handlers::settings::change_password))
         .route("/settings/certificate", post(handlers::settings::upload_certificate))
         .route("/settings/certificate/generate", post(handlers::settings::generate_certificate))
+        .route("/settings/two-factor", get(handlers::two_factor::get_page))
+        .route("/settings/two-factor/start", post(handlers::two_factor::start))
+        .route("/settings/two-factor/confirm", post(handlers::two_factor::confirm))
+        .route("/settings/two-factor/recovery", post(handlers::two_factor::new_recovery_codes))
+        .route("/settings/two-factor/disable", post(handlers::two_factor::disable))
+        .route("/settings/two-factor/require", post(handlers::two_factor::set_required))
+        .route("/settings/accounts/:username/two-factor/reset", post(handlers::two_factor::reset))
         .route("/settings/accounts/new", post(handlers::settings::create_account))
         .route("/settings/accounts/:username/permissions", post(handlers::settings::update_permissions))
         .route("/settings/accounts/:username/delete", post(handlers::settings::delete_account))
@@ -262,9 +272,11 @@ EasyDC — a web GUI for Samba Active Directory domain controllers
 Usage: easydc [OPTIONS]
 
 Options:
-  -p, --port <PORT>    Port to listen on [default: 3000, or $EASYDC_PORT]
-  -V, --version        Print the version
-  -h, --help           Print this help
+  -p, --port <PORT>        Port to listen on [default: 3000, or $EASYDC_PORT]
+      --reset-2fa <USER>   Remove an account's two-factor sign-in and exit.
+                           Run it in the folder that holds easydc.db
+  -V, --version            Print the version
+  -h, --help               Print this help
 
 EasyDC serves HTTPS on its port and redirects plain HTTP to it. Set
 EASYDC_TLS=off to serve plain HTTP, behind a reverse proxy.
@@ -278,6 +290,7 @@ The SQLite database (easydc.db) is created in the working directory.";
 enum Command {
     Help,
     Version,
+    ResetTwoFactor(String),
     Serve(u16),
 }
 
@@ -290,7 +303,55 @@ fn parse_command<I: AsRef<str>>(args: &[I], env_port: Option<String>) -> Result<
     if args.iter().any(|a| matches!(a.as_ref(), "-V" | "--version")) {
         return Ok(Command::Version);
     }
+    if let Some(at) = args.iter().position(|a| a.as_ref() == "--reset-2fa" || a.as_ref().starts_with("--reset-2fa=")) {
+        if args.len() > 2 || (args.len() == 2 && args[at].as_ref() != "--reset-2fa") {
+            return Err("--reset-2fa takes one username and no other options".to_string());
+        }
+        let name = match args[at].as_ref().strip_prefix("--reset-2fa=") {
+            Some(v) => v,
+            None => args.get(at + 1).map_or("", |a| a.as_ref()),
+        };
+        if name.is_empty() || name.starts_with('-') {
+            return Err("--reset-2fa needs a username".to_string());
+        }
+        return Ok(Command::ResetTwoFactor(name.to_string()));
+    }
     parse_port(args, env_port).map(Command::Serve)
+}
+
+/// For an admin locked out with no phone, no recovery codes and no other
+/// admin. Whoever can run this can already read the database. Never creates a
+/// database: in the wrong folder it says so.
+async fn reset_two_factor(username: &str) -> i32 {
+    let opts = SqliteConnectOptions::from_str("sqlite://easydc.db").unwrap();
+    let Ok(pool) = SqlitePool::connect_with(opts).await else {
+        eprintln!("EasyDC: no easydc.db here. Run this in EasyDC's data folder, as its user.");
+        return 1;
+    };
+    if let Err(e) = db::init_tables(&pool).await {
+        eprintln!("EasyDC: cannot use easydc.db: {e}");
+        return 1;
+    }
+    if !db::account_exists(&pool, username).await {
+        eprintln!("EasyDC: no account named '{username}'.");
+        return 1;
+    }
+    match db::remove_two_factor(&pool, username).await {
+        Ok(true) => {
+            db::delete_sessions_for(&pool, username, None).await;
+            db::log_action(&pool, "command line", "settings.two_factor_reset", username, None, &Ok(())).await;
+            println!("Two-factor sign-in removed from {username}, and its sessions ended.");
+            0
+        }
+        Ok(false) => {
+            println!("{username} does not have two-factor sign-in on.");
+            0
+        }
+        Err(e) => {
+            eprintln!("EasyDC: could not change easydc.db: {e}");
+            1
+        }
+    }
 }
 
 fn version_line() -> String {
@@ -363,6 +424,18 @@ mod command_tests {
     fn no_flags_serves_on_the_default_port() {
         assert_eq!(cmd(&[]), Ok(Command::Serve(3000)));
         assert_eq!(cmd(&["--port", "8080"]), Ok(Command::Serve(8080)));
+    }
+
+    #[test]
+    fn the_two_factor_reset_takes_one_name() {
+        assert_eq!(cmd(&["--reset-2fa", "alice"]), Ok(Command::ResetTwoFactor("alice".into())));
+        assert_eq!(cmd(&["--reset-2fa=alice"]), Ok(Command::ResetTwoFactor("alice".into())));
+        assert!(cmd(&["--reset-2fa"]).is_err());
+        assert!(cmd(&["--reset-2fa="]).is_err());
+        assert!(cmd(&["--reset-2fa", "--port"]).is_err());
+        assert!(cmd(&["--reset-2fa", "alice", "--port", "80"]).is_err());
+        assert!(cmd(&["--port", "80", "--reset-2fa=alice"]).is_err());
+        assert_eq!(cmd(&["--reset-2fa", "alice", "--help"]), Ok(Command::Help));
     }
 
     #[test]

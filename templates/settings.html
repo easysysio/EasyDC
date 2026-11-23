@@ -52,7 +52,7 @@
     <i class="bi bi-gear fs-2 text-primary me-3"></i>
     <div>
         <h4 class="mb-0">Settings</h4>
-        <small class="text-muted">Who can sign in to EasyDC, what they may change, and its HTTPS certificate</small>
+        <small class="text-muted">Who can sign in to EasyDC, how, what they may change, and its HTTPS certificate</small>
     </div>
 </div>
 
@@ -108,6 +108,39 @@
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check2 me-1"></i> Change password
                     </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-shield-check me-2 text-primary"></i><strong>Two-factor sign-in</strong></span>
+                {% if not me_domain %}
+                {% if me_two_factor %}<span class="badge bg-success">On</span>
+                {% else %}<span class="badge bg-light text-secondary border">Off</span>{% endif %}
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if me_domain %}
+                <p class="text-muted small">You sign in with your domain password, so this does not apply to your account.</p>
+                {% else %}
+                <p class="text-muted small">A code from an app on your phone, after your password.</p>
+                <a href="/settings/two-factor" class="btn btn-primary btn-sm">
+                    <i class="bi bi-shield-check me-1"></i>{% if me_two_factor %}Manage{% else %}Set up{% endif %}
+                </a>
+                {% endif %}
+                {% if access.admin %}
+                <form method="post" action="/settings/two-factor/require" class="border-top mt-3 pt-3">
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" name="required" id="requireTwoFactor"
+                            {% if two_factor_required %}checked{% endif %}>
+                        <label class="form-check-label" for="requireTwoFactor">
+                            Require it for local admins
+                            <span class="small text-muted d-block">Domain accounts are not covered: they sign in with their domain password.</span>
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">Save</button>
                 </form>
                 {% endif %}
             </div>
@@ -181,6 +214,10 @@
                         {% if a.admin %}
                         <span class="badge bg-dark-subtle text-dark border ms-1">Admin</span>
                         {% endif %}
+                        {% if a.two_factor %}
+                        <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle ms-1"
+                            title="Signs in with a code as well"><i class="bi bi-shield-check me-1"></i>2FA</span>
+                        {% endif %}
                         {% if a.domain %}
                         <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1"
                             title="Signs in with the domain password of {{ a.domain_user }}">
@@ -198,6 +235,14 @@
                             data-bs-target="#permissions{{ loop.index }}" title="Change permissions">
                             <i class="bi bi-shield-lock"></i>
                         </button>
+                        {% if a.two_factor %}
+                        <form method="post" action="/settings/accounts/{{ a.username | urlencode_strict }}/two-factor/reset"
+                            class="js-reset-two-factor" data-account="{{ a.username }}">
+                            <button type="submit" class="btn btn-outline-warning btn-sm" title="Reset two-factor sign-in">
+                                <i class="bi bi-shield-x"></i>
+                            </button>
+                        </form>
+                        {% endif %}
                         {% if a.domain or not a.admin or local_admins | length > 1 %}
                         <form method="post" action="/settings/accounts/{{ a.username | urlencode_strict }}/delete"
                             class="js-delete-account" data-account="{{ a.username }}">
@@ -376,6 +421,14 @@ document.querySelectorAll('.js-delete-account').forEach(function (form) {
     form.addEventListener('submit', function (e) {
         const name = form.dataset.account;
         if (!confirm('Remove account ' + name + '? They will be signed out immediately.')) {
+            e.preventDefault();
+        }
+    });
+});
+
+document.querySelectorAll('.js-reset-two-factor').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+        if (!confirm('Remove two-factor sign-in from ' + form.dataset.account + '? They will be signed out, and can sign in with their password alone until they set it up again.')) {
             e.preventDefault();
         }
     });

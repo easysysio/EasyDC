@@ -111,7 +111,12 @@ pub fn need(method: &Method, route: &str) -> Need {
     }
     let Some(rest) = route.strip_prefix("/servers/:id/") else {
         return match route {
-            "/logout" | "/settings/password" => Need::Anyone,
+            "/logout"
+            | "/settings/password"
+            | "/settings/two-factor/start"
+            | "/settings/two-factor/confirm"
+            | "/settings/two-factor/recovery"
+            | "/settings/two-factor/disable" => Need::Anyone,
             _ => Need::Admin,
         };
     };
@@ -247,7 +252,7 @@ mod tests {
 
     #[test]
     fn every_change_needs_a_permission() {
-        let public = ["/setup", "/login", "/static/*path"];
+        let public = ["/setup", "/login", "/login/code", "/static/*path"];
         let mut handler_checked = Vec::new();
         for (path, methods) in routes() {
             if public.contains(&path.as_str()) {
@@ -261,7 +266,15 @@ mod tests {
                 }
                 match n {
                     Need::Anyone => assert!(
-                        ["/logout", "/settings/password"].contains(&path.as_str()),
+                        [
+                            "/logout",
+                            "/settings/password",
+                            "/settings/two-factor/start",
+                            "/settings/two-factor/confirm",
+                            "/settings/two-factor/recovery",
+                            "/settings/two-factor/disable",
+                        ]
+                        .contains(&path.as_str()),
                         "{path} may be posted by anyone"
                     ),
                     Need::Handler => handler_checked.push(path.clone()),
@@ -275,6 +288,8 @@ mod tests {
     #[test]
     fn routes_need_their_area() {
         let post = |r| need(&Method::POST, r);
+        assert_eq!(post("/settings/two-factor/require"), Need::Admin);
+        assert_eq!(post("/settings/accounts/:username/two-factor/reset"), Need::Admin);
         assert_eq!(post("/servers/:id/users/:username/reset-password"), Need::Edit(Area::Users));
         assert_eq!(post("/servers/:id/users/bulk"), Need::Edit(Area::Users));
         assert_eq!(post("/servers/:id/users/:username/password-settings"), Need::Edit(Area::Users));

@@ -1,0 +1,35 @@
+{% extends "base_public.html" %}
+{% block title %}Sign-in code - EasyDC{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-5 col-lg-4">
+        <div class="text-center mb-4">
+            <i class="bi bi-hdd-network fs-1 text-primary"></i>
+            <h3 class="fw-bold mt-2">EasyDC</h3>
+            <p class="text-muted">Samba DC Management</p>
+        </div>
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h5 class="card-title mb-3">Enter your code</h5>
+                {% if error %}
+                <div class="alert alert-danger py-2">
+                    <i class="bi bi-exclamation-circle me-1"></i> {{ error }}
+                </div>
+                {% endif %}
+                <form method="post" action="/login/code">
+                    <div class="mb-4">
+                        <label class="form-label fw-medium" for="code">Code from your authenticator app</label>
+                        <input type="text" id="code" name="code" class="form-control" required autofocus
+                            autocomplete="one-time-code" maxlength="16">
+                        <div class="form-text">Lost your phone? Enter a recovery code instead.</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-box-arrow-in-right me-1"></i> Sign In
+                    </button>
+                </form>
+                <div class="text-center mt-3"><a href="/login" class="small">Back to sign-in</a></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -9,6 +9,7 @@ pub mod servers;
 pub mod settings;
 pub mod setup;
 pub mod sites;
+pub mod two_factor;
 pub mod users_csv;
 
 /// A name as one URL path segment: `Sales/EMEA` must not become two segments,

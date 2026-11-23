@@ -44,6 +44,9 @@ few minutes; the audit log records it as failed, with the reason.
   the file to the service user.
 - **Admin passwords** are stored as bcrypt hashes. Sessions use an `HttpOnly`,
   `SameSite=Strict` cookie, marked `Secure` when the proxy reports HTTPS.
+- **Two-factor sign-in** for local accounts uses TOTP. Recovery codes are stored hashed.
+  The authenticator secrets are in `easydc.db`, so protect its backups like the bind
+  passwords.
 - **Sessions end** after 8 hours without activity, and 24 hours after sign-in however
   active. Changing a password, or removing an administrator, drops that account's other
   sessions.
