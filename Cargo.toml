@@ -34,6 +34,8 @@ tower-service = "0.3"
 # Draws the two-factor QR code as SVG. No image library.
 qrcode = { version = "0.15", default-features = false, features = ["std", "svg"] }
 rust-embed = { version = "8", features = ["include-exclude"] }
+# Compresses rotated audit log files. Already in the tree through tower-http.
+flate2 = "1"
 
 [dev-dependencies]
 # Already in the tree through axum; the tests parse forms with it directly.

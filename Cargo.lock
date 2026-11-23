@@ -8,6 +8,7 @@ version = "0.5.1"
 dependencies = [
  "axum",
  "bcrypt",
+ "flate2",
  "hyper",
  "hyper-util",
  "ldap3",

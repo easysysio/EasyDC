@@ -52,7 +52,7 @@
     <i class="bi bi-gear fs-2 text-primary me-3"></i>
     <div>
         <h4 class="mb-0">Settings</h4>
-        <small class="text-muted">Who can sign in to EasyDC, and how it is secured</small>
+        <small class="text-muted">Who can sign in to EasyDC, how it is secured, and what it keeps</small>
     </div>
 </div>
 
@@ -93,6 +93,12 @@
             <i class="bi bi-lock me-1"></i>HTTPS certificate
             {% if tls and tls.expired %}<span class="badge bg-danger ms-1">Expired</span>
             {% elif tls and tls.days_left < 30 %}<span class="badge bg-warning text-dark ms-1">{{ tls.days_left }} days</span>{% endif %}
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if tab == "audit-log" %}active{% endif %}" type="button" role="tab" data-bs-toggle="tab"
+            data-bs-target="#tabAuditLog" data-tab="audit-log">
+            <i class="bi bi-journal-text me-1"></i>Audit log
         </button>
     </li>
 </ul>
@@ -255,6 +261,75 @@
             </div>
         </div>
         </div></div>
+    </div>
+
+    <div class="tab-pane {% if tab == "audit-log" %}show active{% endif %}" id="tabAuditLog" role="tabpanel">
+        {% if audit_log %}
+        <div class="row"><div class="col-lg-8">
+        {% if audit_log.error %}
+        <div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> {{ audit_log.error }}</div>
+        {% endif %}
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-white"><strong>How long to keep it</strong></div>
+            <div class="card-body">
+                <p class="small text-muted">
+                    The log holds {{ audit_log.entries }} entr{% if audit_log.entries == 1 %}y{% else %}ies{% endif %}.
+                    Once an hour, EasyDC moves whole days past this time out of the log, into one compressed CSV file per day.
+                </p>
+                {% if access.admin %}
+                <form method="post" action="/settings/audit-log" id="auditLogForm">
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-6">
+                            <label class="form-label" for="auditKeep">Keep entries in the log</label>
+                            <select class="form-select" id="auditKeep" name="keep_days">
+                                {% for c in audit_log.keep_choices %}
+                                <option value="{{ c.days }}" data-older="{{ c.older }}" {% if c.days == audit_log.keep_days %}selected{% endif %}>{{ c.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-sm-6" id="auditFilesField">
+                            <label class="form-label" for="auditFiles">Rotated files</label>
+                            <select class="form-select" id="auditFiles" name="file_days">
+                                {% for c in audit_log.file_choices %}
+                                <option value="{{ c.days }}" data-expired="{{ c.expired }}" {% if c.days == audit_log.file_days %}selected{% endif %}>{{ c.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                </form>
+                {% else %}
+                <p class="mb-1"><span class="fw-medium">Now:</span> {{ audit_log.describe }}.</p>
+                <p class="text-muted small mb-0">Only an EasyDC admin can change this.</p>
+                {% endif %}
+            </div>
+        </div>
+        <div class="card shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+                <strong>Rotated files</strong>
+                <code class="small">{{ audit_log.folder }}/</code>
+            </div>
+            {% if audit_log.files | length == 0 %}
+            <div class="card-body small text-muted">No rotated files yet.</div>
+            {% else %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light"><tr><th>Day (UTC)</th><th>Size</th><th></th></tr></thead>
+                    <tbody data-paged="audit-files">
+                        {% for f in audit_log.files %}
+                        <tr>
+                            <td>{{ f.date }}</td>
+                            <td class="small text-muted text-nowrap">{{ f.size }}</td>
+                            <td class="text-end"><a class="btn btn-outline-secondary btn-sm" href="/settings/audit-log/files/{{ f.name | urlencode_strict }}" title="Download {{ f.name }}" aria-label="Download {{ f.name }}"><i class="bi bi-download"></i></a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+        </div></div>
+        {% endif %}
     </div>
 
 </div>
@@ -434,6 +509,42 @@ document.querySelectorAll('.js-reset-two-factor').forEach(function (form) {
         }
     });
 });
+
+// Says what saving would remove before it does. Files must outlast the log.
+(function () {
+    const form = document.getElementById('auditLogForm');
+    if (!form) return;
+    const keep = form.elements.keep_days, files = form.elements.file_days;
+    const field = document.getElementById('auditFilesField');
+    const chosen = select => select.options[select.selectedIndex];
+    function update() {
+        const days = parseInt(keep.value, 10);
+        field.classList.toggle('d-none', days === 0);
+        [...files.options].forEach(o => {
+            const d = parseInt(o.value, 10);
+            o.disabled = days > 0 && d > 0 && d <= days;
+        });
+        if (chosen(files).disabled) files.value = '0';
+    }
+    keep.addEventListener('change', update);
+    update();
+    form.addEventListener('submit', function (e) {
+        if (keep.value === '0') return;
+        const older = parseInt(chosen(keep).dataset.older, 10);
+        const expired = parseInt(chosen(files).dataset.expired, 10);
+        const says = [];
+        if (older > 0) {
+            says.push(files.value === '-1'
+                ? older + ' log entries are older than this and will be deleted for good.'
+                : older + ' log entries are older than this and will move to files.');
+        }
+        if (expired > 0) says.push(expired + ' rotated files are past their time and will be deleted for good.');
+        if (says.length && !confirm(says.join(' ') + ' Continue?')) e.preventDefault();
+    });
+})();
+
+// On a phone the tabs scroll sideways: show the open one.
+document.querySelector('#settingsTabs .active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
 
 // Reloading stays on the tab, without repeating the last message.
 document.querySelectorAll('#settingsTabs [data-tab]').forEach(function (button) {

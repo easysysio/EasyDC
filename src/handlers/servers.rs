@@ -34,7 +34,12 @@ pub async fn audit(State(state): State<AppState>, Query(view): Query<AuditView>)
         Ok(found) => (entries, total) = found,
         Err(e) => error = Some(format!("The audit log could not be read: {e}")),
     }
-    let ctx = audit_context(&view, failures, wanted, entries, total, error);
+    let mut ctx = audit_context(&view, failures, wanted, entries, total, error);
+    if let Ok(r) = crate::audit::load(&state.db).await
+        && r.keep_days > 0
+    {
+        ctx.insert("retention", &r.describe());
+    }
     Html(crate::access::render(&state.tera, "audit.html", &ctx))
 }
 

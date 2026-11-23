@@ -104,6 +104,8 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    // Rotation finds old entries by time.
+    sqlx::query("CREATE INDEX IF NOT EXISTS audit_log_ts ON audit_log (ts)").execute(pool).await?;
 
     // One row: the certificate EasyDC serves, and its private key.
     sqlx::query(

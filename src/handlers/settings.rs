@@ -16,6 +16,7 @@ use tera::Context;
 
 use crate::{
     access::{self, Area, AREAS},
+    audit,
     auth::CurrentUser,
     db, ldap, tls, AppState,
 };
@@ -36,6 +37,13 @@ pub struct SettingsQuery {
     pub done: Option<String>,
     /// The tab to open.
     pub tab: Option<String>,
+    /// What saving the audit log setting rotated out right away.
+    #[serde(default)]
+    pub entries: u64,
+    #[serde(default)]
+    pub files: u64,
+    #[serde(default)]
+    pub to_files: bool,
 }
 
 /// The tab a page opens on: the one asked for, or the one a change was made on.
@@ -43,10 +51,12 @@ fn tab_for(q: &SettingsQuery) -> &'static str {
     let name = q.tab.as_deref().or(match q.done.as_deref() {
         Some("certificate" | "generated") => Some("https"),
         Some("two_factor_required" | "two_factor_optional") => Some("two-factor"),
+        Some("audit_saved") => Some("audit-log"),
         _ => None,
     });
     match name {
         Some("https") => "https",
+        Some("audit-log") => "audit-log",
         Some("two-factor") if access::current().admin => "two-factor",
         _ => "accounts",
     }
@@ -89,6 +99,7 @@ async fn render_tab(state: &AppState, actor: &str, tab: &str, error: Option<Stri
     ctx.insert("servers", &servers);
     ctx.insert("areas", &area_rows());
     ctx.insert("min_password_len", &MIN_PASSWORD_LEN);
+    insert_audit_log(state, &mut ctx).await;
     if let Some(live) = &state.tls {
         ctx.insert("tls", &live.info());
     }
@@ -111,8 +122,90 @@ pub async fn settings(
     CurrentUser(actor): CurrentUser,
     Query(q): Query<SettingsQuery>,
 ) -> Response {
-    let done = q.done.as_deref().and_then(done_message);
+    let audit_done = (q.done.as_deref() == Some("audit_saved")).then(|| {
+        let summary = audit::Rotated { entries: q.entries, files_deleted: q.files, to_files: q.to_files, error: None }.summary();
+        if summary.is_empty() { "Saved.".to_string() } else { format!("Saved: {summary}.") }
+    });
+    let done = audit_done.as_deref().or(q.done.as_deref().and_then(done_message));
     render_tab(&state, &actor, tab_for(&q), None, done).await
+}
+
+// ── how long the audit log is kept ────────────────────────────────────────────
+
+async fn insert_audit_log(state: &AppState, ctx: &mut Context) {
+    let dir = std::path::Path::new(audit::ARCHIVE_DIR);
+    let (retention, read_error) = match audit::load(&state.db).await {
+        Ok(r) => (r, None),
+        Err(e) => (audit::Retention::default(), Some(e)),
+    };
+    let (files, files_error) = match audit::list_files(dir) {
+        Ok(f) => (f, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let (keep_choices, file_choices) = audit::preview(&state.db, &files, db::unix_now()).await;
+    let entries: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log").fetch_one(&state.db).await.unwrap_or(0);
+    ctx.insert(
+        "audit_log",
+        &serde_json::json!({
+            "keep_days": retention.keep_days,
+            "file_days": retention.file_days,
+            "describe": retention.describe(),
+            "keep_choices": keep_choices,
+            "file_choices": file_choices,
+            "files": files,
+            "entries": entries,
+            "folder": audit::ARCHIVE_DIR,
+            "error": read_error.or(files_error),
+        }),
+    );
+}
+
+#[derive(Deserialize)]
+pub struct AuditLogForm {
+    keep_days: i64,
+    #[serde(default)]
+    file_days: i64,
+}
+
+/// Save, and rotate right away, so the page shows what the choice did.
+pub async fn save_audit_log(State(state): State<AppState>, CurrentUser(actor): CurrentUser, Form(f): Form<AuditLogForm>) -> Response {
+    let wanted = audit::Retention { keep_days: f.keep_days, file_days: f.file_days };
+    let saved = audit::save(&state.db, wanted).await;
+    db::log_action(&state.db, &actor, "settings.audit_log", &wanted.describe(), None, &saved).await;
+    if let Err(e) = saved {
+        return show_error(&state, &actor, "audit-log", e).await;
+    }
+    let done = audit::rotate(&state.db, std::path::Path::new(audit::ARCHIVE_DIR), db::unix_now()).await;
+    audit::record(&state.db, &actor, &done).await;
+    if let Some(e) = done.error {
+        return show_error(&state, &actor, "audit-log", format!("The setting was saved, but rotation stopped: {e}")).await;
+    }
+    Redirect::to(&format!(
+        "/settings?done=audit_saved&entries={}&files={}&to_files={}",
+        done.entries, done.files_deleted, done.to_files
+    ))
+    .into_response()
+}
+
+/// One rotated file. Everyone can read the Audit Log page, and this is the
+/// same information. The name must be one of ours, so it cannot leave the folder.
+pub async fn audit_file(Path(name): Path<String>) -> Response {
+    use axum::http::{header, StatusCode};
+    if audit::file_day(&name).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tokio::fs::read(std::path::Path::new(audit::ARCHIVE_DIR).join(&name)).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/gzip".to_string()),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+                (header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 // ── the HTTPS certificate ─────────────────────────────────────────────────────
@@ -642,11 +735,13 @@ mod tests {
     #[tokio::test]
     async fn a_page_opens_on_the_tab_of_its_change() {
         use crate::access::{scope, Access};
-        let q = |tab: Option<&str>, done: Option<&str>| super::SettingsQuery { tab: tab.map(String::from), done: done.map(String::from) };
+        let q = |tab: Option<&str>, done: Option<&str>| super::SettingsQuery { tab: tab.map(String::from), done: done.map(String::from), entries: 0, files: 0, to_files: false };
         let admin = Access { username: "a".into(), admin: true, ..Default::default() };
         scope(admin, async {
             assert_eq!(super::tab_for(&q(None, None)), "accounts");
             assert_eq!(super::tab_for(&q(Some("https"), None)), "https");
+            assert_eq!(super::tab_for(&q(Some("audit-log"), None)), "audit-log");
+            assert_eq!(super::tab_for(&q(None, Some("audit_saved"))), "audit-log");
             assert_eq!(super::tab_for(&q(None, Some("certificate"))), "https");
             assert_eq!(super::tab_for(&q(None, Some("two_factor_required"))), "two-factor");
             assert_eq!(super::tab_for(&q(None, Some("two_factor_reset"))), "accounts");

@@ -1,5 +1,6 @@
 mod access;
 mod assets;
+mod audit;
 mod auth;
 mod db;
 mod dc_removal;
@@ -133,6 +134,8 @@ async fn main() {
         .route("/settings", get(handlers::settings::settings))
         .route("/account", get(handlers::account::page))
         .route("/account/password", post(handlers::account::change_password))
+        .route("/settings/audit-log", post(handlers::settings::save_audit_log))
+        .route("/settings/audit-log/files/:name", get(handlers::settings::audit_file))
         .route("/settings/certificate", post(handlers::settings::upload_certificate))
         .route("/settings/certificate/generate", post(handlers::settings::generate_certificate))
         .route("/account/two-factor", get(handlers::two_factor::get_page))
@@ -254,6 +257,8 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    tokio::spawn(audit::keep_rotating(state.db.clone()));
 
     if let Some(live) = live {
         let info = live.info();

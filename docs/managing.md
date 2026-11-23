@@ -512,3 +512,19 @@ Each entry records the time, the EasyDC user who acted, the action (for example
 `user.reset_password`, `dns.zone_create` or `settings.account_create`), its target, the server, and **success** or
 **failure**. Failures keep the error the server returned, so a rejected change can be
 diagnosed after the fact.
+
+### How long it is kept
+
+By default the log is kept forever. To limit it, open **Settings → Audit log** and choose
+how long entries stay in the log: 30 days to 2 years. This needs an admin.
+
+Once an hour, and when you save, EasyDC rotates the log. Whole days past that time leave
+the log and go into one compressed CSV file per day, such as
+`audit-archive/audit-2026-11-23.csv.gz`, next to `easydc.db`. Days are in UTC. A day leaves
+the log only after its file is safely written, so a full disk stops the rotation and loses
+nothing. The failure is recorded in the log.
+
+**Rotated files** sets how long those files are kept: forever, or 1 to 7 years from the
+date of their entries. You can also choose not to make files, and then old entries are
+deleted for good. Before saving, EasyDC says how many entries or files the change would
+remove. Download a file from the same tab. Files are not searched by the Audit Log page.

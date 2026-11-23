@@ -78,6 +78,8 @@ line.
 
 The database holds the EasyDC logins, the audit log and the **bind password of every
 domain controller you add**, which is why its directory is mode `0700`.
+Rotated [audit log](managing.md#how-long-it-is-kept) files, if you turn rotation on, are in
+`audit-archive/` in the same directory.
 
 A fresh install does not start the service — `systemctl enable --now easydc` does. An
 upgrade restarts the service if it was running, so the new version takes effect. Removing
@@ -265,7 +267,8 @@ same static binary as the packages, and runs as its own non-root user.
 Then open `https://<host>:3000/` to create the admin account.
 
 - **Your data** is one file, `easydc.db`, in the `/data` volume: the EasyDC accounts,
-  the servers with their bind passwords, and the audit log. Back up the volume. To use a
+  the servers with their bind passwords, and the audit log, plus any rotated audit log
+  files in `audit-archive/`. Back up the volume. To use a
   host folder instead of a named volume, make it owned by the container's user and
   private: `sudo install -d -o 10001 -g 10001 -m 0700 /srv/easydc`, then
   `-v /srv/easydc:/data`.
