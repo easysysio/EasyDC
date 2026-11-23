@@ -175,6 +175,168 @@ pub async fn server_level(State(state): State<AppState>, Path(id): Path<i64>) ->
     }
 }
 
+// ── the sidebar and the Overview ────────────────────────────────────────────
+
+/// The servers for the sidebar's switcher: names only, never their settings.
+pub async fn switcher(State(state): State<AppState>) -> axum::response::Response {
+    let rows = sqlx::query_as::<_, (i64, String)>("SELECT id, name FROM servers ORDER BY name").fetch_all(&state.db).await;
+    match rows {
+        Ok(rows) => {
+            let list: Vec<_> = rows.into_iter().map(|(id, name)| serde_json::json!({ "id": id, "name": name })).collect();
+            axum::Json(list).into_response()
+        }
+        Err(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn known_server(state: &AppState, id: i64) -> Option<Server> {
+    sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?").bind(id).fetch_optional(&state.db).await.ok().flatten()
+}
+
+fn failed(error: String) -> axum::response::Response {
+    (axum::http::StatusCode::BAD_GATEWAY, axum::Json(serde_json::json!({ "error": error }))).into_response()
+}
+
+#[derive(Deserialize, Default)]
+pub struct FindQuery {
+    #[serde(default)]
+    pub q: String,
+}
+
+/// The search box. Two letters at least, so one keystroke does not walk the
+/// whole directory.
+pub async fn find(State(state): State<AppState>, Path(id): Path<i64>, Query(query): Query<FindQuery>) -> axum::response::Response {
+    let Some(server) = known_server(&state, id).await else {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    };
+    let text: String = query.q.trim().chars().take(64).collect();
+    if text.chars().count() < 2 {
+        return axum::Json(Vec::<crate::ldap::Found>::new()).into_response();
+    }
+    let result = async {
+        let (mut conn, base_dn) = crate::ldap::open(&server).await?;
+        crate::ldap::find(&mut conn, &base_dn, &text).await
+    }
+    .await;
+    match result {
+        Ok(found) => axum::Json(found).into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+/// The Overview's counts. Loaded after the page, so a DC that is down cannot
+/// hold it up.
+pub async fn overview_directory(State(state): State<AppState>, Path(id): Path<i64>) -> axum::response::Response {
+    let Some(server) = known_server(&state, id).await else {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    };
+    let result: Result<_, String> = async {
+        let (mut conn, base_dn) = crate::ldap::open(&server).await?;
+        let users = crate::ldap::list_users(&mut conn, &base_dn).await?;
+        let groups = crate::ldap::group_names(&mut conn, &base_dn).await?;
+        let computers = crate::ldap::list_computers(&mut conn, &base_dn).await?;
+        Ok((users, groups.len(), computers.len()))
+    }
+    .await;
+    match result {
+        Ok((users, groups, computers)) => {
+            let count = |test: fn(&crate::ldap::LdapUser) -> bool| users.iter().filter(|u| test(u)).count();
+            axum::Json(serde_json::json!({
+                "users": users.len(),
+                "disabled": count(|u| !u.enabled),
+                "locked": count(|u| u.locked),
+                "expired": count(|u| u.expired),
+                "password": count(|u| !u.password.is_empty()),
+                "groups": groups,
+                "computers": computers,
+            }))
+            .into_response()
+        }
+        Err(e) => failed(e),
+    }
+}
+
+/// How long the Overview reuses a health check. The full check talks to every
+/// DC, too much to repeat each time someone opens the page.
+const HEALTH_KEPT: std::time::Duration = std::time::Duration::from_secs(300);
+
+type KeptHealth = std::collections::HashMap<(i64, String), (std::time::Instant, serde_json::Value)>;
+static HEALTH: std::sync::Mutex<Option<KeptHealth>> = std::sync::Mutex::new(None);
+
+#[derive(Deserialize, Default)]
+pub struct OverviewQuery {
+    #[serde(default)]
+    pub fresh: String,
+}
+
+/// The Overview's health and replication, read-only.
+pub async fn overview_health(State(state): State<AppState>, Path(id): Path<i64>, Query(query): Query<OverviewQuery>) -> axum::response::Response {
+    let Some(server) = known_server(&state, id).await else {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    };
+    let key = (id, server.ldap_url.clone());
+    if query.fresh != "1" {
+        let kept = HEALTH.lock().ok().and_then(|h| h.as_ref()?.get(&key).filter(|(at, _)| at.elapsed() < HEALTH_KEPT).map(|(_, v)| v.clone()));
+        if let Some(value) = kept {
+            return axum::Json(value).into_response();
+        }
+    }
+    let (health, replication) = tokio::join!(crate::health::run(&server), crate::replication::report(&server));
+    let health = match health {
+        Ok(h) => h,
+        Err(e) => return failed(e),
+    };
+    let value = overview_summary(id, &health, replication);
+    if let Ok(mut kept) = HEALTH.lock() {
+        kept.get_or_insert_with(Default::default).insert(key, (std::time::Instant::now(), value.clone()));
+    }
+    axum::Json(value).into_response()
+}
+
+fn overview_summary(id: i64, health: &crate::health::HealthReport, replication: Result<crate::replication::Report, String>) -> serde_json::Value {
+    use crate::health::{FAIL, WARN};
+    let problems: Vec<_> = health
+        .checks
+        .iter()
+        .filter(|c| c.status == FAIL || c.status == WARN)
+        .map(|c| {
+            let page = c.link.as_ref().map_or("health", |l| l.path);
+            serde_json::json!({ "status": c.status, "title": c.title, "summary": c.summary, "href": format!("/servers/{id}/{page}") })
+        })
+        .collect();
+    let (replication, replication_error) = match replication {
+        Ok(r) => (Some(replication_view(&r)), None),
+        Err(e) => (None, Some(e)),
+    };
+    serde_json::json!({ "problems": problems, "replication": replication, "replication_error": replication_error })
+}
+
+/// Each DC as one line: the worst of its replication links.
+fn replication_view(report: &crate::replication::Report) -> serde_json::Value {
+    let dcs: Vec<_> = report
+        .dcs
+        .iter()
+        .map(|d| {
+            let bad = d.links.iter().filter(|l| l.status == "fail").count();
+            let slow = d.links.iter().filter(|l| l.status == "warn").count();
+            let (state, note) = if let Some(e) = &d.error {
+                ("fail", e.clone())
+            } else if d.links.is_empty() {
+                ("warn", "Receives from no other DC".to_string())
+            } else if bad > 0 {
+                ("fail", format!("{bad} of {} links failing", d.links.len()))
+            } else if slow > 0 {
+                ("warn", format!("{slow} of {} links behind", d.links.len()))
+            } else {
+                ("ok", format!("{} links healthy", d.links.len()))
+            };
+            let note = if d.site.is_empty() { note } else { format!("{} · {note}", d.site) };
+            serde_json::json!({ "name": d.name, "state": state, "note": note })
+        })
+        .collect();
+    serde_json::json!({ "dcs": dcs })
+}
+
 #[derive(Deserialize)]
 pub struct ServerForm {
     pub name: String,

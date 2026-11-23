@@ -1,4 +1,4 @@
-use ldap3::{LdapConnAsync, LdapConnSettings, Mod, Scope, SearchEntry};
+use ldap3::{LdapConnAsync, LdapConnSettings, Mod, Scope, SearchEntry, SearchOptions};
 use serde::Serialize;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -42,6 +42,9 @@ pub struct LdapUser {
     /// That OU or container as a path of names below the domain, such as
     /// `Sales › Europe`; empty for a user at the top of the domain.
     pub location: String,
+    /// The latest sign-in this DC knows of, Unix time. `lastLogonTimestamp`
+    /// replicates only about every 14 days, so it can be some days behind.
+    pub last_sign_in: Option<i64>,
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -683,6 +686,8 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 "manager",
                 "accountExpires",
                 "description",
+                "lastLogonTimestamp",
+                "lastLogon",
             ],
         )
         .await
@@ -736,6 +741,7 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
                 description: attr(e, "description"),
                 container: parent_dn(&e.dn).to_string(),
                 location: location(parent_dn(&e.dn), base_dn),
+                last_sign_in: signed_in_at(&attr(e, "lastLogonTimestamp")).max(signed_in_at(&attr(e, "lastLogon"))),
             }
         })
         .filter(|u| !u.username.is_empty())
@@ -744,6 +750,64 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
     confirm_sign_in_state(ldap, base_dn, &mut users).await;
     users.sort_by_key(|a| a.username.to_lowercase());
     Ok(users)
+}
+
+/// A sign-in time as stored, in Unix time; `None` for never.
+fn signed_in_at(value: &str) -> Option<i64> {
+    value.parse::<i64>().ok().filter(|&t| t > 0).and_then(filetime_to_unix)
+}
+
+/// One result of the search box.
+#[derive(Debug, Serialize)]
+pub struct Found {
+    /// `user`, `group` or `computer`.
+    pub kind: &'static str,
+    pub name: String,
+    pub detail: String,
+}
+
+/// How many results the search box asks the DC for.
+const FIND_LIMIT: i32 = 30;
+
+/// Users, groups and computers whose name or email contains `text`.
+pub async fn find(ldap: &mut ldap3::Ldap, base_dn: &str, text: &str) -> LdapResult<Vec<Found>> {
+    let q = ldap_escape(text);
+    let filter = format!(
+        "(&(|(objectClass=user)(objectClass=group))(|(sAMAccountName=*{q}*)(displayName=*{q}*)(cn=*{q}*)(mail=*{q}*)))"
+    );
+    let result = ldap
+        .with_search_options(SearchOptions::new().sizelimit(FIND_LIMIT))
+        .with_timeout(OP_TIMEOUT)
+        .search(base_dn, Scope::Subtree, &filter, vec!["sAMAccountName", "displayName", "objectClass", "mail"])
+        .await
+        .map_err(ldap_err)?;
+    // 4 is "size limit exceeded": the first results still came back.
+    if result.1.rc != 4 {
+        result.1.clone().success().map_err(ldap_err)?;
+    }
+    let mut found: Vec<Found> = result.0.into_iter().map(SearchEntry::construct).filter_map(|e| found_entry(&e)).collect();
+    found.sort_by_key(|f| f.name.to_lowercase());
+    Ok(found)
+}
+
+fn found_entry(e: &SearchEntry) -> Option<Found> {
+    let name = attr(e, "sAMAccountName");
+    if name.is_empty() {
+        return None;
+    }
+    let is = |class: &str| {
+        e.attrs.iter().any(|(k, v)| k.eq_ignore_ascii_case("objectClass") && v.iter().any(|c| c.eq_ignore_ascii_case(class)))
+    };
+    let (kind, name) = if is("computer") {
+        ("computer", name.trim_end_matches('$').to_string())
+    } else if is("group") {
+        ("group", name)
+    } else {
+        ("user", name)
+    };
+    let display = attr(e, "displayName");
+    let detail = if display.is_empty() || display == name { attr(e, "mail") } else { display };
+    Some(Found { kind, name, detail })
 }
 
 /// The shortest maximum password age in force, from the domain policy and

@@ -2419,9 +2419,9 @@ mod users_page_tests {
 
     /// Usernames in the table, in order.
     fn listed(html: &str) -> Vec<String> {
-        html.split(r#"<i class="bi bi-person-circle me-1 text-secondary"></i>"#)
+        html.split(r#" data-user=""#)
             .skip(1)
-            .map(|s| s.split_whitespace().next().unwrap_or_default().to_string())
+            .map(|s| s.split('"').next().unwrap_or_default().to_string())
             .collect()
     }
 
@@ -2492,7 +2492,7 @@ mod users_page_tests {
         // The list is paged and searched in the browser.
         assert!(html.contains(r#"<tbody data-paged="users" data-search-input="userSearch">"#));
         // Edit, Reset password and Delete exist once, not once per user.
-        for id in ["editUserModal", "resetUserModal", "deleteUserModal"] {
+        for id in ["userPanel", "resetUserModal", "deleteUserModal"] {
             assert_eq!(html.matches(&format!(r#"id="{id}""#)).count(), 1, "{id}");
         }
         assert!(!html.contains("editModal1"));
@@ -2503,7 +2503,7 @@ mod users_page_tests {
     #[test]
     fn the_edit_dialog_has_a_groups_tab() {
         let html = render(&people());
-        let dialog = html.split(r#"id="editUserModal""#).nth(1).unwrap().split(r#"id="resetUserModal""#).next().unwrap();
+        let dialog = html.split(r#"id="userPanel""#).nth(1).unwrap().split(r#"id="resetUserModal""#).next().unwrap();
         assert!(dialog.contains(r##"data-bs-target="#editGroups""##));
         assert!(dialog.contains(r#"<div class="input-group" data-needs="groups">"#));
         assert!(dialog.contains(r#"list="groupNames""#), "group names are suggested");
@@ -2538,7 +2538,7 @@ mod users_page_tests {
     #[test]
     fn the_edit_dialog_has_a_password_tab() {
         let html = render(&people());
-        let dialog = html.split(r#"id="editUserModal""#).nth(1).unwrap().split(r#"id="resetUserModal""#).next().unwrap();
+        let dialog = html.split(r#"id="userPanel""#).nth(1).unwrap().split(r#"id="resetUserModal""#).next().unwrap();
         assert!(dialog.contains(r##"data-bs-target="#editPassword""##));
         assert!(dialog.contains(r#"<form class="js-password-form" data-needs="users">"#));
         for name in ["must_change", "cannot_change", "never_expires"] {
@@ -2676,11 +2676,11 @@ mod users_page_tests {
     }
 
     #[test]
-    fn description_is_a_column_and_editable() {
+    fn description_is_shown_and_editable() {
         let mut u = user("ivan");
         u.description = "Иван Петров".into();
         let html = render(&[u]);
-        assert!(html.contains(r#"<td class="small text-break">Иван Петров</td>"#));
+        assert!(html.contains(r#"<div class="text-muted text-break">Иван Петров</div>"#));
         assert!(html.contains(r#"data-description="Иван Петров""#));
         let f: UpdateUserForm =
             serde_urlencoded::from_str("first_name=&last_name=&email=&password=&description=+Ivan+").unwrap();

@@ -500,6 +500,7 @@ mod tests {
 
     fn user(name: &str) -> ldap::LdapUser {
         ldap::LdapUser {
+            last_sign_in: None,
             dn: format!("CN={name},CN=Users,DC=x,DC=com"),
             username: name.to_string(),
             first_name: "Ann".into(),

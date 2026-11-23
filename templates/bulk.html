@@ -208,7 +208,7 @@ const EasyBulk = {
             document.getElementById('moveGo').addEventListener('click', function () {
                 submit('move', moving, document.getElementById('moveTarget').value);
             });
-            if (more) more({ selected: selected, submit: submit, countText: countText });
+            if (more) more({ selected: selected, submit: submit, countText: countText, openMove: openMove });
             update();
         });
     }

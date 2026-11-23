@@ -1,179 +1,175 @@
 {% extends "base.html" %}
 {% block title %}{{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item active">{{ server.name }}</li>
-    </ol>
-</nav>
-
-<div class="d-flex align-items-center mb-4">
-    <i class="bi bi-server fs-2 text-primary me-3"></i>
-    <div>
-        <h4 class="mb-0">{{ server.name }}</h4>
-        <small class="text-muted">{{ server.ldap_url }} <span class="mx-1">·</span> <span class="js-server-level" data-url="/servers/{{ server.id }}/level">Functional level…</span></small>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">{{ server.name }}</h1>
+        <div class="page-sub text-break">{{ server.ldap_url }} <span class="mx-1">·</span> <span class="js-server-level" data-url="/servers/{{ server.id }}/level">Functional level…</span></div>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+        <span id="overallState" class="state state-idle" role="status"><i class="bi bi-hourglass-split" aria-hidden="true"></i>Checking…</span>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="overviewRefresh"><i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>Check again</button>
     </div>
 </div>
 
-<div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+<div id="overviewError"></div>
 
-    <div class="col">
-        <a href="/servers/{{ server.id }}/users" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-people fs-1 text-primary"></i>
-                    <h5 class="card-title mt-3">User Management</h5>
-                    <p class="card-text text-muted small">Create, edit, and delete domain users</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/groups" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-diagram-3 fs-1 text-success"></i>
-                    <h5 class="card-title mt-3">Group Management</h5>
-                    <p class="card-text text-muted small">Manage security and distribution groups</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/computers" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-pc-display fs-1 text-info"></i>
-                    <h5 class="card-title mt-3">Computer Management</h5>
-                    <p class="card-text text-muted small">View and manage domain computers</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/dns" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-globe fs-1 text-warning"></i>
-                    <h5 class="card-title mt-3">DNS Management</h5>
-                    <p class="card-text text-muted small">Manage DNS zones and records</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/gpo" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-shield-check fs-1 text-secondary"></i>
-                    <h5 class="card-title mt-3">GPO Management</h5>
-                    <p class="card-text text-muted small">Group Policy Object management</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/policy" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-shield-lock fs-1 text-primary"></i>
-                    <h5 class="card-title mt-3">Password Policy</h5>
-                    <p class="card-text text-muted small">Length, complexity, expiry, lockout and machine account quota</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/health" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-clipboard-pulse fs-1 text-danger"></i>
-                    <h5 class="card-title mt-3">Health Check</h5>
-                    <p class="card-text text-muted small">Diagnose DNS, FSMO, replication and security posture</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/reports" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-file-earmark-bar-graph fs-1 text-primary"></i>
-                    <h5 class="card-title mt-3">Reports</h5>
-                    <p class="card-text text-muted small">Inactive accounts, password expiry, privileged groups and more, with CSV export</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/spns" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-key fs-1 text-primary"></i>
-                    <h5 class="card-title mt-3">SPNs</h5>
-                    <p class="card-text text-muted small">Service principal names on users and computers, and duplicates</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/dcs" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-hdd-rack fs-1 text-primary"></i>
-                    <h5 class="card-title mt-3">Domain Controllers</h5>
-                    <p class="card-text text-muted small">Each DC's site and FSMO roles, and moving roles between DCs</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/replication" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-arrow-left-right fs-1 text-info"></i>
-                    <h5 class="card-title mt-3">Replication</h5>
-                    <p class="card-text text-muted small">Each DC's partners, last successful sync and errors</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/sites" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-geo-alt fs-1 text-success"></i>
-                    <h5 class="card-title mt-3">Sites and Subnets</h5>
-                    <p class="card-text text-muted small">Where the DCs are, which networks belong to each site, and site links</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
-    <div class="col">
-        <a href="/servers/{{ server.id }}/ous" class="text-decoration-none">
-            <div class="card h-100 shadow-sm hover-card">
-                <div class="card-body text-center py-5">
-                    <i class="bi bi-folder2-open fs-1 text-warning"></i>
-                    <h5 class="card-title mt-3">OU Management</h5>
-                    <p class="card-text text-muted small">Manage Organizational Units and move objects</p>
-                </div>
-            </div>
-        </a>
-    </div>
-
+<div class="row row-cols-2 row-cols-xl-4 g-3 mb-3" id="overviewStats" data-base="/servers/{{ server.id }}">
+    <div class="col"><a class="stat" href="/servers/{{ server.id }}/users"><span class="stat-label"><i class="bi bi-person" aria-hidden="true"></i>Users</span><div class="stat-value" data-stat="users">–</div><div class="stat-note" data-note="users"></div></a></div>
+    <div class="col"><a class="stat" href="/servers/{{ server.id }}/groups"><span class="stat-label"><i class="bi bi-people" aria-hidden="true"></i>Groups</span><div class="stat-value" data-stat="groups">–</div><div class="stat-note"></div></a></div>
+    <div class="col"><a class="stat" href="/servers/{{ server.id }}/computers"><span class="stat-label"><i class="bi bi-pc-display" aria-hidden="true"></i>Computers</span><div class="stat-value" data-stat="computers">–</div><div class="stat-note"></div></a></div>
+    <div class="col"><a class="stat" href="/servers/{{ server.id }}/dcs"><span class="stat-label"><i class="bi bi-hdd-rack" aria-hidden="true"></i>Domain controllers</span><div class="stat-value" data-stat="dcs">–</div><div class="stat-note" data-note="dcs"></div></a></div>
 </div>
+
+<div class="row g-3">
+    <div class="col-xl-7">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h2 class="h6 mb-0">Needs attention</h2>
+                <a class="small" href="/servers/{{ server.id }}/health">Full health check</a>
+            </div>
+            <ul class="line-list" id="attention"><li><div class="line text-muted">Checking the domain…</div></li></ul>
+        </div>
+    </div>
+    <div class="col-xl-5">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h2 class="h6 mb-0">Replication</h2>
+                <a class="small" href="/servers/{{ server.id }}/replication">Details</a>
+            </div>
+            <ul class="line-list" id="replicationList"><li><div class="line text-muted">Checking the domain controllers…</div></li></ul>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const stats = document.getElementById('overviewStats');
+    const base = stats.dataset.base;
+    const attention = document.getElementById('attention');
+    const repl = document.getElementById('replicationList');
+    const overall = document.getElementById('overallState');
+    const problem = document.getElementById('overviewError');
+    const refresh = document.getElementById('overviewRefresh');
+    const STYLE = {
+        fail: ['state-fail', 'bi-x-circle-fill'],
+        warn: ['state-warn', 'bi-exclamation-triangle-fill'],
+        ok: ['state-ok', 'bi-check-circle-fill'],
+        idle: ['state-idle', 'bi-question-circle'],
+    };
+    let directoryItems = [], healthItems = [], healthDone = false;
+
+    function get(url) {
+        return fetch(url, { headers: { Accept: 'application/json' } }).then(async function (r) {
+            const a = await r.json().catch(() => ({ error: 'EasyDC did not answer as expected.' }));
+            if (!r.ok || a.error) throw new Error(a.error || 'EasyDC did not answer as expected.');
+            return a;
+        });
+    }
+    function icon(kind) {
+        const i = document.createElement('i');
+        i.className = 'bi ' + STYLE[kind][1] + ' ' + STYLE[kind][0];
+        i.setAttribute('aria-hidden', 'true');
+        return i;
+    }
+    function line(kind, title, sub, href) {
+        const li = document.createElement('li');
+        const el = document.createElement(href ? 'a' : 'div');
+        el.className = 'line';
+        if (href) el.href = href;
+        const text = document.createElement('div');
+        text.className = 'line-text';
+        const t = document.createElement('div');
+        t.className = 'fw-medium';
+        t.textContent = title;
+        text.append(t);
+        if (sub) {
+            const s = document.createElement('div');
+            s.className = 'line-sub';
+            s.textContent = sub;
+            text.append(s);
+        }
+        el.append(icon(kind), text);
+        li.append(el);
+        return li;
+    }
+    function setState(kind, text) {
+        overall.className = 'state ' + STYLE[kind][0];
+        overall.replaceChildren(icon(kind), text);
+    }
+    function say(text) {
+        problem.replaceChildren();
+        if (!text) return;
+        const box = document.createElement('div');
+        box.className = 'alert alert-danger';
+        box.textContent = text;
+        problem.append(box);
+    }
+    function count(n, one, many) {
+        return n.toLocaleString() + ' ' + (n === 1 ? one : many);
+    }
+    function showAttention() {
+        const all = healthItems.concat(directoryItems).sort((a, b) => (a.kind === 'fail' ? 0 : 1) - (b.kind === 'fail' ? 0 : 1));
+        if (all.length) {
+            attention.replaceChildren(...all.map(a => line(a.kind, a.title, a.sub, a.href)));
+        } else if (healthDone) {
+            attention.replaceChildren(line('ok', 'Nothing needs attention', 'Accounts and health checks look fine.'));
+        }
+        if (!healthDone) return;
+        const fails = all.filter(a => a.kind === 'fail').length;
+        const warns = all.length - fails;
+        if (fails) setState('fail', count(fails, 'problem', 'problems'));
+        else if (warns) setState('warn', count(warns, 'warning', 'warnings'));
+        else setState('ok', 'Healthy');
+    }
+
+    async function loadDirectory() {
+        const d = await get(base + '/overview/directory');
+        ['users', 'groups', 'computers'].forEach(k => {
+            stats.querySelector('[data-stat="' + k + '"]').textContent = d[k].toLocaleString();
+        });
+        stats.querySelector('[data-note="users"]').textContent = d.disabled.toLocaleString() + ' disabled';
+        directoryItems = [];
+        if (d.locked) directoryItems.push({ kind: 'warn', title: count(d.locked, 'user is locked out', 'users are locked out'), sub: 'Review and unlock them.', href: base + '/users?status=locked' });
+        if (d.password) directoryItems.push({ kind: 'warn', title: count(d.password, 'user has a password to change', 'users have a password to change'), sub: 'They cannot sign in with their current password.', href: base + '/users?status=password' });
+        if (d.expired) directoryItems.push({ kind: 'warn', title: count(d.expired, 'account has expired', 'accounts have expired'), sub: 'They can no longer sign in.', href: base + '/users?status=expired' });
+        showAttention();
+    }
+    async function loadHealth(fresh) {
+        const h = await get(base + '/overview/health' + (fresh ? '?fresh=1' : ''));
+        healthItems = h.problems.map(p => ({ kind: p.status === 'fail' ? 'fail' : 'warn', title: p.title, sub: p.summary, href: p.href }));
+        healthDone = true;
+        const r = h.replication;
+        if (r) {
+            stats.querySelector('[data-stat="dcs"]').textContent = r.dcs.length.toLocaleString();
+            const down = r.dcs.filter(d => d.state === 'fail').length;
+            stats.querySelector('[data-note="dcs"]').textContent = down ? down + ' with problems' : 'All replicating';
+            repl.replaceChildren(...(r.dcs.length ? r.dcs.map(d => line(d.state, d.name, d.note)) : [line('idle', 'No domain controllers found')]));
+        } else {
+            stats.querySelector('[data-stat="dcs"]').textContent = '?';
+            repl.replaceChildren(line('idle', 'Could not read replication', h.replication_error));
+        }
+        showAttention();
+    }
+    async function load(fresh) {
+        refresh.disabled = true;
+        say(null);
+        setState('idle', 'Checking…');
+        healthDone = false;
+        const results = await Promise.allSettled([loadDirectory(), loadHealth(fresh)]);
+        const failed = results.find(r => r.status === 'rejected');
+        if (failed) {
+            say('EasyDC could not read this domain. ' + failed.reason.message);
+            setState('fail', 'Not reachable');
+            if (!healthDone) attention.replaceChildren(line('idle', 'Could not finish the check'));
+            if (results[1].status === 'rejected') repl.replaceChildren(line('idle', 'Could not read replication'));
+        }
+        refresh.disabled = false;
+    }
+    refresh.addEventListener('click', () => load(true));
+    load(false);
+})();
+</script>
 {% endblock %}

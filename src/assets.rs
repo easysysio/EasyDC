@@ -1,9 +1,10 @@
 //! Static files (Bootstrap and its icon font), compiled into the binary so the
 //! GUI works on networks with no internet access.
 //!
-//! The files are upstream's, unmodified, under assets/vendor/<name>-<version>/.
-//! The version is part of the URL, so browsers may cache them forever: a new
-//! version is a new folder and a new URL.
+//! Upstream's files are unmodified, under assets/vendor/<name>-<version>/. The
+//! version is part of the URL, so browsers may cache them forever: a new
+//! version is a new folder and a new URL. EasyDC's own, under assets/app/,
+//! change with each release, so browsers check them each time.
 
 use axum::{
     extract::Path,
@@ -25,11 +26,9 @@ pub async fn serve(Path(path): Path<String>) -> Response {
     let (Some(file), Some(mime)) = (Assets::get(&path), content_type(&path)) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let cache = if path.starts_with("vendor/") { "public, max-age=31536000, immutable" } else { "no-cache" };
     (
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-        ],
+        [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, cache)],
         file.data,
     )
         .into_response()

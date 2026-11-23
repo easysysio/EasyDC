@@ -1,0 +1,55 @@
+{# The navigation on every signed-in page. Inside a server it lists that
+   server's areas; the server stays in view at the top, so a change is not
+   made on the wrong domain by mistake. #}
+<aside class="app-sidebar offcanvas-lg offcanvas-start" tabindex="-1" id="appSidebar" aria-label="Main navigation">
+    <div class="app-sidebar-inner">
+        <div class="d-flex align-items-center justify-content-between">
+            <a class="app-brand" href="/"><i class="bi bi-hdd-network" aria-hidden="true"></i>EasyDC</a>
+            <button type="button" class="btn-close d-lg-none me-1 mb-2" data-bs-dismiss="offcanvas" data-bs-target="#appSidebar" aria-label="Close menu"></button>
+        </div>
+        {% if server and server.id %}
+        {% set s = "/servers/" ~ server.id %}
+        <div class="dropdown mb-2">
+            <button type="button" class="app-switcher" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Current server: {{ server.name }}. Switch server">
+                <span class="text-truncate">
+                    <span class="app-switcher-name text-truncate">{{ server.name }}</span>
+                    <span class="app-switcher-level text-truncate js-server-level" data-short data-url="{{ s }}/level">Level…</span>
+                </span>
+                <i class="bi bi-chevron-expand" aria-hidden="true"></i>
+            </button>
+            <ul class="dropdown-menu w-100" id="serverMenu">
+                <li class="dropdown-item-text small text-muted js-loading">Loading…</li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item" href="/"><i class="bi bi-grid me-2" aria-hidden="true"></i>All servers</a></li>
+            </ul>
+        </div>
+        <nav aria-label="{{ server.name }}">
+            <a class="app-nav-link" data-exact href="{{ s }}"><i class="bi bi-speedometer2" aria-hidden="true"></i>Overview</a>
+            <div class="app-nav-group">Directory</div>
+            <a class="app-nav-link" href="{{ s }}/users"><i class="bi bi-person" aria-hidden="true"></i>Users</a>
+            <a class="app-nav-link" href="{{ s }}/groups"><i class="bi bi-people" aria-hidden="true"></i>Groups</a>
+            <a class="app-nav-link" href="{{ s }}/computers"><i class="bi bi-pc-display" aria-hidden="true"></i>Computers</a>
+            <a class="app-nav-link" href="{{ s }}/ous"><i class="bi bi-folder2-open" aria-hidden="true"></i>OUs</a>
+            <a class="app-nav-link" href="{{ s }}/spns"><i class="bi bi-key" aria-hidden="true"></i>SPNs</a>
+            <div class="app-nav-group">Policy</div>
+            <a class="app-nav-link" href="{{ s }}/gpo"><i class="bi bi-shield-check" aria-hidden="true"></i>Group Policy</a>
+            <a class="app-nav-link" href="{{ s }}/policy"><i class="bi bi-shield-lock" aria-hidden="true"></i>Password policy</a>
+            <a class="app-nav-link" href="{{ s }}/delegation"><i class="bi bi-person-check" aria-hidden="true"></i>Delegation</a>
+            <div class="app-nav-group">Infrastructure</div>
+            <a class="app-nav-link" href="{{ s }}/dns"><i class="bi bi-globe" aria-hidden="true"></i>DNS</a>
+            <a class="app-nav-link" href="{{ s }}/dcs"><i class="bi bi-hdd-rack" aria-hidden="true"></i>Domain controllers</a>
+            <a class="app-nav-link" href="{{ s }}/replication"><i class="bi bi-arrow-left-right" aria-hidden="true"></i>Replication</a>
+            <a class="app-nav-link" href="{{ s }}/sites"><i class="bi bi-geo-alt" aria-hidden="true"></i>Sites</a>
+            <div class="app-nav-group">Insights</div>
+            <a class="app-nav-link" href="{{ s }}/health"><i class="bi bi-clipboard-pulse" aria-hidden="true"></i>Health</a>
+            <a class="app-nav-link" href="{{ s }}/reports"><i class="bi bi-file-earmark-bar-graph" aria-hidden="true"></i>Reports</a>
+        </nav>
+        {% endif %}
+        <nav class="app-sidebar-foot" aria-label="EasyDC">
+            <a class="app-nav-link" data-exact href="/"><i class="bi bi-grid" aria-hidden="true"></i>All servers</a>
+            <a class="app-nav-link" href="/audit"><i class="bi bi-journal-text" aria-hidden="true"></i>Audit log</a>
+            <a class="app-nav-link" href="/settings"><i class="bi bi-gear" aria-hidden="true"></i>Settings</a>
+            <div class="app-version">v{{ app_version() }}</div>
+        </nav>
+    </div>
+</aside>
