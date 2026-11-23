@@ -11,6 +11,7 @@ mod ldap;
 mod models;
 mod remediate;
 mod replication;
+mod reports;
 mod csv;
 mod sd;
 mod sites;
@@ -152,6 +153,8 @@ async fn main() {
         .route("/servers/:id/health", get(handlers::health::health_check))
         .route("/servers/:id/health/fix", post(handlers::health::health_fix))
         .route("/servers/:id/replication", get(handlers::replication::replication))
+        .route("/servers/:id/reports", get(handlers::reports::page))
+        .route("/servers/:id/reports/export", get(handlers::reports::export))
         .route("/servers/:id/dcs", get(handlers::dcs::page))
         .route("/servers/:id/dcs/fsmo", post(handlers::dcs::transfer))
         .route("/servers/:id/dcs/:name/removal", get(handlers::dcs::removal_plan))

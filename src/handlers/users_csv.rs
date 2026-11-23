@@ -94,7 +94,7 @@ fn export_csv(users: &[&ldap::LdapUser]) -> String {
 }
 
 /// A server's name as part of a file name: letters, digits, `-` and `_`.
-fn file_name_part(name: &str) -> String {
+pub(super) fn file_name_part(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
     let s = s.trim_matches('-').to_string();
     if s.is_empty() { "domain".to_string() } else { s }

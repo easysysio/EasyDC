@@ -21,14 +21,9 @@ EasyDC keeps the bind passwords of accounts that can change the whole domain.
 
 ## Reports
 
-Read-only, over LDAP, each with CSV export. For the questions an admin asks every week:
-
-- Accounts that have not signed in for a chosen number of days (`lastLogonTimestamp`).
-- Passwords that expire soon, and passwords set never to expire.
-- Accounts that are locked out, disabled or expired.
-- Members of the privileged groups: Domain Admins, Enterprise Admins, Schema Admins,
-  Administrators and the other built-in operator groups, including nested members.
-- Empty groups.
+~~**Reports.**~~ Done: inactive accounts, expiring and never-expiring passwords, locked,
+disabled or expired accounts, privileged group members including nested ones, and empty
+groups, each with CSV export.
 
 ## From samba-tool, over LDAP
 

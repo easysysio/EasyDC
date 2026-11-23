@@ -371,6 +371,27 @@ newer on every DC). On an older domain the section explains how to raise it inst
 Changes are recorded in the audit log as `pso.create`, `pso.update`, `pso.delete`,
 `pso.apply` and `pso.unapply`.
 
+## Reports
+
+**Reports** on a server's page answers the questions an admin asks every week. Reports are
+read-only, anyone signed in can see them, and each downloads as a CSV file.
+
+| Report | What it lists |
+|---|---|
+| **Inactive accounts** | Enabled users and computers with no sign-in for a number of days you choose, 90 by default |
+| **Passwords expiring** | Enabled users whose password expires within a number of days, 14 by default, or already has. Password policies for groups are included |
+| **Passwords that never expire** | Enabled users whose password is set never to expire |
+| **Locked, disabled or expired** | Users who cannot sign in, and why |
+| **Privileged group members** | Everyone in Domain, Enterprise and Schema Admins, Administrators, the Account, Server, Backup and Print Operators, and Group Policy Creator Owners, and how they got there |
+| **Empty groups** | Groups with no members |
+
+- **The last sign-in can be up to 14 days behind**, because domain controllers only
+  replicate it about that often. So the inactive report starts at 14 days.
+- **Primary groups count.** They are not in a group's member list, so other tools can show
+  a group as empty, or miss a Domain Admin. These reports include them.
+- **Built-in accounts and groups** that are always disabled or empty, such as `krbtgt`,
+  `Guest` and Print Operators, are left out of the disabled and empty reports.
+
 ## EasyDC accounts
 
 **Settings** in the top bar manages who can sign in to *EasyDC*. The first account is

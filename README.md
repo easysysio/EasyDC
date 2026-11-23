@@ -21,6 +21,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 - **Sites and subnets** — sites, subnets and site links
 - **EasyDC accounts** — View or Edit per area for each account, local or signing in with a domain password; every change in an audit log
 - **Domain health check** — diagnose clock skew, FSMO holders, replication, the DNS service records clients need, LDAPS certificate expiry, and security posture; read-only, over LDAP
+- **Reports** — inactive accounts, expiring passwords, locked or disabled accounts, privileged group members and empty groups, each with CSV export
 - **HTTPS built in** — a self-signed certificate from the first start, or your own from Settings
 - **Two-factor sign-in** — an authenticator app for local accounts, with recovery codes
 - **First-run setup** — guided setup wizard on fresh install; no config files needed

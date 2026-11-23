@@ -57,6 +57,7 @@ Opening a server shows one card per area:
 | **GPO Management** | Group Policy Objects and their OU links |
 | **Password Policy** | The domain's password and lockout policy, and policies for groups and users |
 | **Health Check** | Read-only diagnostics for the domain |
+| **Reports** | Inactive accounts, password expiry, privileged groups and more, with CSV export |
 | **Domain Controllers** | Each DC's site and FSMO roles; moving roles and removing a dead DC |
 | **Replication** | Which DC each DC receives from, and whether it worked |
 | **Sites and Subnets** | Sites, subnets and site links |

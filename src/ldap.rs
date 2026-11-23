@@ -749,7 +749,7 @@ pub async fn list_users(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec
 /// The shortest maximum password age in force, from the domain policy and
 /// any PSO, in FILETIME ticks; `None` when passwords never expire. A PSO that
 /// cannot be read is left out.
-async fn shortest_max_password_age(ldap: &mut ldap3::Ldap, base_dn: &str) -> Option<i64> {
+pub(crate) async fn shortest_max_password_age(ldap: &mut ldap3::Ldap, base_dn: &str) -> Option<i64> {
     let places = [
         (base_dn.to_string(), Scope::Base, "(objectClass=*)", "maxPwdAge"),
         (format!("{PSO_CONTAINER},{base_dn}"), Scope::OneLevel, "(objectClass=msDS-PasswordSettings)", "msDS-MaximumPasswordAge"),
@@ -977,6 +977,11 @@ const FILETIME_UNIX_EPOCH: i64 = 11_644_473_600 * TICKS_PER_SECOND;
 
 fn unix_to_filetime(secs: i64) -> i64 {
     secs * TICKS_PER_SECOND + FILETIME_UNIX_EPOCH
+}
+
+/// A FILETIME as Unix time; `None` for 0 and "never", which are not moments.
+pub(crate) fn filetime_to_unix(ft: i64) -> Option<i64> {
+    (ft > 0 && ft != NEVER_EXPIRES).then(|| (ft - FILETIME_UNIX_EPOCH).div_euclid(TICKS_PER_SECOND))
 }
 
 /// accountExpires for "the account works through this day": midnight UTC at
@@ -1679,7 +1684,7 @@ pub struct LdapGroup {
 }
 
 impl LdapGroup {
-    fn from_entry(e: &SearchEntry) -> Self {
+    pub(crate) fn from_entry(e: &SearchEntry) -> Self {
         let gt: i64 = attr(e, "groupType").parse().unwrap_or(0);
         let scope = GroupScope::of(gt);
         LdapGroup {
@@ -1699,7 +1704,7 @@ impl LdapGroup {
     }
 }
 
-const GROUP_ATTRS: [&str; 4] = ["sAMAccountName", "description", "groupType", "isCriticalSystemObject"];
+pub(crate) const GROUP_ATTRS: [&str; 4] = ["sAMAccountName", "description", "groupType", "isCriticalSystemObject"];
 
 /// Whether a group search also reads each group's member list. Only the
 /// groups list needs it, for the member count: a large group's list is
@@ -1797,7 +1802,7 @@ pub async fn user_groups(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) 
         parent_groups(ldap, base_dn, &user.dn).await?.into_iter().map(|g| as_row(g, false)).collect();
 
     // The primary group's SID is the domain's SID and primaryGroupID.
-    let sid = user.bin_attrs.get("objectSid").and_then(|v| v.first()).and_then(|b| sid_string(b));
+    let sid = object_sid(&user);
     let rid = attr(&user, "primaryGroupID").parse::<u32>().ok();
     if let (Some(sid), Some(rid)) = (sid, rid)
         && let Some((domain, _)) = sid.rsplit_once('-')
@@ -1809,6 +1814,15 @@ pub async fn user_groups(ldap: &mut ldap3::Ldap, base_dn: &str, username: &str) 
         }
     }
     Ok((user.dn, groups))
+}
+
+/// An entry's objectSid as text. The LDAP library files a value under `attrs`
+/// when its bytes happen to be valid UTF-8, and every built-in group's SID is
+/// (`S-1-5-32-544` is all bytes below 0x80), so both places are looked in.
+pub(crate) fn object_sid(e: &SearchEntry) -> Option<String> {
+    let binary = e.bin_attrs.get("objectSid").and_then(|v| v.first()).map(Vec::as_slice);
+    let text = e.attrs.get("objectSid").and_then(|v| v.first()).map(String::as_bytes);
+    binary.or(text).and_then(sid_string)
 }
 
 /// A binary SID as text: `S-1-5-21-…-1105` (revision, 48-bit authority,

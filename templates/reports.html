@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Reports - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">Reports</li>
+    </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+    <i class="bi bi-file-earmark-bar-graph fs-2 text-primary me-3"></i>
+    <div>
+        <h4 class="mb-0">Reports</h4>
+        <small class="text-muted">Read-only, straight from the directory</small>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-3">
+        <div class="list-group shadow-sm">
+            {% for t in tabs %}
+            <a href="/servers/{{ server.id }}/reports?report={{ t.key }}"
+                class="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-2 {% if t.active %}active{% endif %}"
+                {% if t.active %}aria-current="page"{% endif %}>
+                <span><i class="bi {{ t.icon }} me-2"></i>{{ t.title }}</span>
+                {% if t.count is defined %}<span class="badge {% if t.active %}bg-light text-primary{% else %}bg-light text-secondary border{% endif %}">{{ t.count }}</span>{% endif %}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="col-lg-9">
+        <div class="card shadow-sm">
+            <div class="card-header bg-white">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                    <div>
+                        <h5 class="mb-1"><i class="bi {{ icon }} me-2 text-primary"></i>{{ title }}</h5>
+                        <div class="small text-muted">{{ about }}</div>
+                    </div>
+                    {% if table %}
+                    <a class="btn btn-outline-primary btn-sm flex-shrink-0"
+                        href="/servers/{{ server.id }}/reports/export?report={{ report_key }}{% if days %}&amp;days={{ days }}{% endif %}">
+                        <i class="bi bi-download me-1"></i>Download CSV
+                    </a>
+                    {% endif %}
+                </div>
+                {% if table %}
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                    {% if days %}
+                    <form method="get" action="/servers/{{ server.id }}/reports" class="d-flex align-items-center gap-2">
+                        <input type="hidden" name="report" value="{{ report_key }}">
+                        <label class="small text-nowrap" for="reportDays">{% if report_key == "inactive" %}No sign-in for{% else %}Expires within{% endif %}</label>
+                        <input type="number" class="form-control form-control-sm" style="width: 6rem" id="reportDays" name="days"
+                            value="{{ days }}" min="{{ days_min }}" max="{{ days_max }}" required>
+                        <span class="small">days</span>
+                        <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+                    </form>
+                    {% endif %}
+                    {% if table.rows | length > 0 %}
+                    <input type="search" id="reportSearch" class="form-control form-control-sm ms-md-auto" style="max-width: 16rem"
+                        placeholder="Filter this report" aria-label="Filter this report">
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+
+            {% if error %}
+            <div class="card-body">
+                <div class="alert alert-danger d-flex align-items-start mb-0">
+                    <i class="bi bi-exclamation-octagon-fill me-2 mt-1"></i>
+                    <div>
+                        <div class="fw-semibold">Could not read the directory</div>
+                        <div class="small">{{ error }}</div>
+                    </div>
+                </div>
+            </div>
+            {% elif table %}
+            {% if table.note %}<div class="small text-muted px-3 pt-3">{{ table.note }}</div>{% endif %}
+            {% if table.rows | length == 0 %}
+            <div class="card-body text-center text-muted py-5">
+                <i class="bi bi-check-circle fs-2 d-block mb-2 text-success"></i>Nothing to report.
+            </div>
+            {% else %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0 small">
+                    <thead class="table-light">
+                        <tr>{% for c in table.columns %}<th class="text-nowrap">{{ c }}</th>{% endfor %}</tr>
+                    </thead>
+                    <tbody data-paged="report-{{ report_key }}" data-search-input="reportSearch">
+                        {%- for r in table.rows %}
+                        <tr>{% for cell in r.cells %}<td>
+                            {%- if loop.first and r.group -%}
+                            <a href="/servers/{{ server.id }}/groups/{{ r.group | urlencode_strict }}/members">{{ cell }}</a>
+                            {%- elif table.status_column is number and loop.index0 == table.status_column and cell -%}
+                            {%- for s in cell | split(pat=", ") -%}
+                            <span class="badge me-1 {% if s == "Locked" or s == "Expired" %}bg-danger{% elif s == "Disabled" %}bg-secondary{% elif s == "Enabled" %}bg-success-subtle text-success-emphasis{% else %}bg-warning text-dark{% endif %}">{{ s }}</span>
+                            {%- endfor -%}
+                            {%- else -%}{{ cell }}{%- endif -%}
+                        </td>{% endfor %}</tr>
+                        {%- endfor %}
+                        <tr class="js-no-match d-none"><td colspan="{{ table.columns | length }}" class="text-center text-muted py-4">No rows match the filter.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

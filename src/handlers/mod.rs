@@ -6,6 +6,7 @@ pub mod health;
 pub mod ldap_mgmt;
 pub mod policy;
 pub mod replication;
+pub mod reports;
 pub mod servers;
 pub mod settings;
 pub mod setup;

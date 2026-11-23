@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - HTTPS on port 3000, with a self-signed certificate from the first start or your own from Settings. Plain HTTP on the same port redirects to it.
 - Two-factor sign-in for local accounts with an authenticator app, with recovery codes. Admins can reset it for others and require it for local admins.
+- Reports, with CSV export: inactive accounts, expiring and never-expiring passwords, locked, disabled or expired accounts, privileged group members including nested ones, and empty groups.
 
 ### Changed
 - Settings is split into tabs. Your own password and two-factor sign-in moved to the menu under your name in the top bar.
