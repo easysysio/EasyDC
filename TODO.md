@@ -1,8 +1,9 @@
 # TODO
 
 **0.6.0** is built and waiting for release: its items are the sections down to "From
-samba-tool". After it, the aim is to run Samba AD with no Windows machine, and to hear about
-problems before users do. What earlier releases brought is in `CHANGELOG.md`.
+samba-tool". After it, the aim is to **replace Windows RSAT for about 90% of daily work**, so
+a domain needs no Windows admin machine, and to hear about problems before users do. Rare,
+risky jobs stay with `samba-tool`. What earlier releases brought is in `CHANGELOG.md`.
 
 ## Securing EasyDC itself
 
@@ -129,6 +130,19 @@ command for them.
 - **Email and webhook alerts** for failed replication, expiring certificates, clock skew and
   lost FSMO roles.
 - **Alert on SYSVOL drift**, by running the 0.8.0 comparison on a schedule.
+
+## 0.9.x: attribute editor
+
+The most common remaining reason to open ADSI Edit.
+
+- **View first.** Every attribute of any object, searchable, with SIDs, GUIDs, dates and flags
+  shown in readable form.
+- **Then edit, for admins only.** Read the schema to refuse system-only and computed
+  attributes, handle multi-valued ones, and show the old and new value before saving.
+- **Never show or write secrets**, such as `unicodePwd` and `supplementalCredentials`.
+- **Extra warning on attributes that grant access**, such as `userAccountControl`, SPNs and
+  delegation. Security descriptors stay read-only here.
+- **Record every change** in the audit log, with the old and new value.
 
 ## 1.0: trust and recovery
 
