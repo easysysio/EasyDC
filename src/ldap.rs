@@ -4138,6 +4138,21 @@ pub async fn domain_level(ldap: &mut ldap3::Ldap) -> LdapResult<i64> {
         .ok_or_else(|| "Could not read the domain functional level".to_string())
 }
 
+/// The domain, forest and DC levels from the rootDSE, which any client may
+/// read. There is no sign-in, so showing them can never count as a bad
+/// password on the bind account.
+pub async fn root_levels(server: &Server) -> LdapResult<(i64, i64, i64)> {
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+    let mut ldap = connect_only(server, &server.ldap_url, Some(WAIT)).await?;
+    let names = vec!["domainFunctionality", "forestFunctionality", "domainControllerFunctionality"];
+    let found = ldap.with_timeout(WAIT).search("", Scope::Base, "(objectClass=*)", names).await;
+    let _ = ldap.unbind().await;
+    let (entries, _) = found.map_err(ldap_err)?.success().map_err(ldap_err)?;
+    let entry = entries.into_iter().next().map(SearchEntry::construct).ok_or("The DC sent no root entry.")?;
+    let level = |name: &str| attr(&entry, name).parse::<i64>().map_err(|_| format!("The DC did not give its {name}."));
+    Ok((level("domainFunctionality")?, level("forestFunctionality")?, level("domainControllerFunctionality")?))
+}
+
 fn pso_from_entry(e: &SearchEntry) -> Pso {
     let num = |k: &str| attr(e, k).parse::<i64>().unwrap_or(0);
     Pso {

@@ -44,6 +44,7 @@
                 {% else %}
                 <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Certificate checked</span>
                 {% endif %}
+                <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle js-server-level" data-url="/servers/{{ server.id }}/level">Level…</span>
             </div>
             <div class="card-footer bg-transparent d-flex gap-2">
                 <a href="/servers/{{ server.id }}" class="btn btn-primary btn-sm flex-fill">

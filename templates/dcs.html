@@ -31,7 +31,7 @@
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
-                <tr><th>Name</th><th>DNS name</th><th>Site</th><th>FSMO roles</th><th class="text-end">Actions</th></tr>
+                <tr><th>Name</th><th>DNS name</th><th>Site</th><th title="The highest level this DC can run at">Level</th><th>FSMO roles</th><th class="text-end">Actions</th></tr>
             </thead>
             <tbody>
                 {% for dc in o.dcs %}
@@ -41,6 +41,7 @@
                             title="The DC this server entry connects to">EasyDC connects here</span>{% endif %}</td>
                     <td class="small text-muted">{{ dc.host }}</td>
                     <td class="small text-nowrap">{{ dc.site }}</td>
+                    <td class="small text-nowrap">{% if levels %}{% for l in levels.dcs %}{% if l.name == dc.name %}{{ l.level | replace(from="Windows Server ", to="") }}{% endif %}{% endfor %}{% endif %}</td>
                     <td>{% for r in dc.roles %}<span class="badge bg-warning-subtle text-warning-emphasis border me-1 mb-1">{{ r }}</span>{% else %}<span class="small text-muted">None</span>{% endfor %}</td>
                     <td class="text-end">
                         <div class="d-inline-flex gap-1" data-needs="admin">

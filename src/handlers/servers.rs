@@ -162,6 +162,19 @@ pub async fn server_detail(
     }
 }
 
+/// The server's functional level, for the badge beside its name. Pages load
+/// it afterwards, so a DC that is down cannot hold them up.
+pub async fn server_level(State(state): State<AppState>, Path(id): Path<i64>) -> axum::response::Response {
+    let server = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?").bind(id).fetch_optional(&state.db).await;
+    let Ok(Some(server)) = server else {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    };
+    match crate::ldap::root_levels(&server).await {
+        Ok((domain, forest, dc)) => axum::Json(crate::level::badge(domain, forest, dc)).into_response(),
+        Err(_) => axum::http::StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ServerForm {
     pub name: String,
@@ -294,6 +307,7 @@ mod dashboard_tests {
         let html = render(None);
         assert!(!html.contains("EasyDC signed in to") && !html.contains("could not sign in"));
         assert!(!html.contains("secret"), "the bind password never reaches the page");
+        assert!(html.contains(r#"data-url="/servers/2/level""#), "each card loads its level");
     }
 
     #[test]

@@ -357,5 +357,14 @@
         v{{ app_version() }}
     </div>
     <script src="/static/vendor/bootstrap-5.3.0/bootstrap.bundle.min.js"></script>
+    <script>
+    // Each server's functional level, loaded after the page so a DC that is down cannot hold it up.
+    document.querySelectorAll('.js-server-level').forEach(function (el) {
+        fetch(el.dataset.url, { headers: { Accept: 'application/json' } })
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then(l => { el.textContent = l.text; el.title = l.title; })
+            .catch(() => { el.textContent = 'Level unknown'; el.title = 'EasyDC could not read the level from this server.'; });
+    });
+    </script>
 </body>
 </html>

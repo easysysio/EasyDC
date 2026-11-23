@@ -154,6 +154,7 @@ async fn main() {
         .route("/logout", post(handlers::auth_handlers::logout))
         .route("/servers/new", post(handlers::servers::create_server))
         .route("/servers/:id", get(handlers::servers::server_detail))
+        .route("/servers/:id/level", get(handlers::servers::server_level))
         .route("/servers/:id/edit", post(handlers::servers::update_server))
         .route("/servers/:id/delete", post(handlers::servers::delete_server))
         .route("/servers/:id/health", get(handlers::health::health_check))

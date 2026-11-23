@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Reports, with CSV export: inactive accounts, expiring and never-expiring passwords, locked, disabled or expired accounts, privileged group members including nested ones, and empty groups.
 - SPNs page: view, add and remove service principal names on users and computers, with duplicates flagged.
 - A guide to raising the domain and forest functional level on the Domain Controllers page, with the exact commands each level still needs.
+- The functional level (2008 R2, 2012, 2016) shows on the Dashboard, the server page and each DC.
 - Audit log retention in Settings, with rotation of old days to compressed files. By default the log is still kept forever.
 
 ### Changed

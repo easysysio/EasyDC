@@ -12,7 +12,7 @@
 <div class="d-flex align-items-center mb-4">
     <i class="bi bi-server fs-2 text-primary me-3"></i>
     <div>
-        <h4 class="mb-0">{{ server.name }}</h4>
+        <h4 class="mb-0">{{ server.name }} <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle align-middle fs-6 fw-normal js-server-level" data-url="/servers/{{ server.id }}/level">Level…</span></h4>
         <small class="text-muted">{{ server.ldap_url }}</small>
     </div>
 </div>
