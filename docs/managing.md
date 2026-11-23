@@ -392,6 +392,27 @@ read-only, anyone signed in can see them, and each downloads as a CSV file.
 - **Built-in accounts and groups** that are always disabled or empty, such as `krbtgt`,
   `Guest` and Print Operators, are left out of the disabled and empty reports.
 
+## SPNs
+
+**SPNs** on the server page lists every service principal name in the domain, with the
+account it is on. An SPN tells Kerberos which account runs a service, such as
+`HTTP/web.example.com`. Filter the list by SPN or account.
+
+- **Add SPN** — enter the user or computer and the SPN, written as `service/host`,
+  `service/host:port` or `service/host:port/name`. EasyDC refuses an SPN that is already
+  on any account in the domain, and names that account.
+- **Remove** — asks first, and warns when it is a computer's `HOST/` SPN, which sign-ins
+  and file sharing rely on.
+- **Duplicate** marks an SPN found on more than one account. Kerberos sign-ins to that
+  service can fail until you remove it from all but one.
+
+The SPNs that keep the domain working show a lock and cannot be changed here: those of
+domain controllers, `krbtgt` and other critical system accounts, and the `DNS/` SPN of
+Samba's `dns-<host>` account.
+
+Changing a user's SPN needs Edit on Users, and a computer's needs Edit on Computers.
+Changes are recorded in the audit log as `spn.add` and `spn.remove`.
+
 ## EasyDC accounts
 
 **Settings** in the top bar manages who can sign in to *EasyDC*. The first account is

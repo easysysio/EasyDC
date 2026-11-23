@@ -11,6 +11,7 @@ pub mod servers;
 pub mod settings;
 pub mod setup;
 pub mod sites;
+pub mod spns;
 pub mod two_factor;
 pub mod users_csv;
 

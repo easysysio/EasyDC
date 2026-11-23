@@ -19,6 +19,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 - **Password policy** — the domain policy, and fine-grained policies for groups and users
 - **Domain controllers** — FSMO roles and moving them, removing a dead DC, and replication status
 - **Sites and subnets** — sites, subnets and site links
+- **SPNs** — view, add and remove service principal names on users and computers, and spot duplicates
 - **EasyDC accounts** — View or Edit per area for each account, local or signing in with a domain password; every change in an audit log
 - **Domain health check** — diagnose clock skew, FSMO holders, replication, the DNS service records clients need, LDAPS certificate expiry, and security posture; read-only, over LDAP
 - **Reports** — inactive accounts, expiring passwords, locked or disabled accounts, privileged group members and empty groups, each with CSV export

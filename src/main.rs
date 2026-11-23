@@ -16,6 +16,7 @@ mod reports;
 mod csv;
 mod sd;
 mod sites;
+mod spn;
 mod tls;
 mod totp;
 
@@ -202,6 +203,9 @@ async fn main() {
         .route("/servers/:id/ous/rename", post(handlers::ldap_mgmt::ou_rename))
         .route("/servers/:id/ous/delete", post(handlers::ldap_mgmt::ou_delete))
         .route("/servers/:id/ous/move", post(handlers::ldap_mgmt::ou_move_object))
+        .route("/servers/:id/spns", get(handlers::spns::page))
+        .route("/servers/:id/spns/add", post(handlers::spns::add))
+        .route("/servers/:id/spns/remove", post(handlers::spns::remove))
         .route("/servers/:id/delegation", get(handlers::delegation::page))
         .route("/servers/:id/delegation/grant", post(handlers::delegation::grant))
         .route("/servers/:id/delegation/revoke", post(handlers::delegation::revoke))

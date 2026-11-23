@@ -133,6 +133,8 @@ pub fn need(method: &Method, route: &str) -> Need {
         // Moving a user, group or computer needs the area of what is moved.
         "ous" if rest == "ous/move" => Need::Handler,
         "ous" => Need::Edit(Area::Ous),
+        // A user's SPN needs Users, a computer's needs Computers.
+        "spns" => Need::Handler,
         _ => Need::Admin,
     }
 }
@@ -282,7 +284,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(handler_checked, vec!["/servers/:id/ous/move"], "only these handlers check for themselves");
+        assert_eq!(
+            handler_checked,
+            vec!["/servers/:id/ous/move", "/servers/:id/spns/add", "/servers/:id/spns/remove"],
+            "only these handlers check for themselves"
+        );
     }
 
     #[test]

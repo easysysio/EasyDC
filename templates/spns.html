@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}SPNs - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
+        <li class="breadcrumb-item active">SPNs</li>
+    </ol>
+</nav>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <h4 class="mb-0"><i class="bi bi-key me-2 text-primary"></i>Service principal names</h4>
+    <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addSpnModal">
+        <i class="bi bi-plus-lg me-1"></i>Add SPN
+    </button>
+</div>
+<p class="text-muted small mb-4">
+    An SPN tells Kerberos which account runs a service, such as <code>HTTP/web.example.com</code>.
+    Each SPN must be on one account only.
+</p>
+
+{% if error %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> {{ error }}</div>
+{% endif %}
+{% if done %}
+<div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> {{ done }}</div>
+{% endif %}
+{% if duplicates and duplicates > 0 %}
+<div class="alert alert-warning"><i class="bi bi-exclamation-triangle me-1"></i>
+    {{ duplicates }} row{% if duplicates != 1 %}s show{% else %} shows{% endif %} an SPN that is on more than one account.
+    Kerberos sign-ins to those services can fail until only one account has it.
+</div>
+{% endif %}
+
+{% if rows %}
+<div class="card shadow-sm">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+        <span class="small text-muted">{{ rows | length }} SPN{% if rows | length != 1 %}s{% endif %}</span>
+        <input type="search" id="spnSearch" class="form-control form-control-sm" style="max-width: 18rem"
+            placeholder="Filter by SPN or account" aria-label="Filter by SPN or account">
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 small">
+            <thead class="table-light">
+                <tr><th>SPN</th><th>Account</th><th>Type</th><th class="text-end">Actions</th></tr>
+            </thead>
+            <tbody data-paged="spns" data-search-input="spnSearch">
+                {%- for r in rows %}
+                <tr>
+                    <td class="font-monospace text-break">{{ r.spn }}{% if r.duplicate %} <span class="badge bg-warning text-dark">Duplicate</span>{% endif %}</td>
+                    <td class="text-nowrap">{{ r.account }}</td>
+                    <td>{{ r.kind }}</td>
+                    <td class="text-end">
+                        {%- if r.locked %}
+                        <span class="text-muted" title="{{ r.locked }}" aria-label="{{ r.locked }}"><i class="bi bi-lock"></i></span>
+                        {%- else %}
+                        <button type="button" class="btn btn-outline-danger btn-sm" data-needs="{{ r.needs }}" data-bs-toggle="modal" data-bs-target="#removeSpnModal"
+                            data-spn="{{ r.spn }}" data-account="{{ r.account }}" data-warning="{{ r.warning }}"
+                            title="Remove"><i class="bi bi-trash"></i></button>
+                        {%- endif %}
+                    </td>
+                </tr>
+                {%- endfor %}
+                <tr class="js-no-match d-none"><td colspan="4" class="text-center text-muted py-4">No SPN matches the filter.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% elif not error %}
+<div class="text-center text-muted py-5">No SPNs found.</div>
+{% endif %}
+
+<div class="modal fade" id="addSpnModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/spns/add">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-lg me-1"></i> Add SPN</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label" for="spnAccount">Account</label>
+                    <input type="text" id="spnAccount" name="account" class="form-control" required maxlength="256" autocomplete="off" placeholder="svc-web or PC1">
+                    <div class="form-text">The user or computer that runs the service.</div>
+                </div>
+                <div>
+                    <label class="form-label" for="spnValue">SPN</label>
+                    <input type="text" id="spnValue" name="spn" class="form-control font-monospace" required maxlength="2048" autocomplete="off" spellcheck="false" placeholder="HTTP/web.example.com">
+                    <div class="form-text">service/host, service/host:port or service/host:port/name</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="removeSpnModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/spns/remove">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-trash me-1"></i> Remove SPN</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="spn" data-fill="spn">
+                <input type="hidden" name="account" data-fill="account">
+                <p>Remove <code class="text-break" data-fill="spn"></code> from <strong data-fill="account"></strong>?</p>
+                <p class="small text-danger fw-medium" data-fill="warning"></p>
+                <p class="small text-muted mb-0">Kerberos sign-ins to this service stop working until an account has it again.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

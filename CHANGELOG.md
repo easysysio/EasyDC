@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 - HTTPS on port 3000, with a self-signed certificate from the first start or your own from Settings. Plain HTTP on the same port redirects to it.
 - Two-factor sign-in for local accounts with an authenticator app, with recovery codes. Admins can reset it for others and require it for local admins.
 - Reports, with CSV export: inactive accounts, expiring and never-expiring passwords, locked, disabled or expired accounts, privileged group members including nested ones, and empty groups.
+- SPNs page: view, add and remove service principal names on users and computers, with duplicates flagged.
 - Audit log retention in Settings, with rotation of old days to compressed files. By default the log is still kept forever.
 
 ### Changed
