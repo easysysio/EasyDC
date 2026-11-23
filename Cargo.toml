@@ -34,6 +34,9 @@ tower-service = "0.3"
 # Draws the two-factor QR code as SVG. No image library.
 qrcode = { version = "0.15", default-features = false, features = ["std", "svg"] }
 rust-embed = { version = "8", features = ["include-exclude"] }
+# SMB, to write a GPO's folder in SYSVOL. Pure Rust, no C. Pinned: it is young and
+# changes often, and it handles the bind password.
+smb2 = "=0.43.0"
 # Compresses rotated audit log files. Already in the tree through tower-http.
 flate2 = "1"
 

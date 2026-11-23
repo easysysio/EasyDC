@@ -25,7 +25,7 @@ few minutes; the audit log records it as failed, with the reason.
 
 | Category | Supported |
 |---|---|
-| **Directory** | Samba Active Directory domain controller, reachable over LDAP (389) or LDAPS (636) |
+| **Directory** | Samba Active Directory domain controller, reachable over LDAP (389) or LDAPS (636), and SMB (445) on the PDC emulator to create or delete GPOs |
 | **Bind account** | Read/write access to the partitions you manage; Domain Admins for full use |
 | **EasyDC host** | Linux x86_64 or arm64 — `.deb` and `.rpm` packages, a Docker image, or the bare binary |
 | **Browser** | Any current browser |

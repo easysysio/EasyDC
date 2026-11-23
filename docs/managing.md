@@ -208,10 +208,21 @@ if made directly.
 Create **Group Policy Objects**, set their status (enabled, or user / computer settings
 disabled), delete them, and **link or unlink** them to OUs.
 
-!!! info "Metadata only"
-    EasyDC manages the GPO objects in the directory: name, status and links. The policy
-    *settings* themselves — registry values, scripts — live in SYSVOL on the domain
-    controller and are not edited from EasyDC.
+Creating a GPO makes the directory object and its SYSVOL folder (`Machine`, `User` and
+`GPT.INI`), with folder permissions that match the object, as `samba-tool gpo create` does.
+If any step fails, both are removed again.
+
+Deleting a GPO removes the object and its folder, **including any settings in it**. EasyDC
+refuses to delete the two default GPOs, or a GPO that is still linked to an OU.
+
+!!! info "What this needs"
+    - EasyDC must reach **TCP port 445** on the PDC emulator, and the bind account must be
+      able to write to SYSVOL. Without port 445, EasyDC will not create a GPO, because a GPO
+      with no folder fails on clients.
+    - Samba does not replicate SYSVOL. EasyDC writes to the PDC emulator only, so use your
+      own SYSVOL sync to copy new folders to the other DCs.
+    - EasyDC does not edit policy settings (registry values, scripts). Use the Group Policy
+      Management Console for that.
 
 ## Organizational Units
 

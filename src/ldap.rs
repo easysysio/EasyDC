@@ -3403,12 +3403,11 @@ pub async fn list_gpos(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Vec<
 
 // ── create GPO ────────────────────────────────────────────────────────────────
 
-pub async fn create_gpo(
-    ldap: &mut ldap3::Ldap,
-    base_dn: &str,
-    display_name: &str,
-) -> LdapResult<()> {
-    let guid = format!("{{{}}}", Uuid::new_v4().to_string().to_uppercase());
+/// The directory's half of a GPO, with the `User` and `Machine` containers
+/// clients and GPMC expect. Returns its GUID, in capitals, without braces.
+pub(crate) async fn add_gpo_object(ldap: &mut ldap3::Ldap, base_dn: &str, display_name: &str) -> LdapResult<String> {
+    let id = Uuid::new_v4().to_string().to_uppercase();
+    let guid = format!("{{{id}}}");
     let domain = base_dn_to_domain(base_dn);
     let gpo_dn = format!("CN={},CN=Policies,CN=System,{}", guid, base_dn);
     let file_sys_path = format!("\\\\{}\\SysVol\\{}\\Policies\\{}", domain, domain, guid);
@@ -3430,7 +3429,58 @@ pub async fn create_gpo(
     if res.rc != 0 {
         return Err(refused(&format!("{display_name} was not created"), "the Policies container", &res));
     }
-    Ok(())
+    for child in ["User", "Machine"] {
+        let attrs: Vec<(Vec<u8>, HashSet<Vec<u8>>)> = vec![
+            (sv("objectClass"), HashSet::from([sv("top"), sv("container")])),
+            (sv("cn"), HashSet::from([sv(child)])),
+        ];
+        let added = ldap.with_timeout(OP_TIMEOUT).add(&format!("CN={child},{gpo_dn}"), attrs).await.map_err(ldap_err);
+        let failed = match added {
+            Ok(r) if r.rc == 0 => None,
+            Ok(r) => Some(refused(&format!("{display_name} was not created"), &gpo_dn, &r)),
+            Err(e) => Some(e),
+        };
+        if let Some(e) = failed {
+            let _ = delete_gpo_tree(ldap, &gpo_dn).await;
+            return Err(e);
+        }
+    }
+    Ok(id)
+}
+
+/// The GPO object's owner, group and permissions.
+pub(crate) async fn gpo_descriptor(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<crate::sd::Descriptor> {
+    let control = ldap3::controls::RawControl {
+        ctype: crate::sd::SD_FLAGS_OID.to_string(),
+        crit: true,
+        val: Some(crate::sd::SD_FLAGS_OWNER_GROUP_DACL.to_vec()),
+    };
+    let (entries, _) = ldap
+        .with_controls(control)
+        .with_timeout(OP_TIMEOUT)
+        .search(gpo_dn, Scope::Base, "(objectClass=*)", vec!["nTSecurityDescriptor"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    let e = entries.into_iter().next().map(SearchEntry::construct).ok_or("The DC did not return the GPO.")?;
+    let raw = e
+        .bin_attrs
+        .get("nTSecurityDescriptor")
+        .and_then(|v| v.first())
+        .ok_or("The DC did not give the GPO's permissions; the bind account may lack the right to read them.")?;
+    crate::sd::Descriptor::parse(raw)
+}
+
+pub(crate) async fn gpo_has_children(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<bool> {
+    let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(gpo_dn, Scope::OneLevel, "(objectClass=*)", vec!["1.1"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    Ok(!entries.is_empty())
 }
 
 // ── update GPO ────────────────────────────────────────────────────────────────
@@ -3455,17 +3505,12 @@ pub async fn update_gpo(
 
 // ── delete GPO ────────────────────────────────────────────────────────────────
 
-pub async fn delete_gpo(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<()> {
-    let res = ldap.with_timeout(OP_TIMEOUT).delete(gpo_dn).await.map_err(ldap_err)?;
+/// The GPO object and what it holds, with the tree delete control.
+pub(crate) async fn delete_gpo_tree(ldap: &mut ldap3::Ldap, gpo_dn: &str) -> LdapResult<()> {
+    let tree_delete = ldap3::controls::RawControl { ctype: "1.2.840.113556.1.4.805".to_string(), crit: true, val: None };
+    let res = ldap.with_controls(tree_delete).with_timeout(OP_TIMEOUT).delete(gpo_dn).await.map_err(ldap_err)?;
     match res.rc {
         0 => Ok(()),
-        // GPOs made by Windows or samba-tool hold User and Machine containers.
-        66 => Err(format!(
-            "The GPO was not deleted: it holds its User and Machine settings, and the domain controller \
-             deletes only empty objects. On the DC, run: samba-tool gpo del {} -U Administrator \
-             (this also removes its SYSVOL files).",
-            first_rdn_value(gpo_dn)
-        )),
         _ => Err(refused("The GPO was not deleted", "this GPO", &res)),
     }
 }

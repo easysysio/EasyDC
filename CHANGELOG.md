@@ -14,9 +14,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - Settings is split into tabs. Your own password and two-factor sign-in moved to the menu under your name in the top bar.
+- Creating a GPO now also creates its SYSVOL folder, and deleting one removes the folder. Default and linked GPOs cannot be deleted.
 
 ### Upgrade notes
 - A reverse proxy must send `X-Forwarded-Proto`, or set `EASYDC_TLS=off`; otherwise it gets the redirect to HTTPS.
+- Creating a GPO now needs TCP port 445 from EasyDC to the PDC emulator.
 
 ## [0.5.1] - 2026-11-22
 

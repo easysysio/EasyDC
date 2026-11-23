@@ -16,6 +16,8 @@
 pub const SD_FLAGS_OID: &str = "1.2.840.113556.1.4.801";
 /// BER for SEQUENCE { INTEGER 4 } — DACL_SECURITY_INFORMATION.
 pub const SD_FLAGS_DACL: [u8; 5] = [0x30, 0x03, 0x02, 0x01, 0x04];
+/// BER for SEQUENCE { INTEGER 7 } — owner, group and DACL.
+pub const SD_FLAGS_OWNER_GROUP_DACL: [u8; 5] = [0x30, 0x03, 0x02, 0x01, 0x07];
 
 const ACCESS_ALLOWED_OBJECT_ACE: u8 = 0x05;
 const ACCESS_DENIED_OBJECT_ACE: u8 = 0x06;
@@ -39,6 +41,17 @@ const CHANGE_PASSWORD: [u8; 16] = [
 const EVERYONE: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
 /// S-1-5-10, SELF: the account itself.
 const SELF: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 10, 0, 0, 0];
+/// S-1-3-0, CREATOR OWNER.
+const CREATOR_OWNER: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0];
+/// S-1-5-32-554, Pre-Windows 2000 Compatible Access.
+const PRE_WINDOWS_2000: [u8; 16] = [1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x2a, 2, 0, 0];
+const OBJECT_INHERIT: u8 = 0x01;
+/// ACL_REVISION: an access list with no object entries.
+const ACL_REVISION: u8 = 2;
+/// The SACL's bits in the control word: a file's descriptor has no SACL.
+const SE_SACL_BITS: u16 = 0x0010 | 0x0020 | 0x0200 | 0x0800 | 0x2000;
+/// "The owner / group was set by default": not true of what is written here.
+const SE_DEFAULTED_BITS: u16 = 0x0001 | 0x0002;
 
 type SdResult<T> = Result<T, String>;
 
@@ -323,6 +336,46 @@ impl Descriptor {
         before - self.dacl.len()
     }
 
+    /// The same permissions for a GPO's folder in SYSVOL, so that the folder
+    /// and the directory object agree. Each directory right is mapped to the
+    /// file rights it stands for, and every entry is inherited by what the
+    /// folder holds.
+    pub fn for_gpo_folder(&self) -> Descriptor {
+        let dacl = self
+            .dacl
+            .iter()
+            .filter(|a| a.kind() <= 1 && !a.bytes[8..].starts_with(&PRE_WINDOWS_2000))
+            .filter_map(|a| {
+                let mut bytes = a.bytes.clone();
+                bytes[1] |= OBJECT_INHERIT | CONTAINER_INHERIT;
+                if bytes[8..] == CREATOR_OWNER {
+                    bytes[1] |= INHERIT_ONLY;
+                }
+                let mask = directory_rights_to_file_rights(u32_at(&a.bytes, 4).ok()?);
+                bytes[4..8].copy_from_slice(&mask.to_le_bytes());
+                Some(Ace { bytes })
+            })
+            .collect();
+        Descriptor {
+            control: self.control & !(SE_SACL_BITS | SE_DEFAULTED_BITS),
+            owner: self.owner.clone(),
+            group: self.group.clone(),
+            sacl: None,
+            acl_revision: ACL_REVISION,
+            dacl,
+        }
+    }
+
+    /// The same owner, group and entries, in any order.
+    pub fn same_access(&self, other: &Descriptor) -> bool {
+        let sorted = |d: &Descriptor| {
+            let mut v: Vec<_> = d.dacl.iter().map(|a| a.bytes.clone()).collect();
+            v.sort();
+            v
+        };
+        self.owner == other.owner && self.group == other.group && sorted(self) == sorted(other)
+    }
+
     /// Back to the self-relative form, for writing with the SD flags control.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut acl = vec![self.acl_revision, 0, 0, 0];
@@ -350,6 +403,41 @@ impl Descriptor {
         place(&mut out, 1, self.group.as_deref());
         out
     }
+}
+
+/// What a right on a directory object means on a file or folder.
+fn directory_rights_to_file_rights(ds: u32) -> u32 {
+    const DS_CREATE_CHILD: u32 = 0x01;
+    const DS_DELETE_CHILD: u32 = 0x02;
+    const DS_LIST_CONTENTS: u32 = 0x04;
+    const DS_READ_PROPERTY: u32 = 0x10;
+    const DS_WRITE_PROPERTY: u32 = 0x20;
+    const STANDARD_RIGHTS: u32 = 0x001f_0000;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const LIST_OR_READ: u32 = 0x0001;
+    const ADD_FILE_OR_WRITE: u32 = 0x0002;
+    const ADD_FOLDER_OR_APPEND: u32 = 0x0004;
+    const READ_EA: u32 = 0x0008;
+    const WRITE_EA: u32 = 0x0010;
+    const TRAVERSE_OR_EXECUTE: u32 = 0x0020;
+    const DELETE_CHILD: u32 = 0x0040;
+    const READ_ATTRIBUTES: u32 = 0x0080;
+    const WRITE_ATTRIBUTES: u32 = 0x0100;
+
+    let mut file = ds & STANDARD_RIGHTS;
+    if ds & DS_READ_PROPERTY != 0 && ds & DS_LIST_CONTENTS != 0 {
+        file |= SYNCHRONIZE | LIST_OR_READ | READ_ATTRIBUTES | READ_EA | TRAVERSE_OR_EXECUTE;
+    }
+    if ds & DS_WRITE_PROPERTY != 0 {
+        file |= SYNCHRONIZE | ADD_FILE_OR_WRITE | ADD_FOLDER_OR_APPEND | WRITE_EA | WRITE_ATTRIBUTES;
+    }
+    if ds & DS_CREATE_CHILD != 0 {
+        file |= ADD_FILE_OR_WRITE | ADD_FOLDER_OR_APPEND;
+    }
+    if ds & DS_DELETE_CHILD != 0 {
+        file |= DELETE_CHILD;
+    }
+    file
 }
 
 #[cfg(test)]
@@ -391,6 +479,51 @@ mod tests {
         b.extend(20u32.to_le_bytes());
         b.extend(acl);
         b
+    }
+
+    #[test]
+    fn a_gpo_folder_gets_the_file_rights_of_the_object() {
+        let ace = |kind: u8, flags: u8, mask: u32, sid: &[u8]| {
+            let mut b = vec![kind, flags];
+            b.extend(((8 + sid.len()) as u16).to_le_bytes());
+            b.extend(mask.to_le_bytes());
+            b.extend(sid);
+            b
+        };
+        let mut object_ace = vec![ACCESS_ALLOWED_OBJECT_ACE, 0x02];
+        object_ace.extend(40u16.to_le_bytes());
+        object_ace.extend(CONTROL_ACCESS.to_le_bytes());
+        object_ace.extend(ACE_OBJECT_TYPE_PRESENT.to_le_bytes());
+        object_ace.extend([7u8; 16]);
+        object_ace.extend(EVERYONE);
+        let raw = descriptor(&[
+            ace(0x00, 0x00, 0x000f_01ff, &admins()),
+            ace(0x00, 0x02, 0x0002_0094, &[1, 1, 0, 0, 0, 0, 0, 5, 11, 0, 0, 0]),
+            ace(0x00, 0x00, 0x0002_0094, &CREATOR_OWNER),
+            ace(0x00, 0x00, 0x0002_0094, &PRE_WINDOWS_2000),
+            ace(0x01, 0x00, 0x0000_0020, &SELF),
+            object_ace,
+        ]);
+        let folder = Descriptor::parse(&raw).unwrap().for_gpo_folder();
+        let e = folder.entries();
+        assert_eq!(e.len(), 4, "no object entries, and no Pre-Windows 2000 entry");
+        assert_eq!((e[0].flags, e[0].mask), (0x03, 0x001f_01ff), "full control");
+        assert_eq!((e[1].flags, e[1].mask), (0x03, 0x0012_00a9), "read and list");
+        assert_eq!(e[2].flags, 0x0b, "CREATOR OWNER applies only to what is inside");
+        assert!(e[3].deny);
+        assert_eq!(e[3].mask, 0x0010_0116, "write");
+        assert_eq!(folder.acl_revision, ACL_REVISION);
+        assert!(folder.same_access(&Descriptor::parse(&folder.to_bytes()).unwrap()));
+    }
+
+    #[test]
+    fn rights_map_only_when_they_mean_the_same() {
+        assert_eq!(directory_rights_to_file_rights(0x10), 0, "reading needs listing too");
+        assert_eq!(directory_rights_to_file_rights(0x04), 0);
+        assert_eq!(directory_rights_to_file_rights(0x100), 0, "an extended right is not a file right");
+        assert_eq!(directory_rights_to_file_rights(0x01), 0x06);
+        assert_eq!(directory_rights_to_file_rights(0x02), 0x40);
+        assert_eq!(directory_rights_to_file_rights(0x000f_0000), 0x000f_0000);
     }
 
     fn kinds(d: &Descriptor) -> Vec<(u8, bool)> {

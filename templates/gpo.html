@@ -25,8 +25,8 @@
 
 <div class="alert alert-info">
     <i class="bi bi-info-circle me-1"></i>
-    GPO metadata (name, status, OU links) is managed here via LDAP.
-    Editing policy settings requires access to SYSVOL on the domain controller.
+    A new GPO gets its folder in SYSVOL on the PDC emulator. Samba does not copy SYSVOL between DCs, so with
+    more than one DC, keep using your own SYSVOL sync. Policy settings are edited in GPMC or with samba-tool.
 </div>
 
 {% if gpos | length == 0 and not error %}
@@ -113,7 +113,7 @@
                     </div>
                     <div class="text-muted small">
                         <i class="bi bi-info-circle me-1"></i>
-                        A GUID will be generated automatically. SYSVOL files are not created — link the GPO to an OU once ready.
+                        EasyDC creates the GPO and its SYSVOL folder on the PDC emulator, over SMB (TCP port 445). Link it to an OU once it is ready.
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -172,7 +172,7 @@
             </div>
             <div class="modal-body">
                 <p>Delete <strong data-fill="name"></strong>?</p>
-                <p class="text-muted small mb-0">This removes the LDAP object only. SYSVOL files, if present, must be deleted manually.</p>
+                <p class="text-muted small mb-0">This deletes the GPO and its settings in SYSVOL on the PDC emulator, and cannot be undone. A GPO still linked to an OU is refused.</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>

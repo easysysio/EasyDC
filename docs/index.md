@@ -140,7 +140,7 @@ Get started
 </div>
 <span class="es-kicker">Group Policy</span>
 <h3 class="es-h3">GPOs and their links</h3>
-<p class="es-product-text">Create Group Policy Objects, set their status, and link or unlink them to OUs. Policy settings stay in SYSVOL on the DC.</p>
+<p class="es-product-text">Create Group Policy Objects, set their status, and link or unlink them to OUs. EasyDC creates the SYSVOL folder too. Edit the settings in GPMC.</p>
 <div class="es-tags"><span class="es-tag">Link to OU</span></div>
 </div>
 <div class="es-card ed-area">

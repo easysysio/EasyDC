@@ -1148,7 +1148,7 @@ pub async fn gpo_create(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        ldap::create_gpo(&mut conn, &base_dn, &form.display_name).await
+        crate::sysvol::create_gpo(&server, &mut conn, &base_dn, &form.display_name).await
     }
     .await;
     db::log_action(&state.db, &actor, "gpo.create", &form.display_name, Some(id), &result).await;
@@ -1198,8 +1198,7 @@ pub async fn gpo_delete(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
-        ldap::delete_gpo(&mut conn, &gpo_dn).await
+        crate::sysvol::delete_gpo(&server, &mut conn, &base_dn, &guid).await
     }
     .await;
     db::log_action(&state.db, &actor, "gpo.delete", &guid, Some(id), &result).await;

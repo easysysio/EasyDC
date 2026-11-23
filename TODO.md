@@ -15,9 +15,9 @@ EasyDC keeps the bind passwords of accounts that can change the whole domain.
 
 ## Group Policy
 
-- **Create a GPO's SYSVOL folder**, as `samba-tool gpo create` does, so a new GPO is complete
-  without opening it in GPMC. Written over SMB to `\\<dc>\sysvol`. First look at the Rust
-  SMB libraries: if none is good enough, this moves to a later release.
+- ~~**Create a GPO's SYSVOL folder.**~~ Done: over SMB to the PDC emulator with the `smb2`
+  library, undone if any step fails. Deleting a GPO removes the folder too. Samba does not
+  replicate SYSVOL, so other DCs still need the admin's own sync.
 
 ## Reports
 
