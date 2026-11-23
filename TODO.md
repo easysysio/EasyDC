@@ -56,9 +56,42 @@ EasyDC has grown page by page and looks messy. Give it a clean, modern and consi
 - **Launch it.** Post the release on the Samba mailing list, r/sysadmin and r/selfhosted, with
   screenshots and the one-line Docker install, and let real users shape what comes next.
 
-## 0.8.0: edit common GPO settings
+## 0.8.0: SYSVOL drift detection, then GPO settings
 
-So that a domain needs no Windows machine with GPMC.
+So that a domain needs no Windows machine with GPMC, and an edit cannot quietly reach only
+some DCs.
+
+### First: SYSVOL drift detection
+
+Samba does not replicate SYSVOL, so a change made on one DC stays there until the admin's own
+sync copies it. EasyDC should show when the DCs disagree. This part is read-only.
+
+- **Compare every DC over SMB**, with the PDC emulator as the reference:
+  - each GPO's folder is there;
+  - the version in `GPT.INI` matches the directory object;
+  - the same files, with the same contents (SHA-256, because sync tools change timestamps);
+  - the permissions are what `samba-tool ntacl sysvolcheck` expects;
+  - the `scripts` folder, which holds logon scripts;
+  - folders in SYSVOL with no GPO in the directory.
+- **Give each GPO a clear state on each DC:** in sync, missing, older, newer, different
+  contents, wrong permissions, or unknown. A DC that cannot be reached or read is **unknown**,
+  never "in sync".
+- **Show it where admins look:** a status column on the Group Policy page, a per-DC view of
+  each GPO, and a new SYSVOL check on the Health page.
+- **Warn after every change.** After a GPO is created, edited or deleted, name the DCs that
+  do not have it yet.
+- **Protect edits.** Refuse to edit a GPO when another DC holds a newer copy, because the edit
+  would split it in two. A DC that is behind or down only gets a warning.
+- **Mark sudo rules as urgent.** A rule removed on one DC can still grant access through
+  another, so drift in a GPO with sudo rules is shown first.
+- **Keep it light.** Pages compare versions and file lists. The full comparison of contents
+  runs on request, with a limit on file size and a timeout for each DC.
+- **No repair yet.** EasyDC says what differs and where, and the admin's sync fixes it. Add a
+  sync only if people ask, because a bad sync can damage policies on every DC.
+- **Test on LAB:** a GPO on one DC only, a changed file, an older version, wrong permissions,
+  a leftover folder, and a DC that is down.
+
+### Then: edit GPO settings
 
 - **Start with about ten popular settings**, such as logon scripts, mapped drives and common
   security options.
@@ -74,9 +107,7 @@ So that a domain needs no Windows machine with GPMC.
 - **Scheduled health checks**, using the checks EasyDC already has.
 - **Email and webhook alerts** for failed replication, expiring certificates, clock skew and
   lost FSMO roles.
-- **0.9.x: SYSVOL drift.** Compare SYSVOL across DCs and show which one is missing a GPO or
-  has a different copy. Detect first, and add a sync only if people want it, because a bad
-  sync can damage policies on every DC.
+- **Alert on SYSVOL drift**, by running the 0.8.0 comparison on a schedule.
 
 ## 1.0: trust and recovery
 
