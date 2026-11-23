@@ -62,6 +62,9 @@ So that a domain needs no Windows machine with GPMC.
 
 - **Start with about ten popular settings**, such as logon scripts, mapped drives and common
   security options.
+- **Sudo rules for Linux computers.** View, add and remove the rules `samba-gpupdate` applies
+  (`samba-tool gpo manage sudoers`). Ask for a password by default, and warn before a
+  `NOPASSWD` rule. Test on a real Linux client joined to the domain.
 - **Write them as GPMC does:** the policy files, the version in both `GPT.INI` and the
   directory object, and the client extension lists, or clients silently ignore the change.
 - **Test every setting on real Windows clients** before it ships.
