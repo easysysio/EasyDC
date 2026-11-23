@@ -102,6 +102,27 @@ sync copies it. EasyDC should show when the DCs disagree. This part is read-only
   directory object, and the client extension lists, or clients silently ignore the change.
 - **Test every setting on real Windows clients** before it ships.
 
+## 0.8.x: SSH public keys
+
+With the sudo rules from 0.8.0, one place controls who can log in to Linux servers and what
+they can do there. Samba's schema has no attribute for SSH keys, and `samba-tool` has no
+command for them.
+
+- **Schema, once.** Add the standard `sshPublicKey` attribute and `ldapPublicKey` class.
+  Schema additions cannot be deleted, so test on LAB first. EasyDC detects whether the schema
+  is ready and, if not, shows the commands to run on the DC, like the functional level guide.
+  Do not use `altSecurityIdentities` instead: Kerberos uses it to map certificates to accounts.
+- **Keys on each user's page.** Add and remove keys, show fingerprints, reject weak or
+  malformed keys, and record every change in the audit log. Never handle private keys.
+- **Limit who can write keys to admins.** Anyone who can change this attribute can log in as
+  that user on every server.
+- **A report** of users with keys, flagging disabled accounts that still have them.
+- **Document the Linux side:** SSSD, and `AuthorizedKeysCommand /usr/bin/sss_ssh_authorizedkeys`
+  in `sshd`, how long a removed key can stay cached, and that a key login gets no Kerberos
+  ticket, so network shares may need `kinit`.
+- **Test on a real Linux client:** a key works, a removed key stops working, and disabled and
+  locked accounts are refused, because key login skips the password.
+
 ## 0.9.0: monitoring and alerts
 
 - **Scheduled health checks**, using the checks EasyDC already has.
