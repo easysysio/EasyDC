@@ -72,16 +72,15 @@
             {% for s in levels.scopes %}
             <div class="col-md-6">
                 <div class="small text-muted">{{ s.title }} · {{ s.name }}</div>
-                <div class="fs-5 fw-medium mb-2">{{ s.current }}</div>
-                {% if s.targets | length > 0 %}
-                <button type="button" class="btn btn-sm btn-outline-primary" data-needs="admin" data-bs-toggle="modal" data-bs-target="#raiseLevel-{{ s.key }}">Raise…</button>
-                {% elif s.why_not %}
-                <div class="small text-muted">{{ s.why_not }}</div>
-                {% endif %}
-                {% if s.prep_note %}<div class="small text-muted mt-2">{{ s.prep_note }}</div>{% endif %}
+                <div class="fs-5 fw-medium">{{ s.current }}</div>
             </div>
             {% endfor %}
         </div>
+        {% if levels.guides | length > 0 %}
+        <button type="button" class="btn btn-sm btn-outline-primary mt-3" data-needs="admin" data-bs-toggle="modal" data-bs-target="#raiseGuide"><i class="bi bi-signpost-2 me-1"></i>How to raise…</button>
+        {% elif levels.why_not %}
+        <div class="small text-muted mt-2">{{ levels.why_not }}</div>
+        {% endif %}
         <div class="border-top mt-3 pt-3 small">
             <span class="text-muted me-2">Highest level each DC can run at:</span>
             {% for d in levels.dcs %}<span class="badge {% if d.lowest %}bg-warning-subtle text-warning-emphasis{% else %}bg-light text-secondary{% endif %} border me-1 mb-1">{{ d.name }}: {{ d.level }}</span>{% endfor %}
@@ -93,39 +92,52 @@
     What a DC can run at comes from <code>ad dc functional level</code> in its <code>smb.conf</code>.
 </p>
 
-{% for s in levels.scopes %}{% if s.targets | length > 0 %}
-<div class="modal fade" id="raiseLevel-{{ s.key }}" tabindex="-1">
-    <div class="modal-dialog">
-        <form class="modal-content js-raise-level" method="post" action="/servers/{{ server.id }}/dcs/level" data-name="{{ s.name }}">
+{% if levels.guides | length > 0 %}
+<div class="modal fade" id="raiseGuide" tabindex="-1" aria-labelledby="raiseGuideTitle">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Raise the {{ s.key }} level</h5>
+                <h5 class="modal-title" id="raiseGuideTitle"><i class="bi bi-signpost-2 me-1"></i> Raise the functional level</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <input type="hidden" name="scope" value="{{ s.key }}">
-                <p>{{ s.title }} <strong>{{ s.name }}</strong> is at {{ s.current }}.</p>
-                <div class="alert alert-danger small">
-                    <strong>This cannot be lowered again</strong> without restoring every DC from backup.
-                    Any DC added later must run at this level or higher.
+                <div class="alert alert-warning small">
+                    Samba allows this change only from a shell on a DC, so you run these commands as root.
+                    <strong>A raise cannot be undone</strong> without restoring every DC, and any DC added later must run at this level or higher.
                 </div>
                 <div class="mb-3">
-                    <label class="form-label" for="raiseTo-{{ s.key }}">Raise to</label>
-                    <select class="form-select" id="raiseTo-{{ s.key }}" name="level">
-                        {% for t in s.targets %}<option value="{{ t.level }}">{{ t.label }}</option>{% endfor %}
+                    <label class="form-label" for="raiseGuideLevel">Raise to</label>
+                    <select class="form-select" id="raiseGuideLevel">
+                        {% for g in levels.guides %}<option value="{{ g.level }}">{{ g.label }}</option>{% endfor %}
                     </select>
-                    <div class="form-text">The change is made on {{ s.holder }}, the {{ s.role }}.</div>
                 </div>
-                <label class="form-label" for="raiseConfirm-{{ s.key }}">Type <strong>{{ s.name }}</strong> to confirm</label>
-                <input type="text" class="form-control" id="raiseConfirm-{{ s.key }}" name="confirm" autocomplete="off" spellcheck="false">
+                {% for g in levels.guides %}
+                <div class="js-level-guide{% if not loop.first %} d-none{% endif %}" data-level="{{ g.level }}">
+                    {% if g.note %}<p class="small text-muted">{{ g.note }}</p>{% endif %}
+                    {% if g.blocked %}
+                    <div class="alert alert-danger small mb-0">{{ g.blocked }}</div>
+                    {% else %}
+                    <ol class="ps-3 mb-0">
+                        {% for st in g.steps %}
+                        <li class="mb-3">
+                            <div class="fw-medium">{{ st.title }}</div>
+                            <div class="small text-muted">On {{ st.on }}.{% if st.detail %} {{ st.detail }}{% endif %}</div>
+                            {% for c in st.commands %}<pre class="bg-body-tertiary border rounded p-2 mt-2 mb-0 small text-wrap user-select-all"><code>{{ c }}</code></pre>{% endfor %}
+                        </li>
+                        {% endfor %}
+                    </ol>
+                    {% endif %}
+                </div>
+                {% endfor %}
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="submit" class="btn btn-danger" disabled>Raise</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a class="btn btn-primary" href="/servers/{{ server.id }}/dcs">Check the level</a>
             </div>
-        </form>
+        </div>
     </div>
 </div>
-{% endif %}{% endfor %}
+{% endif %}
 {% endif %}
 
 <h5 class="mb-3">FSMO roles</h5>
@@ -316,14 +328,9 @@ document.getElementById('moveAllModal').addEventListener('show.bs.modal', functi
     this.querySelectorAll('.js-to').forEach(el => { el.textContent = to; });
     this.querySelector('[name=to]').value = to;
 });
-// Raising a level asks for the name first, and is sent only once.
-document.querySelectorAll('.js-raise-level').forEach(function (f) {
-    const go = f.querySelector('[type=submit]');
-    const typed = f.elements.confirm;
-    const check = () => { go.disabled = typed.value.trim().toLowerCase() !== f.dataset.name.toLowerCase(); };
-    typed.addEventListener('input', check);
-    f.closest('.modal').addEventListener('show.bs.modal', function () { typed.value = ''; check(); });
-    f.addEventListener('submit', function () { go.disabled = true; go.textContent = 'Raising…'; });
+// The raise guide shows the steps for the level chosen.
+document.getElementById('raiseGuideLevel')?.addEventListener('change', function () {
+    document.querySelectorAll('.js-level-guide').forEach(el => { el.classList.toggle('d-none', el.dataset.level !== this.value); });
 });
 // The submit button says it is working: a move takes a few seconds.
 document.querySelectorAll('#moveRoleModal form, #moveAllModal form').forEach(function (f) {

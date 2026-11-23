@@ -1,30 +1,27 @@
-//! The domain and forest functional levels, and raising them.
+//! The domain and forest functional levels, and how to raise them.
 //!
-//! A level says which features every DC can be relied on to have. Raising one
-//! cannot be undone from here, and a DC below it can no longer join, so every
-//! limit is checked again on the DC that makes the change: the PDC emulator
-//! for the domain, the domain naming master for the forest ([MS-ADTS] 6.1.4).
+//! Samba lets only a system process on a DC change a level, so EasyDC cannot
+//! make the change over LDAP. It reads where the domain stands and writes out
+//! the commands a chosen level still needs, for the DC that must run them.
 
-use std::collections::HashSet;
-
-use ldap3::{Mod, Scope as LdapScope};
+use ldap3::Scope as LdapScope;
 use serde::Serialize;
 
 use crate::{
     fsmo::{self, Holder, Partitions, Role},
     health::{attr_ci, functional_level_name, read_one, search},
-    ldap::{self, base_dn_to_domain, ldap_err, LdapResult, OP_TIMEOUT},
-    models::Server,
+    ldap::{base_dn_to_domain, LdapResult},
 };
 
 const ATTR: &str = "msDS-Behavior-Version";
-/// Windows Server 2003, the lowest level EasyDC raises to.
+/// Windows Server 2003, the lowest level EasyDC guides a raise to.
 const LOWEST_TARGET: i64 = 2;
+/// Windows Server 2008 R2, the lowest value `ad dc functional level` takes.
+const LOWEST_DC_SETTING: i64 = 4;
 /// Windows Server 2016, the highest level Samba can run at.
 const HIGHEST_TARGET: i64 = 7;
 /// systemFlags of a crossRef that describes a domain.
 const CR_NTDS_DOMAIN: i64 = 2;
-const UNWILLING_TO_PERFORM: u32 = 53;
 
 pub fn label(level: i64) -> String {
     match functional_level_name(level) {
@@ -34,26 +31,15 @@ pub fn label(level: i64) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    Domain,
-    Forest,
-}
-
-impl Scope {
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "domain" => Some(Self::Domain),
-            "forest" => Some(Self::Forest),
-            _ => None,
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Domain => "domain",
-            Self::Forest => "forest",
-        }
+/// `samba-tool`'s and `smb.conf`'s name for a level.
+fn tool_name(level: i64) -> &'static str {
+    match level {
+        2 => "2003",
+        3 => "2008",
+        4 => "2008_R2",
+        5 => "2012",
+        6 => "2012_R2",
+        _ => "2016",
     }
 }
 
@@ -62,17 +48,16 @@ impl Scope {
 pub struct Snapshot {
     pub forest: i64,
     pub domain: i64,
-    pub mixed: bool,
     pub domain_name: String,
     pub forest_name: String,
-    /// This domain's crossRef, which carries its level for the whole forest.
-    pub cross_ref: Option<String>,
     pub dcs: Vec<(String, i64)>,
     /// The other domains in the forest, and their levels.
     pub other_domains: Vec<(String, i64)>,
-    /// The role's holder if it can be used, or why it cannot.
+    /// Each role's holder if it can be used, or why it cannot.
     pub pdc: Result<String, String>,
     pub naming: Result<String, String>,
+    pub schema_master: Result<String, String>,
+    pub infrastructure: Result<String, String>,
     pub prep: Prep,
 }
 
@@ -84,47 +69,47 @@ pub struct Prep {
     pub domain: i64,
 }
 
-/// What a level needs first: the schema version, the forest and domain update
-/// revisions, and the names `samba-tool` uses for the schema and the level.
-fn prep_for(level: i64) -> Option<(Prep, &'static str, &'static str)> {
+/// What a level needs first, and `samba-tool`'s name for that schema.
+fn prep_for(level: i64) -> Option<(Prep, &'static str)> {
     let prep = |schema, forest, domain| Prep { schema, forest, domain };
     match level {
-        5 => Some((prep(56, 11, 9), "2012", "2012")),
-        6 => Some((prep(69, 15, 10), "2012_R2", "2012_R2")),
-        7 => Some((prep(87, 16, 16), "2019", "2016")),
+        5 => Some((prep(56, 11, 9), "2012")),
+        6 => Some((prep(69, 15, 10), "2012_R2")),
+        7 => Some((prep(87, 16, 16), "2019")),
         _ => None,
     }
 }
 
-fn prep_advice(level: i64) -> String {
-    let (schema, function) = prep_for(level).map_or(("", ""), |p| (p.1, p.2));
-    format!(
-        "{} needs the directory prepared first. On the DC holding the schema and infrastructure master roles, run samba-tool domain schemaupgrade --schema={schema}, then samba-tool domain functionalprep --function-level={function}.",
-        label(level)
-    )
+/// One thing to do, on the DCs named.
+#[derive(Debug, Clone, Serialize)]
+pub struct Step {
+    pub title: String,
+    pub on: String,
+    pub detail: String,
+    pub commands: Vec<String>,
 }
 
+fn step(title: &str, on: &str, detail: &str, commands: Vec<String>) -> Step {
+    Step { title: title.to_string(), on: on.to_string(), detail: detail.to_string(), commands }
+}
+
+/// Everything a chosen level still needs.
 #[derive(Debug, Clone, Serialize)]
-pub struct Target {
+pub struct Guide {
     pub level: i64,
     pub label: String,
+    pub note: Option<String>,
+    /// Why this level cannot be reached until something is fixed.
+    pub blocked: Option<String>,
+    pub steps: Vec<Step>,
 }
 
 /// One of the two levels, as the page shows it.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScopeView {
-    pub key: &'static str,
     pub title: &'static str,
     pub name: String,
-    pub level: i64,
     pub current: String,
-    pub holder: String,
-    pub role: &'static str,
-    pub targets: Vec<Target>,
-    /// Why it cannot be raised now, when it cannot.
-    pub why_not: Option<String>,
-    /// What a higher level still needs, when a lower one can be raised to.
-    pub prep_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,6 +123,13 @@ pub struct DcLevel {
 pub struct View {
     pub scopes: Vec<ScopeView>,
     pub dcs: Vec<DcLevel>,
+    pub guides: Vec<Guide>,
+    /// Why there is nothing to raise to, when there is not.
+    pub why_not: Option<String>,
+}
+
+fn same(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 
 impl Snapshot {
@@ -145,138 +137,131 @@ impl Snapshot {
         self.dcs.iter().min_by_key(|d| d.1)
     }
 
-    fn holder(&self, scope: Scope) -> &Result<String, String> {
-        match scope {
-            Scope::Domain => &self.pdc,
-            Scope::Forest => &self.naming,
+    /// The forest can reach a level once every other domain has.
+    fn forest_can_reach(&self, level: i64) -> bool {
+        self.other_domains.iter().all(|d| d.1 >= level)
+    }
+
+    fn prepare_steps(&self, level: i64) -> Result<Vec<Step>, String> {
+        let Some((need, schema)) = prep_for(level) else {
+            return Ok(Vec::new());
+        };
+        let mut steps = Vec::new();
+        let wait = if self.dcs.len() > 1 { "Let it reach the other DCs before the next step." } else { "" };
+        if self.prep.schema < need.schema {
+            let dc = self.schema_master.clone()?;
+            steps.push(step("Upgrade the schema", &dc, wait, vec![format!("samba-tool domain schemaupgrade --schema={schema}")]));
         }
-    }
-
-    pub fn name(&self, scope: Scope) -> &str {
-        match scope {
-            Scope::Domain => &self.domain_name,
-            Scope::Forest => &self.forest_name,
+        let command = format!("samba-tool domain functionalprep --function-level={}", tool_name(level));
+        let forest_dc = if self.prep.forest < need.forest { Some(self.schema_master.clone()?) } else { None };
+        let domain_dc = if self.prep.domain < need.domain { Some(self.infrastructure.clone()?) } else { None };
+        match (forest_dc, domain_dc) {
+            (Some(f), Some(d)) if same(&f, &d) => steps.push(step("Prepare the forest and domain", &f, wait, vec![command])),
+            (f, d) => {
+                if let Some(f) = f {
+                    steps.push(step("Prepare the forest", &f, wait, vec![format!("{command} --forest-prep")]));
+                }
+                if let Some(d) = d {
+                    steps.push(step("Prepare the domain", &d, wait, vec![format!("{command} --domain-prep")]));
+                }
+            }
         }
+        Ok(steps)
     }
 
-    fn current(&self, scope: Scope) -> i64 {
-        match scope {
-            Scope::Domain => self.domain,
-            Scope::Forest => self.forest,
-        }
-    }
-
-    /// The most this level may be raised to.
-    fn ceiling(&self, scope: Scope) -> i64 {
-        match scope {
-            Scope::Domain => self.lowest_dc().map_or(0, |d| d.1),
-            Scope::Forest => self.other_domains.iter().map(|d| d.1).fold(self.domain, i64::min),
-        }
-    }
-
-    pub fn targets(&self, scope: Scope) -> Vec<i64> {
-        let (current, ceiling) = (self.current(scope), self.ceiling(scope).min(HIGHEST_TARGET));
-        (LOWEST_TARGET..=ceiling).filter(|l| *l > current && self.prepared(*l)).collect()
-    }
-
-    fn prepared(&self, level: i64) -> bool {
-        prep_for(level).is_none_or(|(need, ..)| {
-            self.prep.schema >= need.schema && self.prep.forest >= need.forest && self.prep.domain >= need.domain
+    fn raise_steps(&self, level: i64, domain: bool, forest: bool) -> Result<Vec<Step>, String> {
+        let name = tool_name(level);
+        let raise = |flags: String| vec![format!("samba-tool domain level raise {flags}")];
+        let domain_flag = format!("--domain-level={name}");
+        let forest_flag = format!("--forest-level={name}");
+        Ok(match (domain, forest) {
+            (true, true) => {
+                let (pdc, naming) = (self.pdc.clone()?, self.naming.clone()?);
+                if same(&pdc, &naming) {
+                    vec![step("Raise the domain and forest", &pdc, "This is the step that cannot be undone. Run it on this DC only.", raise(format!("{domain_flag} {forest_flag}")))]
+                } else {
+                    vec![
+                        step("Raise the domain", &pdc, "This cannot be undone. Let it reach the other DCs before the next step.", raise(domain_flag)),
+                        step("Raise the forest", &naming, "This cannot be undone.", raise(forest_flag)),
+                    ]
+                }
+            }
+            (true, false) => vec![step("Raise the domain", &self.pdc.clone()?, "This is the step that cannot be undone. Run it on this DC only.", raise(domain_flag))],
+            _ => vec![step("Raise the forest", &self.naming.clone()?, "This is the step that cannot be undone. Run it on this DC only.", raise(forest_flag))],
         })
     }
 
-    /// The highest level the DCs allow that is not prepared yet.
-    fn unprepared(&self, scope: Scope) -> Option<i64> {
-        let (current, ceiling) = (self.current(scope), self.ceiling(scope).min(HIGHEST_TARGET));
-        (LOWEST_TARGET..=ceiling).rev().find(|l| *l > current && !self.prepared(*l))
+    fn steps(&self, level: i64, domain: bool, forest: bool) -> Result<Vec<Step>, String> {
+        if self.dcs.is_empty() {
+            return Err("EasyDC could not read the level of any DC.".to_string());
+        }
+        let names = |dcs: Vec<&(String, i64)>| dcs.iter().map(|d| d.0.as_str()).collect::<Vec<_>>().join(", ");
+        let everyone = names(self.dcs.iter().collect());
+        let mut steps = vec![step("Back up", &everyone, "Take a snapshot or backup of every DC. Going back means restoring all of them together.", Vec::new())];
+        let below: Vec<_> = self.dcs.iter().filter(|d| d.1 < level).collect();
+        if !below.is_empty() {
+            steps.push(step(
+                "Allow this level on each DC",
+                &names(below),
+                "Add this line under [global] in smb.conf, then restart Samba on that DC.",
+                vec![format!("ad dc functional level = {}", tool_name(level.max(LOWEST_DC_SETTING)))],
+            ));
+        }
+        steps.extend(self.prepare_steps(level)?);
+        steps.extend(self.raise_steps(level, domain, forest)?);
+        steps.push(step("Restart Samba", &everyone, "One DC at a time, so that one stays up.", Vec::new()));
+        Ok(steps)
     }
 
-    /// Why this level cannot be raised at all right now.
-    pub fn why_not(&self, scope: Scope) -> Option<String> {
-        if self.current(scope) >= HIGHEST_TARGET {
-            return Some(format!("{} is the highest level Samba can run at.", label(HIGHEST_TARGET)));
+    fn guide(&self, level: i64) -> Option<Guide> {
+        let domain = self.domain < level;
+        let forest = self.forest < level && self.forest_can_reach(level);
+        if !domain && !forest {
+            return None;
         }
-        match scope {
-            Scope::Domain => {
-                if self.mixed {
-                    return Some("This domain is in mixed mode. Raise it on a DC with samba-tool domain level raise.".to_string());
-                }
-                if self.cross_ref.is_none() {
-                    return Some("EasyDC could not find this domain's entry in the forest's list of partitions.".to_string());
-                }
-                let Some((dc, level)) = self.lowest_dc() else {
-                    return Some("EasyDC could not read the level of any DC.".to_string());
-                };
-                if *level <= self.domain {
-                    return Some(format!(
-                        "{dc} can run at {} at most, and the domain cannot be higher than its lowest DC.",
-                        label(*level)
-                    ));
-                }
-            }
-            Scope::Forest => {
-                if let Some((name, level)) = self.other_domains.iter().min_by_key(|d| d.1)
-                    && *level <= self.forest
-                {
-                    return Some(format!("Domain {name} is at {}. Raise it first.", label(*level)));
-                }
-                if self.domain <= self.forest {
-                    return Some("The forest cannot be higher than its domains. Raise the domain first.".to_string());
-                }
-            }
+        let mut notes = Vec::new();
+        if level > LOWEST_DC_SETTING {
+            notes.push("Needs Samba 4.19 or newer, the same version on every DC. Samba 4.19 calls its support for levels above 2008 R2 partial.".to_string());
         }
-        if self.targets(scope).is_empty()
-            && let Some(level) = self.unprepared(scope)
+        if self.forest < level
+            && let Some((name, _)) = self.other_domains.iter().filter(|d| d.1 < level).min_by_key(|d| d.1)
         {
-            return Some(prep_advice(level));
+            notes.push(format!("The forest stays where it is until domain {name} reaches this level."));
         }
-        self.holder(scope).as_ref().err().cloned()
+        let (steps, blocked) = match self.steps(level, domain, forest) {
+            Ok(steps) => (steps, None),
+            Err(why) => (Vec::new(), Some(why)),
+        };
+        Some(Guide { level, label: label(level), note: (!notes.is_empty()).then(|| notes.join(" ")), blocked, steps })
     }
 
-    /// May this level be raised to `target`, as far as this DC knows?
-    pub fn check(&self, scope: Scope, target: i64) -> Result<(), String> {
-        if let Some(why) = self.why_not(scope) {
-            return Err(why);
-        }
-        if target <= self.current(scope) {
-            return Err(format!("It is already at {}, and a level can only be raised.", label(self.current(scope))));
-        }
-        if target <= self.ceiling(scope).min(HIGHEST_TARGET) && !self.prepared(target) {
-            return Err(prep_advice(target));
-        }
-        if !self.targets(scope).contains(&target) {
-            return Err(format!("{} is above what this {} can run at.", label(target), scope.key()));
-        }
-        Ok(())
+    fn guides(&self) -> Vec<Guide> {
+        let from = (self.domain.min(self.forest) + 1).max(LOWEST_TARGET);
+        (from..=HIGHEST_TARGET).filter_map(|l| self.guide(l)).collect()
     }
 
     pub fn view(&self) -> View {
         let lowest = self.lowest_dc().map(|d| d.1);
-        let scope_view = |scope: Scope, title, role| ScopeView {
-            key: scope.key(),
-            title,
-            name: self.name(scope).to_string(),
-            level: self.current(scope),
-            current: label(self.current(scope)),
-            holder: self.holder(scope).clone().unwrap_or_default(),
-            role,
-            why_not: self.why_not(scope),
-            prep_note: if self.why_not(scope).is_none() { self.unprepared(scope).map(prep_advice) } else { None },
-            targets: match self.why_not(scope) {
-                Some(_) => Vec::new(),
-                None => self.targets(scope).into_iter().map(|level| Target { level, label: label(level) }).collect(),
-            },
-        };
+        let guides = self.guides();
+        let why_not = guides.is_empty().then(|| {
+            if self.domain >= HIGHEST_TARGET && self.forest >= HIGHEST_TARGET {
+                format!("{} is the highest level Samba can run at.", label(HIGHEST_TARGET))
+            } else {
+                "The forest cannot go higher until its other domains do.".to_string()
+            }
+        });
         View {
             scopes: vec![
-                scope_view(Scope::Domain, "Domain", "PDC emulator"),
-                scope_view(Scope::Forest, "Forest", "domain naming master"),
+                ScopeView { title: "Domain", name: self.domain_name.clone(), current: label(self.domain) },
+                ScopeView { title: "Forest", name: self.forest_name.clone(), current: label(self.forest) },
             ],
             dcs: self
                 .dcs
                 .iter()
                 .map(|(name, level)| DcLevel { name: name.clone(), level: label(*level), lowest: Some(*level) == lowest })
                 .collect(),
+            guides,
+            why_not,
         }
     }
 }
@@ -309,17 +294,13 @@ async fn prep_number(conn: &mut ldap3::Ldap, dn: &str, attr: &str) -> i64 {
 pub async fn read(conn: &mut ldap3::Ldap, p: &Partitions, roles: &[Holder]) -> LdapResult<Snapshot> {
     let partitions = format!("CN=Partitions,{}", p.config);
     let forest = number(attr_ci(&read_one(conn, &partitions, vec![ATTR]).await?, ATTR), "forest")?;
-    let domain_entry = read_one(conn, &p.domain, vec![ATTR, "nTMixedDomain"]).await?;
-    let domain = number(attr_ci(&domain_entry, ATTR), "domain")?;
-    let mixed = number(attr_ci(&domain_entry, "nTMixedDomain"), "mixed mode")? != 0;
+    let domain = number(attr_ci(&read_one(conn, &p.domain, vec![ATTR]).await?, ATTR), "domain")?;
 
     let refs = search(conn, &partitions, LdapScope::Subtree, "(objectClass=crossRef)", vec!["nCName", "systemFlags", "dnsRoot", ATTR]).await?;
-    let (mut cross_ref, mut other_domains) = (None, Vec::new());
+    let mut other_domains = Vec::new();
     for e in refs.iter().filter(|e| attr_ci(e, "systemFlags").parse::<i64>().is_ok_and(|f| f & CR_NTDS_DOMAIN != 0)) {
         let nc = attr_ci(e, "nCName");
-        if nc.eq_ignore_ascii_case(&p.domain) {
-            cross_ref = Some(e.dn.clone());
-        } else {
+        if !nc.eq_ignore_ascii_case(&p.domain) {
             let name = attr_ci(e, "dnsRoot");
             let name = if name.is_empty() { base_dn_to_domain(&nc) } else { name };
             other_domains.push((name, number(attr_ci(e, ATTR), "domain")?));
@@ -343,233 +324,169 @@ pub async fn read(conn: &mut ldap3::Ldap, p: &Partitions, roles: &[Holder]) -> L
     Ok(Snapshot {
         forest,
         domain,
-        mixed,
         domain_name: base_dn_to_domain(&p.domain),
         forest_name: base_dn_to_domain(&p.forest),
-        cross_ref,
         dcs,
         other_domains,
         pdc: usable(roles, Role::Pdc),
         naming: usable(roles, Role::Naming),
+        schema_master: usable(roles, Role::Schema),
+        infrastructure: usable(roles, Role::Infrastructure),
         prep,
     })
-}
-
-/// A raise that was made and read back.
-#[derive(Debug, PartialEq)]
-pub struct Raised {
-    pub name: String,
-    pub from: i64,
-    pub to: i64,
-}
-
-async fn replace(conn: &mut ldap3::Ldap, dn: &str, value: i64) -> LdapResult<ldap3::LdapResult> {
-    let values = HashSet::from([value.to_string().into_bytes()]);
-    let mods = vec![Mod::Replace(ATTR.as_bytes().to_vec(), values)];
-    conn.with_timeout(OP_TIMEOUT).modify(dn, mods).await.map_err(ldap_err)
-}
-
-async fn write(conn: &mut ldap3::Ldap, p: &Partitions, s: &Snapshot, scope: Scope, target: i64) -> LdapResult<()> {
-    let what = format!("Could not raise the {} level", scope.key());
-    let dn = match scope {
-        Scope::Domain => p.domain.clone(),
-        Scope::Forest => format!("CN=Partitions,{}", p.config),
-    };
-    let res = replace(conn, &dn, target).await?;
-    if res.rc != 0 {
-        return Err(ldap::refused(&what, s.name(scope), &res));
-    }
-    if scope == Scope::Domain {
-        let cross_ref = s.cross_ref.as_deref().ok_or("This domain has no entry in the forest's partitions.")?;
-        let res = replace(conn, cross_ref, target).await?;
-        // A DC that is not the naming master may decline this copy, which
-        // then arrives by replication.
-        if res.rc != 0 && res.rc != UNWILLING_TO_PERFORM {
-            return Err(format!(
-                "The domain is now at {}, but its entry in the forest's partitions was not updated: {}",
-                label(target),
-                ldap::refused(&what, cross_ref, &res)
-            ));
-        }
-    }
-    let now = number(attr_ci(&read_one(conn, &dn, vec![ATTR]).await?, ATTR), scope.key())?;
-    if now != target {
-        return Err(format!("The DC accepted the change, but the {} still reads {}.", scope.key(), label(now)));
-    }
-    Ok(())
-}
-
-/// Raise one level. `confirm` is its name, typed again.
-pub async fn raise(server: &Server, conn: &mut ldap3::Ldap, base_dn: &str, scope: Scope, target: i64, confirm: &str) -> LdapResult<Raised> {
-    let (o, infos, p) = fsmo::overview(conn, base_dn).await?;
-    let here = read(conn, &p, &o.roles).await?;
-    if !confirm.trim().eq_ignore_ascii_case(here.name(scope)) {
-        return Err(format!("Type the {}'s name, {}, to confirm.", scope.key(), here.name(scope)));
-    }
-    here.check(scope, target)?;
-    let holder = here.holder(scope).clone()?;
-    let dc = infos
-        .iter()
-        .find(|d| d.name.eq_ignore_ascii_case(&holder))
-        .ok_or_else(|| format!("{holder} is not in the list of DCs."))?;
-
-    // The DC that makes the change has the last word on every limit.
-    let mut on_holder = fsmo::connect_to(server, dc).await?;
-    let result = async {
-        let names: HashSet<String> = infos.iter().map(|d| d.name.to_lowercase()).collect();
-        let roles = fsmo::holders(&mut on_holder, &p, &names).await;
-        let there = read(&mut on_holder, &p, &roles).await?;
-        if !there.holder(scope).as_ref().is_ok_and(|h| h.eq_ignore_ascii_case(&holder)) {
-            return Err(format!("{holder} no longer holds the role this change needs. Reload the page and try again."));
-        }
-        there.check(scope, target)?;
-        write(&mut on_holder, &p, &there, scope, target).await?;
-        Ok(Raised { name: there.name(scope).to_string(), from: there.current(scope), to: target })
-    }
-    .await;
-    let _ = on_holder.unbind().await;
-    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const READY: Prep = Prep { schema: 88, forest: 16, domain: 16 };
+
     fn snapshot(forest: i64, domain: i64, dcs: &[i64]) -> Snapshot {
         Snapshot {
             forest,
             domain,
-            mixed: false,
             domain_name: "lab.test".into(),
             forest_name: "lab.test".into(),
-            cross_ref: Some("CN=LAB,CN=Partitions".into()),
             dcs: dcs.iter().enumerate().map(|(i, l)| (format!("DC{}", i + 1), *l)).collect(),
             other_domains: vec![],
             pdc: Ok("DC1".into()),
             naming: Ok("DC1".into()),
-            prep: Prep { schema: 88, forest: 16, domain: 16 },
+            schema_master: Ok("DC1".into()),
+            infrastructure: Ok("DC1".into()),
+            prep: READY,
         }
     }
 
+    fn titles(g: &Guide) -> Vec<&str> {
+        g.steps.iter().map(|s| s.title.as_str()).collect()
+    }
+
+    fn commands(g: &Guide) -> Vec<&str> {
+        g.steps.iter().flat_map(|s| s.commands.iter().map(String::as_str)).collect()
+    }
+
     #[test]
-    fn a_level_waits_for_its_prep() {
+    fn every_level_above_the_domain_gets_a_guide() {
+        let levels: Vec<i64> = snapshot(4, 4, &[7, 7]).view().guides.iter().map(|g| g.level).collect();
+        assert_eq!(levels, [5, 6, 7]);
+        let levels: Vec<i64> = snapshot(0, 0, &[7]).view().guides.iter().map(|g| g.level).collect();
+        assert_eq!(levels, [2, 3, 4, 5, 6, 7], "nothing below 2003");
+    }
+
+    #[test]
+    fn at_the_top_there_is_nothing_to_do() {
+        let v = snapshot(7, 7, &[7, 7]).view();
+        assert!(v.guides.is_empty());
+        assert!(v.why_not.unwrap().contains("highest level"));
+    }
+
+    #[test]
+    fn a_ready_domain_needs_only_the_raise() {
+        let g = snapshot(4, 4, &[7, 7]).guide(7).unwrap();
+        assert_eq!(titles(&g), ["Back up", "Raise the domain and forest", "Restart Samba"]);
+        assert_eq!(commands(&g), ["samba-tool domain level raise --domain-level=2016 --forest-level=2016"]);
+        assert_eq!(g.steps[1].on, "DC1");
+        assert_eq!(g.steps[2].on, "DC1, DC2");
+        assert!(g.note.unwrap().contains("4.19"));
+    }
+
+    #[test]
+    fn only_the_dcs_below_the_level_are_changed() {
+        let g = snapshot(4, 4, &[7, 4, 5]).guide(6).unwrap();
+        let s = g.steps.iter().find(|s| s.title.starts_with("Allow")).unwrap();
+        assert_eq!(s.on, "DC2, DC3");
+        assert_eq!(s.commands, ["ad dc functional level = 2012_R2"]);
+    }
+
+    #[test]
+    fn an_unprepared_directory_gets_the_commands_for_that_level() {
         let mut s = snapshot(4, 4, &[7, 7]);
         s.prep = Prep { schema: 47, forest: 5, domain: 5 };
-        assert!(s.targets(Scope::Domain).is_empty());
-        assert!(s.why_not(Scope::Domain).unwrap().contains("schemaupgrade --schema=2019"));
-        assert!(s.check(Scope::Domain, 7).unwrap_err().contains("functionalprep --function-level=2016"));
-
-        // The schema alone is not enough.
-        s.prep = Prep { schema: 88, forest: 5, domain: 5 };
-        assert!(s.targets(Scope::Domain).is_empty());
-
-        s.prep = Prep { schema: 56, forest: 11, domain: 9 };
-        assert_eq!(s.targets(Scope::Domain), [5]);
-        assert!(s.check(Scope::Domain, 5).is_ok());
-        assert!(s.check(Scope::Domain, 6).unwrap_err().contains("--function-level=2012_R2"));
-        assert!(s.view().scopes[0].prep_note.as_deref().unwrap().contains("--function-level=2016"));
-
-        s.prep = Prep { schema: 88, forest: 16, domain: 16 };
-        assert_eq!(s.targets(Scope::Domain), [5, 6, 7]);
-        assert!(s.view().scopes[0].prep_note.is_none());
+        assert_eq!(
+            commands(&s.guide(7).unwrap())[..2],
+            ["samba-tool domain schemaupgrade --schema=2019", "samba-tool domain functionalprep --function-level=2016"]
+        );
+        assert_eq!(
+            commands(&s.guide(6).unwrap())[..2],
+            ["samba-tool domain schemaupgrade --schema=2012_R2", "samba-tool domain functionalprep --function-level=2012_R2"]
+        );
+        // A step already done is not asked for again.
+        s.prep = Prep { schema: 88, forest: 16, domain: 5 };
+        let g = s.guide(7).unwrap();
+        assert_eq!(commands(&g)[0], "samba-tool domain functionalprep --function-level=2016 --domain-prep");
+        assert!(!commands(&g).iter().any(|c| c.contains("schemaupgrade")));
     }
 
     #[test]
     fn levels_up_to_2008_r2_need_no_prep() {
-        let mut s = snapshot(2, 2, &[4, 4]);
+        let mut s = snapshot(3, 3, &[4, 4]);
         s.prep = Prep { schema: 47, forest: 5, domain: 5 };
-        assert_eq!(s.targets(Scope::Domain), [3, 4]);
+        let g = s.guide(4).unwrap();
+        assert_eq!(commands(&g), ["samba-tool domain level raise --domain-level=2008_R2 --forest-level=2008_R2"]);
+        assert!(g.note.is_none());
     }
 
     #[test]
-    fn the_domain_stops_at_its_lowest_dc() {
-        let s = snapshot(3, 3, &[7, 5]);
-        assert_eq!(s.targets(Scope::Domain), [4, 5]);
-        assert!(s.check(Scope::Domain, 5).is_ok());
-        assert!(s.check(Scope::Domain, 6).unwrap_err().contains("above what"));
-        assert!(s.check(Scope::Domain, 3).unwrap_err().contains("only be raised"));
-        assert!(s.check(Scope::Domain, 2).is_err());
+    fn each_command_names_the_dc_with_the_role() {
+        let mut s = snapshot(4, 4, &[7, 7]);
+        s.prep = Prep { schema: 47, forest: 5, domain: 5 };
+        s.schema_master = Ok("DC2".into());
+        s.infrastructure = Ok("DC3".into());
+        s.naming = Ok("DC4".into());
+        let g = s.guide(7).unwrap();
+        let on = |t: &str| g.steps.iter().find(|s| s.title == t).unwrap().on.clone();
+        assert_eq!(on("Upgrade the schema"), "DC2");
+        assert_eq!(on("Prepare the forest"), "DC2");
+        assert_eq!(on("Prepare the domain"), "DC3");
+        assert_eq!(on("Raise the domain"), "DC1");
+        assert_eq!(on("Raise the forest"), "DC4");
+        assert!(commands(&g).contains(&"samba-tool domain functionalprep --function-level=2016 --forest-prep"));
+        assert!(commands(&g).contains(&"samba-tool domain level raise --domain-level=2016"));
+        assert!(commands(&g).contains(&"samba-tool domain level raise --forest-level=2016"));
     }
 
     #[test]
-    fn a_dc_with_no_level_holds_the_domain_back() {
-        let s = snapshot(2, 2, &[7, 0]);
-        assert!(s.targets(Scope::Domain).is_empty());
-        assert!(s.why_not(Scope::Domain).unwrap().contains("DC2"));
-        assert!(s.check(Scope::Domain, 3).is_err());
-    }
+    fn the_forest_waits_for_its_other_domains() {
+        let mut s = snapshot(4, 4, &[7]);
+        s.other_domains.push(("child.lab.test".into(), 5));
+        let g = s.guide(7).unwrap();
+        assert_eq!(commands(&g), ["samba-tool domain level raise --domain-level=2016"]);
+        assert!(g.note.unwrap().contains("child.lab.test"));
+        assert!(commands(&s.guide(5).unwrap())[0].contains("--forest-level=2012"));
 
-    #[test]
-    fn with_no_dcs_read_nothing_is_raised() {
-        let s = snapshot(2, 2, &[]);
-        assert!(s.check(Scope::Domain, 3).is_err());
-    }
-
-    #[test]
-    fn the_forest_stops_at_its_lowest_domain() {
-        let mut s = snapshot(3, 5, &[7]);
-        assert_eq!(s.targets(Scope::Forest), [4, 5]);
+        let mut s = snapshot(4, 7, &[7]);
         s.other_domains.push(("child.lab.test".into(), 4));
-        assert_eq!(s.targets(Scope::Forest), [4]);
-        assert!(s.check(Scope::Forest, 5).is_err());
-        assert!(s.check(Scope::Forest, 4).is_ok());
-        s.other_domains[0].1 = 3;
-        assert!(s.why_not(Scope::Forest).unwrap().contains("child.lab.test"));
+        let v = s.view();
+        assert!(v.guides.is_empty());
+        assert!(v.why_not.unwrap().contains("other domains"));
     }
 
     #[test]
-    fn the_forest_waits_for_the_domain() {
-        let s = snapshot(4, 4, &[7]);
-        assert!(s.why_not(Scope::Forest).unwrap().contains("Raise the domain first"));
-        assert!(s.check(Scope::Forest, 5).is_err());
+    fn a_domain_already_higher_raises_only_the_forest() {
+        let g = snapshot(4, 7, &[7]).guide(7).unwrap();
+        assert_eq!(commands(&g), ["samba-tool domain level raise --forest-level=2016"]);
     }
 
     #[test]
-    fn nothing_goes_past_2016_or_below_2003() {
-        let s = snapshot(0, 0, &[10]);
-        assert_eq!(s.targets(Scope::Domain), [2, 3, 4, 5, 6, 7]);
-        assert!(s.check(Scope::Domain, 10).is_err());
-        assert!(s.check(Scope::Domain, 1).is_err());
-        let top = snapshot(7, 7, &[7]);
-        assert!(top.why_not(Scope::Domain).unwrap().contains("highest"));
-        assert!(top.why_not(Scope::Forest).unwrap().contains("highest"));
-    }
-
-    #[test]
-    fn mixed_mode_and_a_missing_entry_are_refused() {
-        let mut s = snapshot(2, 2, &[7]);
-        s.mixed = true;
-        assert!(s.check(Scope::Domain, 3).unwrap_err().contains("mixed mode"));
-        let mut s = snapshot(2, 2, &[7]);
-        s.cross_ref = None;
-        assert!(s.check(Scope::Domain, 3).is_err());
-    }
-
-    #[test]
-    fn a_role_with_no_live_holder_stops_the_raise() {
-        let mut s = snapshot(2, 3, &[7]);
+    fn a_role_with_no_live_holder_blocks_the_guide() {
+        let mut s = snapshot(4, 4, &[7]);
         s.pdc = Err("The PDC emulator is on OLD, which no longer exists.".into());
-        s.naming = Err("No DC holds the domain naming master.".into());
-        assert!(s.check(Scope::Domain, 4).unwrap_err().contains("OLD"));
-        assert!(s.check(Scope::Forest, 3).unwrap_err().contains("naming"));
+        let g = s.guide(7).unwrap();
+        assert!(g.steps.is_empty());
+        assert!(g.blocked.unwrap().contains("OLD"));
     }
 
     #[test]
-    fn the_view_offers_only_what_is_allowed() {
-        let v = snapshot(3, 4, &[5, 4]).view();
-        assert_eq!(v.scopes[0].key, "domain");
-        assert!(v.scopes[0].targets.is_empty(), "the lowest DC is at the domain's level");
-        assert!(v.scopes[0].why_not.as_deref().unwrap().contains("DC2"));
-        assert_eq!(v.scopes[1].targets.iter().map(|t| t.level).collect::<Vec<_>>(), [4]);
-        assert_eq!(v.scopes[1].targets[0].label, "Windows Server 2008 R2");
-        assert!(v.dcs[1].lowest && !v.dcs[0].lowest);
+    fn with_no_dcs_read_there_are_no_steps() {
+        let g = snapshot(4, 4, &[]).guide(5).unwrap();
+        assert!(g.steps.is_empty() && g.blocked.is_some());
     }
 
     #[test]
     fn levels_have_names() {
-        assert_eq!(label(0), "Windows 2000");
         assert_eq!(label(4), "Windows Server 2008 R2");
         assert_eq!(label(7), "Windows Server 2016");
-        assert_eq!(label(10), "Level 10");
+        assert_eq!(label(99), "Level 99");
     }
 }

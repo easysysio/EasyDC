@@ -17,7 +17,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 - **Group Policy** — create GPOs with their SYSVOL folder, link/unlink them to OUs
 - **OUs** — the OU tree, moving objects, and delegating tasks such as password resets to a group
 - **Password policy** — the domain policy, and fine-grained policies for groups and users
-- **Domain controllers** — FSMO roles and moving them, raising the functional level, removing a dead DC, and replication status
+- **Domain controllers** — FSMO roles and moving them, a guide to raising the functional level, removing a dead DC, and replication status
 - **Sites and subnets** — sites, subnets and site links
 - **SPNs** — view, add and remove service principal names on users and computers, and spot duplicates
 - **EasyDC accounts** — View or Edit per area for each account, local or signing in with a domain password; every change in an audit log

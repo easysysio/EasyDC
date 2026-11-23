@@ -272,26 +272,25 @@ Move them off a DC before you take it out of service.
 
 The **Functional level** card shows the level of the domain and the forest, and the highest
 level each DC can run at. A DC's highest level comes from `ad dc functional level` in its
-`smb.conf`. Only admins can raise a level.
+`smb.conf`.
 
-- The domain cannot go above its lowest DC, and the forest cannot go above its domains. So
-  raise the DCs first, then the domain, then the forest. When a level cannot be raised, the
-  card says why.
-- Levels above Windows Server 2008 R2 need the directory prepared first. EasyDC refuses until
-  `samba-tool domain schemaupgrade` and `samba-tool domain functionalprep` have been run, and
-  the card shows the exact commands.
-- **Raise…** offers only the levels allowed now, up to Windows Server 2016, and asks you to
-  type the domain's name.
-- Restart Samba on every DC after a raise.
-- The domain is changed on the PDC emulator and the forest on the domain naming master. Both
-  must be running, and EasyDC checks the limits again on that DC before writing.
-- A domain still in mixed mode is not raised here. Use `samba-tool domain level raise`.
+Samba allows a raise only from a shell on a DC, so EasyDC guides it instead of making it.
+Admins choose **How to raise…** and a level, up to Windows Server 2016. EasyDC reads the
+domain and lists only the steps that level still needs, with the exact commands and the DC
+to run each one on:
+
+1. Back up every DC.
+2. Set `ad dc functional level` on any DC below that level, and restart Samba there.
+3. Run `samba-tool domain schemaupgrade` and `functionalprep`, if the directory needs them.
+4. Run `samba-tool domain level raise`, on one DC only. It replicates to the others.
+5. Restart Samba on every DC, one at a time.
+
+Then choose **Check the level** to see the new level.
 
 !!! warning "A raise cannot be undone"
-    Going back means restoring every DC from backup. After a raise, a DC below the new level
-    can no longer join. Take a backup first.
-
-Raises are recorded in the audit log as `domain.level_raise` and `forest.level_raise`.
+    Going back means restoring every DC from backup, together. After a raise, a DC below the
+    new level can no longer join. Samba 4.19 calls its support for levels above 2008 R2
+    partial, so test first and keep every DC on the same version.
 
 ### Removing a dead DC
 
