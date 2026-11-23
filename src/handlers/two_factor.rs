@@ -259,7 +259,7 @@ pub async fn disable(State(state): State<AppState>, CurrentUser(actor): CurrentU
     .await;
     db::log_action(&state.db, &actor, "settings.two_factor_off", &actor, None, &result).await;
     match result {
-        Ok(()) => Redirect::to("/settings/two-factor?done=off").into_response(),
+        Ok(()) => Redirect::to("/account/two-factor?done=off").into_response(),
         Err(e) => page(&state, &actor, View::Status, Some(e), None).await,
     }
 }
@@ -286,7 +286,7 @@ pub async fn reset(State(state): State<AppState>, CurrentUser(actor): CurrentUse
             db::delete_sessions_for(&state.db, &username, None).await;
             Redirect::to("/settings?done=two_factor_reset").into_response()
         }
-        Err(e) => super::settings::show_error(&state, &actor, e).await,
+        Err(e) => super::settings::show_error(&state, &actor, "accounts", e).await,
     }
 }
 
@@ -313,7 +313,7 @@ pub async fn set_required(State(state): State<AppState>, CurrentUser(actor): Cur
     db::log_action(&state.db, &actor, "settings.two_factor_require", target, None, &result).await;
     match result {
         Ok(()) => Redirect::to(if required { "/settings?done=two_factor_required" } else { "/settings?done=two_factor_optional" }).into_response(),
-        Err(e) => super::settings::show_error(&state, &actor, e).await,
+        Err(e) => super::settings::show_error(&state, &actor, "two-factor", e).await,
     }
 }
 
@@ -344,27 +344,27 @@ mod tests {
     #[test]
     fn each_step_shows_what_it_should() {
         let off = render("status", false, true, false);
-        assert!(off.contains(r#"action="/settings/two-factor/start""#));
-        assert!(!off.contains("/settings/two-factor/disable"));
+        assert!(off.contains(r#"action="/account/two-factor/start""#));
+        assert!(!off.contains("/account/two-factor/disable"));
 
         let setup = render("setup", false, true, false);
         assert!(setup.contains(r#"<svg id="qr">"#), "the QR code is not escaped");
-        assert!(setup.contains("ABCD EFGH") && setup.contains(r#"action="/settings/two-factor/confirm""#));
+        assert!(setup.contains("ABCD EFGH") && setup.contains(r#"action="/account/two-factor/confirm""#));
 
         let codes = render("codes", true, true, false);
         assert!(codes.contains("7KQ2M-XH9TC"));
 
         let on = render("status", true, true, false);
         assert!(on.contains("3 recovery codes left"));
-        assert!(on.contains("/settings/two-factor/disable") && on.contains("/settings/two-factor/recovery"));
-        assert!(!on.contains(r#"action="/settings/two-factor/start""#));
+        assert!(on.contains("/account/two-factor/disable") && on.contains("/account/two-factor/recovery"));
+        assert!(!on.contains(r#"action="/account/two-factor/start""#));
     }
 
     #[test]
     fn it_says_when_setup_is_required_and_when_it_does_not_apply() {
         assert!(render("status", false, true, true).contains("must set up"));
         let domain = render("status", false, false, false);
-        assert!(domain.contains("is a domain account") && !domain.contains("/settings/two-factor/start"));
+        assert!(domain.contains("is a domain account") && !domain.contains("/account/two-factor/start"));
     }
 
     #[test]

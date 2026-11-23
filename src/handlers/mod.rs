@@ -1,3 +1,4 @@
+pub mod account;
 pub mod auth_handlers;
 pub mod dcs;
 pub mod delegation;

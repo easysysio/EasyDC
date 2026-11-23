@@ -7,7 +7,6 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
@@ -17,11 +16,11 @@ use tera::Context;
 
 use crate::{
     access::{self, Area, AREAS},
-    auth::{extract_session_cookie, CurrentUser},
+    auth::CurrentUser,
     db, ldap, tls, AppState,
 };
 
-const MIN_PASSWORD_LEN: usize = 8;
+pub(super) const MIN_PASSWORD_LEN: usize = 8;
 
 /// Letters, digits, and `. _ - @`. Names appear in URL paths and in the page,
 /// so anything outside this set would need escaping somewhere it could be
@@ -35,11 +34,26 @@ fn valid_username(name: &str) -> bool {
 pub struct SettingsQuery {
     /// Set by the post-redirect-get after a successful change.
     pub done: Option<String>,
+    /// The tab to open.
+    pub tab: Option<String>,
+}
+
+/// The tab a page opens on: the one asked for, or the one a change was made on.
+fn tab_for(q: &SettingsQuery) -> &'static str {
+    let name = q.tab.as_deref().or(match q.done.as_deref() {
+        Some("certificate" | "generated") => Some("https"),
+        Some("two_factor_required" | "two_factor_optional") => Some("two-factor"),
+        _ => None,
+    });
+    match name {
+        Some("https") => "https",
+        Some("two-factor") if access::current().admin => "two-factor",
+        _ => "accounts",
+    }
 }
 
 fn done_message(code: &str) -> Option<&'static str> {
     match code {
-        "password" => Some("Password changed. Your other sessions have been signed out."),
         "created" => Some("Account added."),
         "deleted" => Some("Account removed and signed out."),
         "permissions" => Some("Permissions saved. They apply from that account's next click."),
@@ -54,13 +68,13 @@ fn done_message(code: &str) -> Option<&'static str> {
 
 /// Render the settings page. `error` is shown when a submission is rejected;
 /// the form values are not echoed back, since both forms are passwords.
-async fn render(
-    state: &AppState,
-    actor: &str,
-    error: Option<String>,
-    done: Option<&str>,
-) -> Response {
+async fn render(state: &AppState, actor: &str, error: Option<String>, done: Option<&str>) -> Response {
+    render_tab(state, actor, "accounts", error, done).await
+}
+
+async fn render_tab(state: &AppState, actor: &str, tab: &str, error: Option<String>, done: Option<&str>) -> Response {
     let mut ctx = Context::new();
+    ctx.insert("active_tab", tab);
     ctx.insert("actor", actor);
     let accounts = db::list_accounts(&state.db).await.unwrap_or_default();
     ctx.insert("me_domain", &accounts.iter().any(|a| a.username == actor && a.domain));
@@ -88,8 +102,8 @@ async fn render(
 }
 
 /// The settings page with why something was refused.
-pub async fn show_error(state: &AppState, actor: &str, error: String) -> Response {
-    render(state, actor, Some(error), None).await
+pub async fn show_error(state: &AppState, actor: &str, tab: &str, error: String) -> Response {
+    render_tab(state, actor, tab, Some(error), None).await
 }
 
 pub async fn settings(
@@ -98,7 +112,7 @@ pub async fn settings(
     Query(q): Query<SettingsQuery>,
 ) -> Response {
     let done = q.done.as_deref().and_then(done_message);
-    render(&state, &actor, None, done).await
+    render_tab(&state, &actor, tab_for(&q), None, done).await
 }
 
 // ── the HTTPS certificate ─────────────────────────────────────────────────────
@@ -137,103 +151,8 @@ async fn certificate_changed(state: &AppState, actor: &str, action: &str, result
     db::log_action(&state.db, actor, action, &target, None, &result.as_ref().map(|_| ()).map_err(Clone::clone)).await;
     match result {
         Ok(_) => Redirect::to(&format!("/settings?done={done}")).into_response(),
-        Err(e) => render(state, actor, Some(e), None).await,
+        Err(e) => render_tab(state, actor, "https", Some(e), None).await,
     }
-}
-
-// ── change your own password ──────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct ChangePasswordForm {
-    pub current_password: String,
-    pub new_password: String,
-    pub confirm_password: String,
-}
-
-pub async fn change_password(
-    State(state): State<AppState>,
-    CurrentUser(actor): CurrentUser,
-    headers: HeaderMap,
-    Form(form): Form<ChangePasswordForm>,
-) -> Response {
-    let fail = |msg: &str| msg.to_string();
-
-    if db::list_accounts(&state.db).await.unwrap_or_default().iter().any(|a| a.username == actor && a.domain) {
-        return render(
-            &state,
-            &actor,
-            Some(fail("You sign in with your domain password. Change it on a computer in the domain.")),
-            None,
-        )
-        .await;
-    }
-
-    // A session created before usernames were recorded cannot be attributed to
-    // a row in `users`, so there is no account to change.
-    let Some(hash) = db::password_hash_for(&state.db, &actor).await else {
-        return render(
-            &state,
-            &actor,
-            Some(fail("Your session predates account tracking. Sign out and back in, then try again.")),
-            None,
-        )
-        .await;
-    };
-
-    let error = if !bcrypt::verify(&form.current_password, &hash).unwrap_or(false) {
-        Some(fail("Current password is incorrect."))
-    } else if form.new_password.len() < MIN_PASSWORD_LEN {
-        Some(format!(
-            "New password must be at least {} characters.",
-            MIN_PASSWORD_LEN
-        ))
-    } else if form.new_password != form.confirm_password {
-        Some(fail("New passwords do not match."))
-    } else if form.new_password == form.current_password {
-        Some(fail("New password must be different from the current one."))
-    } else {
-        None
-    };
-
-    if let Some(e) = error {
-        // A rejected attempt is worth recording: it is the shape of someone
-        // guessing at an unattended session.
-        db::log_action(
-            &state.db,
-            &actor,
-            "settings.password_change",
-            &actor,
-            None,
-            &Err(e.clone()),
-        )
-        .await;
-        return render(&state, &actor, Some(e), None).await;
-    }
-
-    let new_hash = match bcrypt::hash(&form.new_password, bcrypt::DEFAULT_COST) {
-        Ok(h) => h,
-        Err(e) => {
-            let msg = format!("Could not hash the new password: {}", e);
-            db::log_action(&state.db, &actor, "settings.password_change", &actor, None, &Err(msg.clone())).await;
-            return render(&state, &actor, Some(msg), None).await;
-        }
-    };
-
-    let result = db::set_password_hash(&state.db, &actor, &new_hash)
-        .await
-        .map_err(|e| e.to_string());
-    db::log_action(&state.db, &actor, "settings.password_change", &actor, None, &result).await;
-
-    if let Err(e) = result {
-        return render(&state, &actor, Some(e), None).await;
-    }
-
-    // Keep this browser signed in; drop every other session for the account so
-    // a changed password actually ends anyone else's access.
-    let current = extract_session_cookie(&headers);
-    db::delete_sessions_for(&state.db, &actor, current.as_deref()).await;
-
-    Redirect::to("/settings?done=password").into_response()
 }
 
 // ── EasyDC accounts ──────────────────────────────────────────────────────────
@@ -533,8 +452,7 @@ mod tests {
 
         let me = Access { username: "ann@lab.test".into(), admin: true, ..Default::default() };
         let html = tera().render("settings.html", &ctx_for("ann@lab.test", me, &accounts)).unwrap();
-        assert!(html.contains("you sign in\n                    with your domain password"), "no password form for a domain account");
-        assert!(!html.contains(r#"name="current_password""#));
+        assert!(!html.contains(r#"name="current_password""#), "the password is not changed here");
         assert!(!html.contains("/settings/accounts/alice/delete"), "alice is still the last local admin");
     }
 
@@ -602,7 +520,7 @@ mod tests {
         let html = tera().render("settings.html", &ctx_for("helpdesk", me, &accounts)).unwrap();
         assert!(!html.contains("/settings/accounts/"), "no add, change or remove");
         assert!(html.contains("Your permissions: Edit: Users."));
-        assert!(html.contains("/settings/password"), "but they can change their own password");
+        assert!(html.contains(r#"href="/account""#), "they change their own password from the top bar");
     }
 
     #[test]
@@ -710,20 +628,41 @@ mod tests {
         let accounts = [account("alice", true, &[]), bob, account("carol", false, &[])];
         let me = Access { username: "alice".into(), admin: true, ..Default::default() };
         let html = tera().render("settings.html", &ctx_for("alice", me, &accounts)).unwrap();
-        assert!(html.contains(r#"href="/settings/two-factor""#));
+        assert!(html.contains(r#"href="/account/two-factor""#));
         assert!(html.contains(r#"action="/settings/two-factor/require""#));
         assert!(html.contains("/settings/accounts/bob/two-factor/reset"));
         assert!(!html.contains("/settings/accounts/carol/two-factor/reset"), "carol has none to reset");
 
         let me = Access { username: "carol".into(), ..Default::default() };
         let html = tera().render("settings.html", &ctx_for("carol", me, &accounts)).unwrap();
-        assert!(html.contains(r#"href="/settings/two-factor""#), "anyone can set up their own");
+        assert!(html.contains(r#"href="/account/two-factor""#), "anyone can set up their own");
         assert!(!html.contains("/settings/two-factor/require") && !html.contains("two-factor/reset"));
+    }
+
+    #[tokio::test]
+    async fn a_page_opens_on_the_tab_of_its_change() {
+        use crate::access::{scope, Access};
+        let q = |tab: Option<&str>, done: Option<&str>| super::SettingsQuery { tab: tab.map(String::from), done: done.map(String::from) };
+        let admin = Access { username: "a".into(), admin: true, ..Default::default() };
+        scope(admin, async {
+            assert_eq!(super::tab_for(&q(None, None)), "accounts");
+            assert_eq!(super::tab_for(&q(Some("https"), None)), "https");
+            assert_eq!(super::tab_for(&q(None, Some("certificate"))), "https");
+            assert_eq!(super::tab_for(&q(None, Some("two_factor_required"))), "two-factor");
+            assert_eq!(super::tab_for(&q(None, Some("two_factor_reset"))), "accounts");
+            assert_eq!(super::tab_for(&q(Some("<x>"), None)), "accounts");
+        })
+        .await;
+        let viewer = Access { username: "v".into(), ..Default::default() };
+        scope(viewer, async {
+            assert_eq!(super::tab_for(&q(Some("two-factor"), None)), "accounts", "that tab is for admins");
+            assert_eq!(super::tab_for(&q(Some("https"), None)), "https");
+        })
+        .await;
     }
 
     #[test]
     fn done_codes_map_to_messages() {
-        assert!(super::done_message("password").is_some());
         assert!(super::done_message("created").is_some());
         assert!(super::done_message("deleted").is_some());
         assert!(super::done_message("permissions").is_some());

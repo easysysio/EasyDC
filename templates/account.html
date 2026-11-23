@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}My account - EasyDC{% endblock %}
+{% block content %}
+
+<nav aria-label="breadcrumb" class="mb-4">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
+        <li class="breadcrumb-item active">My account</li>
+    </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+    <i class="bi bi-person-circle fs-2 text-primary me-3"></i>
+    <div>
+        <h4 class="mb-0">My account</h4>
+        <small class="text-muted">Signed in as {{ actor }}</small>
+    </div>
+</div>
+
+<ul class="nav nav-tabs flex-nowrap text-nowrap overflow-x-auto overflow-y-hidden mb-4">
+    <li class="nav-item"><a class="nav-link active" aria-current="page" href="/account"><i class="bi bi-key me-1"></i>Password</a></li>
+    <li class="nav-item"><a class="nav-link" href="/account/two-factor"><i class="bi bi-shield-check me-1"></i>Two-factor sign-in</a></li>
+</ul>
+
+{% if error %}
+<div class="alert alert-danger d-flex align-items-start">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div>{{ error }}</div>
+</div>
+{% endif %}
+
+{% if done %}
+<div class="alert alert-success d-flex align-items-start">
+    <i class="bi bi-check-circle-fill me-2 mt-1"></i>
+    <div>{{ done }}</div>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-7 col-xl-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-white"><strong>Change your password</strong></div>
+            <div class="card-body">
+                {% if local %}
+                <p class="text-muted small">Changing your password signs out your other sessions.</p>
+                <form method="post" action="/account/password">
+                    <div class="mb-3">
+                        <label class="form-label" for="currentPassword">Current password</label>
+                        <input type="password" id="currentPassword" name="current_password" class="form-control" required
+                            autocomplete="current-password">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="newPassword">New password</label>
+                        <input type="password" id="newPassword" name="new_password" class="form-control" required
+                            minlength="{{ min_password_len }}" autocomplete="new-password">
+                        <div class="form-text">At least {{ min_password_len }} characters.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="confirmPassword">Confirm new password</label>
+                        <input type="password" id="confirmPassword" name="confirm_password" class="form-control" required
+                            minlength="{{ min_password_len }}" autocomplete="new-password">
+                    </div>
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i> Change password</button>
+                </form>
+                {% else %}
+                <p class="text-muted small mb-0">
+                    This is a domain account: you sign in with your domain password. Change it on a computer in the domain.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

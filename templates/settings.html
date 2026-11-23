@@ -52,7 +52,7 @@
     <i class="bi bi-gear fs-2 text-primary me-3"></i>
     <div>
         <h4 class="mb-0">Settings</h4>
-        <small class="text-muted">Who can sign in to EasyDC, how, what they may change, and its HTTPS certificate</small>
+        <small class="text-muted">Who can sign in to EasyDC, and how it is secured</small>
     </div>
 </div>
 
@@ -70,137 +70,44 @@
 </div>
 {% endif %}
 
-<div class="row g-4">
+{% set tab = active_tab | default(value="accounts") %}
+<ul class="nav nav-tabs flex-nowrap text-nowrap overflow-x-auto overflow-y-hidden mb-4" id="settingsTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if tab == "accounts" %}active{% endif %}" type="button" role="tab" data-bs-toggle="tab"
+            data-bs-target="#tabAccounts" data-tab="accounts">
+            <i class="bi bi-people me-1"></i>Accounts
+            <span class="badge bg-light text-secondary border ms-1">{{ accounts | length }}</span>
+        </button>
+    </li>
+    {% if access.admin %}
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if tab == "two-factor" %}active{% endif %}" type="button" role="tab" data-bs-toggle="tab"
+            data-bs-target="#tabTwoFactor" data-tab="two-factor">
+            <i class="bi bi-shield-check me-1"></i>Two-factor
+        </button>
+    </li>
+    {% endif %}
+    <li class="nav-item" role="presentation">
+        <button class="nav-link {% if tab == "https" %}active{% endif %}" type="button" role="tab" data-bs-toggle="tab"
+            data-bs-target="#tabHttps" data-tab="https">
+            <i class="bi bi-lock me-1"></i>HTTPS certificate
+            {% if tls and tls.expired %}<span class="badge bg-danger ms-1">Expired</span>
+            {% elif tls and tls.days_left < 30 %}<span class="badge bg-warning text-dark ms-1">{{ tls.days_left }} days</span>{% endif %}
+        </button>
+    </li>
+</ul>
 
-    <div class="col-lg-6 d-flex flex-column gap-4">
-        <div class="card shadow-sm">
-            <div class="card-header bg-white">
-                <i class="bi bi-key me-2 text-primary"></i><strong>Change your password</strong>
-            </div>
-            <div class="card-body">
-                {% if me_domain %}
-                <p class="text-muted small mb-0">
-                    Signed in as <span class="fw-semibold">{{ actor }}</span>, a domain account: you sign in
-                    with your domain password. Change it on a computer in the domain.
-                </p>
-                {% else %}
-                <p class="text-muted small">
-                    Signed in as <span class="fw-semibold">{{ actor }}</span>. Changing your password
-                    signs out your other sessions.
-                </p>
-                <form method="post" action="/settings/password">
-                    <div class="mb-3">
-                        <label class="form-label">Current password</label>
-                        <input type="password" name="current_password" class="form-control" required
-                            autocomplete="current-password">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">New password</label>
-                        <input type="password" name="new_password" class="form-control" required
-                            minlength="{{ min_password_len }}" autocomplete="new-password">
-                        <div class="form-text">At least {{ min_password_len }} characters.</div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Confirm new password</label>
-                        <input type="password" name="confirm_password" class="form-control" required
-                            minlength="{{ min_password_len }}" autocomplete="new-password">
-                    </div>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-check2 me-1"></i> Change password
-                    </button>
-                </form>
-                {% endif %}
-            </div>
-        </div>
+<div class="tab-content">
 
+    <div class="tab-pane {% if tab == "accounts" %}show active{% endif %}" id="tabAccounts" role="tabpanel">
         <div class="card shadow-sm">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-shield-check me-2 text-primary"></i><strong>Two-factor sign-in</strong></span>
-                {% if not me_domain %}
-                {% if me_two_factor %}<span class="badge bg-success">On</span>
-                {% else %}<span class="badge bg-light text-secondary border">Off</span>{% endif %}
-                {% endif %}
-            </div>
-            <div class="card-body">
-                {% if me_domain %}
-                <p class="text-muted small">You sign in with your domain password, so this does not apply to your account.</p>
-                {% else %}
-                <p class="text-muted small">A code from an app on your phone, after your password.</p>
-                <a href="/settings/two-factor" class="btn btn-primary btn-sm">
-                    <i class="bi bi-shield-check me-1"></i>{% if me_two_factor %}Manage{% else %}Set up{% endif %}
-                </a>
-                {% endif %}
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+                <span class="small text-muted">Everyone can view every page. Each account has what it may change.</span>
                 {% if access.admin %}
-                <form method="post" action="/settings/two-factor/require" class="border-top mt-3 pt-3">
-                    <div class="form-check form-switch mb-2">
-                        <input class="form-check-input" type="checkbox" name="required" id="requireTwoFactor"
-                            {% if two_factor_required %}checked{% endif %}>
-                        <label class="form-check-label" for="requireTwoFactor">
-                            Require it for local admins
-                            <span class="small text-muted d-block">Domain accounts are not covered: they sign in with their domain password.</span>
-                        </label>
-                    </div>
-                    <button type="submit" class="btn btn-outline-secondary btn-sm">Save</button>
-                </form>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="card shadow-sm">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span><i class="bi bi-lock me-2 text-primary"></i><strong>HTTPS certificate</strong></span>
-                {% if tls %}
-                {% if tls.expired %}<span class="badge bg-danger">Expired</span>
-                {% elif tls.days_left < 30 %}<span class="badge bg-warning text-dark">Expires in {{ tls.days_left }} days</span>
-                {% elif tls.uploaded %}<span class="badge bg-success">Your certificate</span>
-                {% else %}<span class="badge bg-light text-secondary border">Self-signed</span>{% endif %}
-                {% endif %}
-            </div>
-            <div class="card-body">
-                {% if tls %}
-                <dl class="row small mb-3">
-                    <dt class="col-sm-3 fw-medium">Issued to</dt>
-                    <dd class="col-sm-9">{{ tls.name }}</dd>
-                    <dt class="col-sm-3 fw-medium">Issued by</dt>
-                    <dd class="col-sm-9">{{ tls.issuer }}</dd>
-                    <dt class="col-sm-3 fw-medium">Valid for</dt>
-                    <dd class="col-sm-9">{{ tls.names | join(sep=", ") }}</dd>
-                    <dt class="col-sm-3 fw-medium">Expires</dt>
-                    <dd class="col-sm-9">{{ tls.not_after }}</dd>
-                    <dt class="col-sm-3 fw-medium">SHA-256</dt>
-                    <dd class="col-sm-9 mb-0"><code class="text-break">{{ tls.fingerprint }}</code></dd>
-                </dl>
-                {% if not tls.uploaded %}
-                <p class="text-muted small">
-                    EasyDC made this certificate itself and renews it, so traffic is encrypted but browsers
-                    warn about it. To remove the warning, use a certificate from your own CA.
-                </p>
-                {% endif %}
-                {% if access.admin %}
-                <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#certificateModal">
-                    <i class="bi bi-upload me-1"></i> Use my certificate&hellip;
+                <button type="button" class="btn btn-primary btn-sm flex-shrink-0" data-bs-toggle="modal" data-bs-target="#newAccountModal">
+                    <i class="bi bi-person-plus me-1"></i> Add account
                 </button>
-                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#generateModal">
-                    <i class="bi bi-arrow-repeat me-1"></i> Generate a new one&hellip;
-                </button>
-                {% else %}
-                <p class="text-muted small mb-0">Only an EasyDC admin can change the certificate.</p>
                 {% endif %}
-                {% else %}
-                <p class="text-muted small mb-0">
-                    HTTPS is turned off with <code>EASYDC_TLS=off</code>, so EasyDC serves plain HTTP.
-                    Keep it behind a reverse proxy that handles TLS.
-                </p>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-6">
-        <div class="card shadow-sm h-100">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-people me-2 text-primary"></i><strong>EasyDC accounts</strong></span>
-                <span class="badge bg-light text-secondary border">{{ accounts | length }}</span>
             </div>
             {% set local_admins = accounts | filter(attribute="admin", value=true) | filter(attribute="domain", value=false) %}
             <ul class="list-group list-group-flush">
@@ -256,13 +163,113 @@
                 </li>
                 {% endfor %}
             </ul>
+            {% if not access.admin %}
             <div class="card-body border-top">
-                {% if access.admin %}
-                <p class="text-muted small mb-3">
-                    Add an account so each person signs in as themselves and the audit log shows who
-                    made a change. Everyone can view every page; choose what each person may change.
+                <p class="text-muted small mb-0">
+                    {% for a in accounts %}{% if a.username == actor %}Your permissions: {{ a.summary }}.{% endif %}{% endfor %}
+                    Only an EasyDC admin can add accounts or change what they may change.
                 </p>
-                <form method="post" action="/settings/accounts/new" class="js-new-account">
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if access.admin %}
+    <div class="tab-pane {% if tab == "two-factor" %}show active{% endif %}" id="tabTwoFactor" role="tabpanel">
+        {% set locals = accounts | filter(attribute="domain", value=false) %}
+        {% set covered = locals | filter(attribute="two_factor", value=true) %}
+        <div class="row"><div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <p class="mb-3"><strong>{{ covered | length }} of {{ locals | length }}</strong> local accounts use two-factor sign-in.</p>
+                <form method="post" action="/settings/two-factor/require">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="required" id="requireTwoFactor"
+                            {% if two_factor_required %}checked{% endif %}>
+                        <label class="form-check-label" for="requireTwoFactor">
+                            Require it for local admins
+                            <span class="small text-muted d-block">A local admin without it must set it up at their next click. Domain accounts are not covered: they sign in with their domain password.</span>
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                </form>
+                {% if not me_domain and not me_two_factor %}
+                <p class="small text-muted border-top mt-3 pt-3 mb-0">
+                    To require it, first <a href="/account/two-factor">turn it on for your own account</a>.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+        </div></div>
+    </div>
+    {% endif %}
+
+    <div class="tab-pane {% if tab == "https" %}show active{% endif %}" id="tabHttps" role="tabpanel">
+        <div class="row"><div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span><i class="bi bi-lock me-2 text-primary"></i><strong>HTTPS certificate</strong></span>
+                {% if tls %}
+                {% if tls.expired %}<span class="badge bg-danger">Expired</span>
+                {% elif tls.days_left < 30 %}<span class="badge bg-warning text-dark">Expires in {{ tls.days_left }} days</span>
+                {% elif tls.uploaded %}<span class="badge bg-success">Your certificate</span>
+                {% else %}<span class="badge bg-light text-secondary border">Self-signed</span>{% endif %}
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if tls %}
+                <dl class="row small mb-3">
+                    <dt class="col-sm-3 fw-medium">Issued to</dt>
+                    <dd class="col-sm-9">{{ tls.name }}</dd>
+                    <dt class="col-sm-3 fw-medium">Issued by</dt>
+                    <dd class="col-sm-9">{{ tls.issuer }}</dd>
+                    <dt class="col-sm-3 fw-medium">Valid for</dt>
+                    <dd class="col-sm-9">{{ tls.names | join(sep=", ") }}</dd>
+                    <dt class="col-sm-3 fw-medium">Expires</dt>
+                    <dd class="col-sm-9">{{ tls.not_after }}</dd>
+                    <dt class="col-sm-3 fw-medium">SHA-256</dt>
+                    <dd class="col-sm-9 mb-0"><code class="text-break">{{ tls.fingerprint }}</code></dd>
+                </dl>
+                {% if not tls.uploaded %}
+                <p class="text-muted small">
+                    EasyDC made this certificate itself and renews it, so traffic is encrypted but browsers
+                    warn about it. To remove the warning, use a certificate from your own CA.
+                </p>
+                {% endif %}
+                {% if access.admin %}
+                <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#certificateModal">
+                    <i class="bi bi-upload me-1"></i> Use my certificate&hellip;
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#generateModal">
+                    <i class="bi bi-arrow-repeat me-1"></i> Generate a new one&hellip;
+                </button>
+                {% else %}
+                <p class="text-muted small mb-0">Only an EasyDC admin can change the certificate.</p>
+                {% endif %}
+                {% else %}
+                <p class="text-muted small mb-0">
+                    HTTPS is turned off with <code>EASYDC_TLS=off</code>, so EasyDC serves plain HTTP.
+                    Keep it behind a reverse proxy that handles TLS.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+        </div></div>
+    </div>
+
+</div>
+
+{% if access.admin %}
+<div class="modal fade" id="newAccountModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content js-new-account" method="post" action="/settings/accounts/new">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-plus me-2"></i>Add account</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Each person signs in as themselves, so the audit log shows who made a change.</p>
+
                     <div class="btn-group w-100 mb-3" role="group" aria-label="Kind of account">
                         <input type="radio" class="btn-check" name="kind" value="local" id="kind-local" checked>
                         <label class="btn btn-outline-secondary" for="kind-local">
@@ -313,21 +320,15 @@
                     </div>
                     </div>
                     {{ self::permission_grid(id="new", admin=false, edit=[], areas=areas) }}
-                    <button type="submit" class="btn btn-outline-primary mt-3">
-                        <i class="bi bi-person-plus me-1"></i> Add account
-                    </button>
-                </form>
-                {% else %}
-                <p class="text-muted small mb-0">
-                    {% for a in accounts %}{% if a.username == actor %}Your permissions: {{ a.summary }}.{% endif %}{% endfor %}
-                    Only an EasyDC admin can add accounts or change what they may change.
-                </p>
-                {% endif %}
             </div>
-        </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-person-plus me-1"></i> Add account</button>
+            </div>
+        </form>
     </div>
-
 </div>
+{% endif %}
 
 {% if tls and access.admin %}
 <div class="modal fade" id="certificateModal" tabindex="-1" aria-hidden="true">
@@ -431,6 +432,13 @@ document.querySelectorAll('.js-reset-two-factor').forEach(function (form) {
         if (!confirm('Remove two-factor sign-in from ' + form.dataset.account + '? They will be signed out, and can sign in with their password alone until they set it up again.')) {
             e.preventDefault();
         }
+    });
+});
+
+// Reloading stays on the tab, without repeating the last message.
+document.querySelectorAll('#settingsTabs [data-tab]').forEach(function (button) {
+    button.addEventListener('shown.bs.tab', function () {
+        history.replaceState(null, '', '/settings?tab=' + button.dataset.tab);
     });
 });
 

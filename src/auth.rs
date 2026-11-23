@@ -170,7 +170,7 @@ pub async fn require_auth(
             let error = "EasyDC requires two-factor sign-in for admins. Set it up first.";
             return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": error }))).into_response();
         }
-        return Redirect::to("/settings/two-factor").into_response();
+        return Redirect::to("/account/two-factor").into_response();
     }
     let need = access::need(request.method(), &route);
     if !access.allows(need) {
@@ -182,7 +182,7 @@ pub async fn require_auth(
 /// What a local admin can still reach while two-factor is required of them
 /// and not set up yet.
 fn open_before_two_factor(route: &str) -> bool {
-    matches!(route, "/logout" | "/settings/two-factor" | "/settings/two-factor/start" | "/settings/two-factor/confirm")
+    matches!(route, "/logout" | "/account/two-factor" | "/account/two-factor/start" | "/account/two-factor/confirm")
 }
 
 /// Answer a change the account may not make: a line in the audit log, and

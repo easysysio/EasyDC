@@ -112,11 +112,11 @@ pub fn need(method: &Method, route: &str) -> Need {
     let Some(rest) = route.strip_prefix("/servers/:id/") else {
         return match route {
             "/logout"
-            | "/settings/password"
-            | "/settings/two-factor/start"
-            | "/settings/two-factor/confirm"
-            | "/settings/two-factor/recovery"
-            | "/settings/two-factor/disable" => Need::Anyone,
+            | "/account/password"
+            | "/account/two-factor/start"
+            | "/account/two-factor/confirm"
+            | "/account/two-factor/recovery"
+            | "/account/two-factor/disable" => Need::Anyone,
             _ => Need::Admin,
         };
     };
@@ -268,11 +268,11 @@ mod tests {
                     Need::Anyone => assert!(
                         [
                             "/logout",
-                            "/settings/password",
-                            "/settings/two-factor/start",
-                            "/settings/two-factor/confirm",
-                            "/settings/two-factor/recovery",
-                            "/settings/two-factor/disable",
+                            "/account/password",
+                            "/account/two-factor/start",
+                            "/account/two-factor/confirm",
+                            "/account/two-factor/recovery",
+                            "/account/two-factor/disable",
                         ]
                         .contains(&path.as_str()),
                         "{path} may be posted by anyone"

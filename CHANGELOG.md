@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
 - HTTPS on port 3000, with a self-signed certificate from the first start or your own from Settings. Plain HTTP on the same port redirects to it.
 - Two-factor sign-in for local accounts with an authenticator app, with recovery codes. Admins can reset it for others and require it for local admins.
 
+### Changed
+- Settings is split into tabs. Your own password and two-factor sign-in moved to the menu under your name in the top bar.
+
 ### Upgrade notes
 - A reverse proxy must send `X-Forwarded-Proto`, or set `EASYDC_TLS=off`; otherwise it gets the redirect to HTTPS.
 

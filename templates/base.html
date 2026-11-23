@@ -324,17 +324,28 @@
                 <i class="bi bi-hdd-network me-1"></i> EasyDC
             </a>
             <div class="ms-auto d-flex align-items-center gap-2">
-                <a href="/settings" class="btn btn-outline-light btn-sm">
-                    <i class="bi bi-gear me-1"></i> Settings
+                <a href="/settings" class="btn btn-outline-light btn-sm" aria-label="Settings" title="Settings">
+                    <i class="bi bi-gear"></i><span class="d-none d-sm-inline ms-1">Settings</span>
                 </a>
-                <a href="/audit" class="btn btn-outline-light btn-sm">
-                    <i class="bi bi-journal-text me-1"></i> Audit Log
+                <a href="/audit" class="btn btn-outline-light btn-sm text-nowrap" aria-label="Audit Log" title="Audit Log">
+                    <i class="bi bi-journal-text"></i><span class="d-none d-sm-inline ms-1">Audit Log</span>
                 </a>
-                <form method="post" action="/logout" class="d-inline">
-                    <button type="submit" class="btn btn-outline-light btn-sm">
-                        <i class="bi bi-box-arrow-right me-1"></i> Logout
+                <div class="dropdown">
+                    <button type="button" class="btn btn-outline-light btn-sm dropdown-toggle" data-bs-toggle="dropdown"
+                        aria-expanded="false" aria-label="Your account">
+                        <i class="bi bi-person-circle me-1"></i><span class="d-inline-block text-truncate align-bottom" style="max-width: 9rem">{{ access.username | default(value="Account") }}</span>
                     </button>
-                </form>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="/account"><i class="bi bi-key me-2"></i>Change password</a></li>
+                        <li><a class="dropdown-item" href="/account/two-factor"><i class="bi bi-shield-check me-2"></i>Two-factor sign-in</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <form method="post" action="/logout">
+                                <button type="submit" class="dropdown-item"><i class="bi bi-box-arrow-right me-2"></i>Logout</button>
+                            </form>
+                        </li>
+                    </ul>
+                </div>
             </div>
         </div>
     </nav>

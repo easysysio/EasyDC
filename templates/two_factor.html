@@ -5,18 +5,23 @@
 <nav aria-label="breadcrumb" class="mb-4">
     <ol class="breadcrumb">
         <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/settings">Settings</a></li>
+        <li class="breadcrumb-item"><a href="/account">My account</a></li>
         <li class="breadcrumb-item active">Two-factor sign-in</li>
     </ol>
 </nav>
 
 <div class="d-flex align-items-center mb-4">
-    <i class="bi bi-shield-check fs-2 text-primary me-3"></i>
+    <i class="bi bi-person-circle fs-2 text-primary me-3"></i>
     <div>
-        <h4 class="mb-0">Two-factor sign-in</h4>
-        <small class="text-muted">A code from an authenticator app, after your password</small>
+        <h4 class="mb-0">My account</h4>
+        <small class="text-muted">Signed in as {{ actor }}</small>
     </div>
 </div>
+
+<ul class="nav nav-tabs flex-nowrap text-nowrap overflow-x-auto overflow-y-hidden mb-4">
+    <li class="nav-item"><a class="nav-link" href="/account"><i class="bi bi-key me-1"></i>Password</a></li>
+    <li class="nav-item"><a class="nav-link active" aria-current="page" href="/account/two-factor"><i class="bi bi-shield-check me-1"></i>Two-factor sign-in</a></li>
+</ul>
 
 {% if must_set_up and view != "codes" %}
 <div class="alert alert-warning d-flex align-items-start">
@@ -57,7 +62,7 @@
                 {% endif %}
                 <p class="small mb-1">Can't scan it? Enter this key in the app:</p>
                 <p><code class="fs-6 text-break">{{ secret }}</code></p>
-                <form method="post" action="/settings/two-factor/confirm">
+                <form method="post" action="/account/two-factor/confirm">
                     <label class="form-label fw-medium" for="setupCode">The 6-digit code from the app</label>
                     <div class="input-group">
                         <input type="text" id="setupCode" name="code" class="form-control" required autofocus
@@ -85,7 +90,7 @@
                 <button type="button" class="btn btn-outline-secondary btn-sm" id="downloadCodes">
                     <i class="bi bi-download me-1"></i>Download
                 </button>
-                <a href="/settings/two-factor" class="btn btn-primary btn-sm">I saved them</a>
+                <a href="/account/two-factor" class="btn btn-primary btn-sm">I saved them</a>
             </div>
         </div>
         <script>
@@ -133,7 +138,7 @@
             <div class="card-header bg-white"><strong>New recovery codes</strong></div>
             <div class="card-body">
                 <p class="small text-muted">Replaces all your recovery codes.</p>
-                <form method="post" action="/settings/two-factor/recovery">
+                <form method="post" action="/account/two-factor/recovery">
                     <div class="row g-2 mb-3">
                         <div class="col-sm-7">
                             <label class="form-label" for="recPassword">Password</label>
@@ -153,7 +158,7 @@
             <div class="card-header bg-white"><strong>Turn off, or move to a new phone</strong></div>
             <div class="card-body">
                 <p class="small text-muted">To move to a new phone, turn this off and set it up again.</p>
-                <form method="post" action="/settings/two-factor/disable">
+                <form method="post" action="/account/two-factor/disable">
                     <div class="row g-2 mb-3">
                         <div class="col-sm-7">
                             <label class="form-label" for="offPassword">Password</label>
@@ -180,7 +185,7 @@
                     With this on, signing in as <span class="fw-semibold">{{ actor }}</span> also needs a code from
                     an app on your phone, so a stolen password is not enough. Enter your password to start.
                 </p>
-                <form method="post" action="/settings/two-factor/start">
+                <form method="post" action="/account/two-factor/start">
                     <label class="form-label" for="startPassword">Password</label>
                     <div class="input-group">
                         <input type="password" id="startPassword" name="password" class="form-control" required autofocus autocomplete="current-password">

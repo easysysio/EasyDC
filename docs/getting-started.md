@@ -62,10 +62,11 @@ Opening a server shows one card per area:
 | **Sites and Subnets** | Sites, subnets and site links |
 | **OU Management** | The OU tree, moving objects between OUs, and delegation |
 
-**Settings** in the top bar manages who can sign in to EasyDC: change your own password,
-and add an account for each person who administers the domain, with what each may change.
-An account can be local, with its own password, or a domain account that signs in with
-its domain password. Everyone can view every page.
+**Settings** in the top bar manages who can sign in to EasyDC: add an account for each
+person who administers the domain, with what each may change. An account can be local,
+with its own password, or a domain account that signs in with its domain password.
+Everyone can view every page. **Your name** in the top bar has your own password and
+two-factor sign-in.
 
 The **Audit Log** button in the top bar is global: it lists changes across every server.
 

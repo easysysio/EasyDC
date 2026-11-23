@@ -376,8 +376,9 @@ Changes are recorded in the audit log as `pso.create`, `pso.update`, `pso.delete
 **Settings** in the top bar manages who can sign in to *EasyDC*. The first account is
 created by the setup wizard, and is a local admin.
 
-- **Change your password** — needs your current one. Your other sessions are signed out,
-  so a changed password actually ends access anywhere else you were signed in.
+- **Change your password** — under your name in the top bar. It needs your current one.
+  Your other sessions are signed out, so a changed password actually ends access anywhere
+  else you were signed in.
 - **Add an account** — so each person signs in as themselves and the audit log names who
   made a change. Choose the kind (below) and what they may change.
 - **Change permissions** — the shield button next to an account. It applies from that
@@ -409,8 +410,9 @@ refused one, is recorded in the audit log as `auth.sign_in`.
 ### Two-factor sign-in
 
 A local account can also ask for a code from an authenticator app, such as Google
-Authenticator, Microsoft Authenticator, 1Password or Bitwarden. Open **Settings → Two-factor
-sign-in → Set up**, enter your password, scan the QR code and type the code it shows.
+Authenticator, Microsoft Authenticator, 1Password or Bitwarden. Click **your name** in the
+top bar, then **Two-factor sign-in → Set up**, enter your password, scan the QR code and
+type the code it shows.
 
 EasyDC then shows **10 recovery codes, once**. Keep them away from your phone: each signs
 you in one time if the phone is lost. After 5 wrong codes, the account takes no codes for
@@ -420,7 +422,7 @@ To move to a new phone, turn two-factor off on the same page and set it up again
 
 **Admins** can:
 
-- turn on **Require it for local admins**. A local admin without it must set it up at their
+- turn on **Require it for local admins** in **Settings → Two-factor**. A local admin without it must set it up at their
   next click, before doing anything else;
 - reset it for someone who lost both their phone and recovery codes, with the shield button
   beside the account. That person is signed out, and signs in with the password alone until

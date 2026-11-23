@@ -165,7 +165,7 @@ pub async fn post_login_code(State(state): State<AppState>, headers: HeaderMap, 
     }
     let action = if used == Used::Recovery { "auth.two_factor_recovery" } else { "auth.two_factor" };
     db::log_action(&state.db, &username, action, &username, None, &Ok(())).await;
-    let to = if used == Used::Recovery { "/settings/two-factor?done=recovery" } else { "/" };
+    let to = if used == Used::Recovery { "/account/two-factor?done=recovery" } else { "/" };
     let mut response = start_session(&state, &headers, &username, to).await;
     response.headers_mut().append(header::SET_COOKIE, clear_challenge_cookie(via_https(&headers)));
     response
