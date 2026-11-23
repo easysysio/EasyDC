@@ -1,7 +1,8 @@
 # TODO
 
 **0.6.0** is built and waiting for release: its items are the sections down to "From
-samba-tool". **0.7.0** is a full redesign. What earlier releases brought is in `CHANGELOG.md`.
+samba-tool". After it, the aim is to run Samba AD with no Windows machine, and to hear about
+problems before users do. What earlier releases brought is in `CHANGELOG.md`.
 
 ## Securing EasyDC itself
 
@@ -52,12 +53,40 @@ EasyDC has grown page by page and looks messy. Give it a clean, modern and consi
 - **Works at every size**, from a phone to a wide screen, and by keyboard and screen reader.
 - **Nothing is lost.** Every feature and permission check stays, and all assets stay bundled,
   so EasyDC keeps working on a network with no internet access.
+- **Launch it.** Post the release on the Samba mailing list, r/sysadmin and r/selfhosted, with
+  screenshots and the one-line Docker install, and let real users shape what comes next.
+
+## 0.8.0: edit common GPO settings
+
+So that a domain needs no Windows machine with GPMC.
+
+- **Start with about ten popular settings**, such as logon scripts, mapped drives and common
+  security options.
+- **Write them as GPMC does:** the policy files, the version in both `GPT.INI` and the
+  directory object, and the client extension lists, or clients silently ignore the change.
+- **Test every setting on real Windows clients** before it ships.
+
+## 0.9.0: monitoring and alerts
+
+- **Scheduled health checks**, using the checks EasyDC already has.
+- **Email and webhook alerts** for failed replication, expiring certificates, clock skew and
+  lost FSMO roles.
+- **0.9.x: SYSVOL drift.** Compare SYSVOL across DCs and show which one is missing a GPO or
+  has a different copy. Detect first, and add a sync only if people want it, because a bad
+  sync can damage policies on every DC.
+
+## 1.0: trust and recovery
+
+- **Restore deleted objects.** First check how well Samba supports bringing a deleted object
+  back over LDAP.
+- **Tested upgrades** from older versions.
+- **A security review.**
+- **Kerberos for SMB.** GPO creation depends on NTLM today, and more domains turn it off.
 
 ## Maybe later
 
 - **One search box** across users, groups and computers.
-- **Restore deleted objects.** First check how well Samba supports bringing a deleted
-  object back over LDAP.
+- **SSO and a public API**, if users ask for them.
 
 ## Not planned
 
