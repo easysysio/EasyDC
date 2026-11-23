@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - Two-factor sign-in for local accounts with an authenticator app, with recovery codes. Admins can reset it for others and require it for local admins.
 - Reports, with CSV export: inactive accounts, expiring and never-expiring passwords, locked, disabled or expired accounts, privileged group members including nested ones, and empty groups.
 - SPNs page: view, add and remove service principal names on users and computers, with duplicates flagged.
+- Raise the domain and forest functional level from the Domain Controllers page, for admins, with every limit checked first.
 - Audit log retention in Settings, with rotation of old days to compressed files. By default the log is still kept forever.
 
 ### Changed

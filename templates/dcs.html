@@ -61,6 +61,72 @@
     </div>
 </div>
 
+{% if levels_error %}
+<div class="alert alert-warning small"><i class="bi bi-exclamation-triangle me-1"></i> Could not read the functional levels: {{ levels_error }}</div>
+{% endif %}
+{% if levels %}
+<h5 class="mb-3">Functional level</h5>
+<div class="card shadow-sm mb-2">
+    <div class="card-body">
+        <div class="row g-4">
+            {% for s in levels.scopes %}
+            <div class="col-md-6">
+                <div class="small text-muted">{{ s.title }} · {{ s.name }}</div>
+                <div class="fs-5 fw-medium mb-2">{{ s.current }}</div>
+                {% if s.targets | length > 0 %}
+                <button type="button" class="btn btn-sm btn-outline-primary" data-needs="admin" data-bs-toggle="modal" data-bs-target="#raiseLevel-{{ s.key }}">Raise…</button>
+                {% elif s.why_not %}
+                <div class="small text-muted">{{ s.why_not }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="border-top mt-3 pt-3 small">
+            <span class="text-muted me-2">Highest level each DC can run at:</span>
+            {% for d in levels.dcs %}<span class="badge {% if d.lowest %}bg-warning-subtle text-warning-emphasis{% else %}bg-light text-secondary{% endif %} border me-1 mb-1">{{ d.name }}: {{ d.level }}</span>{% endfor %}
+        </div>
+    </div>
+</div>
+<p class="small text-muted mb-5">
+    The domain cannot be higher than its lowest DC, and the forest cannot be higher than its domains.
+    What a DC can run at comes from <code>ad dc functional level</code> in its <code>smb.conf</code>.
+</p>
+
+{% for s in levels.scopes %}{% if s.targets | length > 0 %}
+<div class="modal fade" id="raiseLevel-{{ s.key }}" tabindex="-1">
+    <div class="modal-dialog">
+        <form class="modal-content js-raise-level" method="post" action="/servers/{{ server.id }}/dcs/level" data-name="{{ s.name }}">
+            <div class="modal-header">
+                <h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Raise the {{ s.key }} level</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="scope" value="{{ s.key }}">
+                <p>{{ s.title }} <strong>{{ s.name }}</strong> is at {{ s.current }}.</p>
+                <div class="alert alert-danger small">
+                    <strong>This cannot be lowered again</strong> without restoring every DC from backup.
+                    Any DC added later must run at this level or higher.
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="raiseTo-{{ s.key }}">Raise to</label>
+                    <select class="form-select" id="raiseTo-{{ s.key }}" name="level">
+                        {% for t in s.targets %}<option value="{{ t.level }}">{{ t.label }}</option>{% endfor %}
+                    </select>
+                    <div class="form-text">The change is made on {{ s.holder }}, the {{ s.role }}.</div>
+                </div>
+                <label class="form-label" for="raiseConfirm-{{ s.key }}">Type <strong>{{ s.name }}</strong> to confirm</label>
+                <input type="text" class="form-control" id="raiseConfirm-{{ s.key }}" name="confirm" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-danger" disabled>Raise</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}{% endfor %}
+{% endif %}
+
 <h5 class="mb-3">FSMO roles</h5>
 <div class="card shadow-sm mb-3">
     <div class="table-responsive">
@@ -248,6 +314,15 @@ document.getElementById('moveAllModal').addEventListener('show.bs.modal', functi
     const to = e.relatedTarget.dataset.to;
     this.querySelectorAll('.js-to').forEach(el => { el.textContent = to; });
     this.querySelector('[name=to]').value = to;
+});
+// Raising a level asks for the name first, and is sent only once.
+document.querySelectorAll('.js-raise-level').forEach(function (f) {
+    const go = f.querySelector('[type=submit]');
+    const typed = f.elements.confirm;
+    const check = () => { go.disabled = typed.value.trim().toLowerCase() !== f.dataset.name.toLowerCase(); };
+    typed.addEventListener('input', check);
+    f.closest('.modal').addEventListener('show.bs.modal', function () { typed.value = ''; check(); });
+    f.addEventListener('submit', function () { go.disabled = true; go.textContent = 'Raising…'; });
 });
 // The submit button says it is working: a move takes a few seconds.
 document.querySelectorAll('#moveRoleModal form, #moveAllModal form').forEach(function (f) {

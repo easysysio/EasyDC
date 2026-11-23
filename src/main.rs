@@ -9,6 +9,7 @@ mod fsmo;
 mod handlers;
 mod health;
 mod ldap;
+mod level;
 mod models;
 mod remediate;
 mod replication;
@@ -161,6 +162,7 @@ async fn main() {
         .route("/servers/:id/reports/export", get(handlers::reports::export))
         .route("/servers/:id/dcs", get(handlers::dcs::page))
         .route("/servers/:id/dcs/fsmo", post(handlers::dcs::transfer))
+        .route("/servers/:id/dcs/level", post(handlers::dcs::raise_level))
         .route("/servers/:id/dcs/:name/removal", get(handlers::dcs::removal_plan))
         .route("/servers/:id/dcs/:name/remove", post(handlers::dcs::remove))
         .route("/servers/:id/sites", get(handlers::sites::page))

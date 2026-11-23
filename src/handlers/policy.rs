@@ -474,7 +474,7 @@ mod tests {
         c.insert("domain_level", &2);
         let html = tera().render("policy.html", &c).expect("renders");
         assert!(html.contains("level 2"));
-        assert!(html.contains("samba-tool domain level raise"));
+        assert!(html.contains("Domain Controllers"), "it says where to raise the level");
         assert!(!html.contains("addPsoModal"));
     }
 

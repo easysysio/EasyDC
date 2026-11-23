@@ -15,6 +15,7 @@ use crate::{
     dc_removal, db,
     fsmo::{self, Role},
     ldap,
+    level::{self, Scope},
     models::Server,
     AppState,
 };
@@ -31,6 +32,9 @@ pub struct Moved {
     records: usize,
     /// When a move this DC had not seen yet was made (unix seconds).
     at: i64,
+    /// A level just raised: `domain` or `forest`, and to what.
+    raised: String,
+    level: i64,
 }
 
 /// How long after a move the page explains that it is still on its way.
@@ -48,18 +52,31 @@ async fn render(state: &AppState, server: &Server, flash_error: Option<String>, 
     ctx.insert("server", server);
     let loaded = async {
         let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
-        fsmo::overview(&mut conn, &base_dn).await.map(|(o, _, _)| o)
+        let (o, _, p) = fsmo::overview(&mut conn, &base_dn).await?;
+        // The rest of the page is still useful if the levels cannot be read.
+        let levels = level::read(&mut conn, &p, &o.roles).await.map(|s| s.view());
+        let _ = conn.unbind().await;
+        Ok::<_, String>((o, levels))
     }
     .await;
     let mut error = flash_error;
     match loaded {
-        Ok(o) => {
+        Ok((o, levels)) => {
+            let raised = levels.as_ref().ok().and_then(|v| raised_message(v, moved));
             if let Some(done) = removed_message(&o, moved).or_else(|| done_message(&o, moved)) {
                 ctx.insert("done", &done);
+            } else if let Some((true, text)) = &raised {
+                ctx.insert("done", text);
+            } else if let Some((false, text)) = &raised {
+                ctx.insert("pending", text);
             } else if let Some(note) = pending_message(&o, moved, crate::health::now_unix()) {
                 ctx.insert("pending", &note);
             }
             ctx.insert("o", &o);
+            match levels {
+                Ok(v) => ctx.insert("levels", &v),
+                Err(e) => ctx.insert("levels_error", &e),
+            }
         }
         Err(e) => error = error.or(Some(e)),
     }
@@ -82,6 +99,20 @@ fn done_message(o: &fsmo::Overview, m: &Moved) -> Option<String> {
     }
     let role = Role::from_key(&m.moved)?;
     o.roles.iter().find(|h| h.role == role && holds(h)).map(|h| format!("The {} is now on {}.", h.label, h.dc))
+}
+
+/// After a raise: whether this DC shows it yet, and what to say.
+fn raised_message(v: &level::View, m: &Moved) -> Option<(bool, String)> {
+    let s = v.scopes.iter().find(|s| s.key == m.raised)?;
+    if m.level <= 0 {
+        return None;
+    }
+    let to = level::label(m.level);
+    Some(if s.level >= m.level {
+        (true, format!("The {} {} is now at {to}.", s.key, s.name))
+    } else {
+        (false, format!("The {} {} was raised to {to}. This page shows what the DC EasyDC reads from knows, and it catches up as it replicates, within a few minutes.", s.key, s.name))
+    })
 }
 
 /// "OLDDC was removed: …" when it is no longer listed.
@@ -214,6 +245,44 @@ pub async fn transfer(State(state): State<AppState>, CurrentUser(actor): Current
     }
 }
 
+#[derive(Deserialize)]
+pub struct LevelForm {
+    scope: String,
+    level: i64,
+    /// The domain's or forest's name typed again.
+    #[serde(default)]
+    confirm: String,
+}
+
+pub async fn raise_level(State(state): State<AppState>, CurrentUser(actor): CurrentUser, Path(id): Path<i64>, Form(f): Form<LevelForm>) -> Response {
+    let Some(server) = get_server(&state, id).await else {
+        return Redirect::to("/").into_response();
+    };
+    let Some(scope) = Scope::from_key(&f.scope) else {
+        return render(&state, &server, Some("Choose the domain or the forest.".to_string()), &Moved::default()).await;
+    };
+    let action = match scope {
+        Scope::Domain => "domain.level_raise",
+        Scope::Forest => "forest.level_raise",
+    };
+    let result = async {
+        let (mut conn, base_dn) = ldap::open(&server).await?;
+        let raised = level::raise(&server, &mut conn, &base_dn, scope, f.level, &f.confirm).await;
+        let _ = conn.unbind().await;
+        raised
+    }
+    .await;
+    let target = match &result {
+        Ok(r) => format!("{}: {} → {}", r.name, level::label(r.from), level::label(r.to)),
+        Err(_) => format!("{} → {}", scope.key(), level::label(f.level)),
+    };
+    db::log_action(&state.db, &actor, action, &target, Some(id), &result.as_ref().map(|_| ()).map_err(Clone::clone)).await;
+    match result {
+        Ok(r) => Redirect::to(&format!("/servers/{id}/dcs?raised={}&level={}", scope.key(), r.to)).into_response(),
+        Err(e) => render(&state, &server, Some(e), &Moved::default()).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +368,50 @@ mod tests {
         assert!(html.contains(r#"data-remove="DC2""#));
         assert!(!html.contains(r#"data-remove="DC1""#), "the DC EasyDC is connected to is running");
         assert!(html.contains("/dcs/' + segment(name) + '/removal"));
+    }
+
+    fn levels(domain: i64) -> level::View {
+        level::Snapshot {
+            forest: 3,
+            domain,
+            mixed: false,
+            domain_name: "x.com".into(),
+            forest_name: "x.com".into(),
+            cross_ref: Some("CN=X,CN=Partitions".into()),
+            dcs: vec![("DC1".into(), 7), ("DC2".into(), 5)],
+            other_domains: vec![],
+            pdc: Ok("DC1".into()),
+            naming: Ok("DC2".into()),
+        }
+        .view()
+    }
+
+    #[test]
+    fn the_level_card_offers_only_what_is_allowed() {
+        let mut t = tera::Tera::new("templates/**/*.html").expect("templates parse");
+        t.register_function("app_version", |_: &std::collections::HashMap<String, tera::Value>| Ok(tera::Value::String("test".into())));
+        let mut c = Context::new();
+        c.insert("server", &serde_json::json!({ "id": 1, "name": "DC1" }));
+        c.insert("o", &overview("DC1"));
+        c.insert("levels", &levels(4));
+        let html = t.render("dcs.html", &c).unwrap();
+        assert!(html.contains(r#"action="/servers/1/dcs/level""#));
+        assert!(html.contains(r##"data-bs-target="#raiseLevel-domain""##) && html.contains(r##"data-bs-target="#raiseLevel-forest""##));
+        assert!(html.contains(r#"<option value="5">Windows Server 2012</option>"#));
+        assert!(!html.contains(r#"<option value="6">"#), "above the lowest DC");
+        assert!(html.contains("cannot be lowered"));
+        assert_eq!(crate::access::need(&axum::http::Method::POST, "/servers/:id/dcs/level"), crate::access::Need::Admin);
+    }
+
+    #[test]
+    fn a_raise_is_reported_as_it_stands() {
+        let v = levels(5);
+        let m = |raised: &str, level| Moved { raised: raised.into(), level, ..Default::default() };
+        assert_eq!(raised_message(&v, &m("domain", 5)).unwrap(), (true, "The domain x.com is now at Windows Server 2012.".to_string()));
+        let (shown, text) = raised_message(&v, &m("forest", 5)).unwrap();
+        assert!(!shown && text.contains("catches up"), "this DC has not seen it yet");
+        assert_eq!(raised_message(&v, &m("nonsense", 5)), None);
+        assert_eq!(raised_message(&v, &m("domain", 0)), None);
     }
 
     #[test]

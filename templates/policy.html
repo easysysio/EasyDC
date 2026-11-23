@@ -152,8 +152,8 @@
 <div class="alert alert-info">
     <i class="bi bi-info-circle me-1"></i>
     Policies for groups need the domain functional level to be Windows 2008 or higher{% if domain_level %}
-    (this domain is at level {{ domain_level }}){% endif %}. Raise it with
-    <code>samba-tool domain level raise --domain-level=2008_R2</code> once every DC runs Samba 4.9 or newer.
+    (this domain is at level {{ domain_level }}){% endif %}. Raise it on the
+    <a href="/servers/{{ server.id }}/dcs">Domain Controllers</a> page once every DC runs Samba 4.9 or newer.
 </div>
 {% else %}
 

@@ -453,7 +453,7 @@ async fn check_clock_skew(conn: &mut ldap3::Ldap) -> CheckResult {
 
 // ── functional levels ─────────────────────────────────────────────────────────
 
-fn functional_level_name(level: i64) -> &'static str {
+pub(crate) fn functional_level_name(level: i64) -> &'static str {
     match level {
         0 => "2000",
         1 => "2003 interim",

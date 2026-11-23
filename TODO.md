@@ -32,8 +32,8 @@ Same rule as in 0.5.0: Samba is GPLv3 and EasyDC is MIT. Read its source
 its code.
 
 - ~~**SPNs** on users and computers: view, add and remove (`samba-tool spn`).~~
-- **Raise the functional level** of the domain and forest (`samba-tool domain level raise`).
-  Admins only.
+- ~~**Raise the functional level** of the domain and forest (`samba-tool domain level raise`).
+  Admins only.~~
 
 ## Maybe later
 

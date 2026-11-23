@@ -164,7 +164,7 @@ pub struct Overview {
 }
 
 /// The NTDS Settings DN of a DC as `fSMORoleOwner` gives it.
-fn ntds_dn_of(owner: &str) -> String {
+pub(crate) fn ntds_dn_of(owner: &str) -> String {
     dn_parts(owner).get(1).and_then(|p| p.split_once('=')).map(|(_, v)| v.to_string()).unwrap_or_default()
 }
 
@@ -242,7 +242,7 @@ fn partition_name(role: Role) -> &'static str {
 
 /// Connect to a DC by its DNS name, as the configured server does: the same
 /// account, TLS setting and port.
-async fn connect_to(server: &Server, dc: &DcInfo) -> LdapResult<ldap3::Ldap> {
+pub(crate) async fn connect_to(server: &Server, dc: &DcInfo) -> LdapResult<ldap3::Ldap> {
     if dc.dns_host_name.is_empty() {
         return Err(format!("{} has no DNS name in the directory, so EasyDC cannot reach it.", dc.name));
     }

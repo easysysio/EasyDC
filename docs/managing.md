@@ -257,6 +257,27 @@ Move them off a DC before you take it out of service.
   a DC with `samba-tool fsmo seize --role=<role>`, and only once the old DC is gone for
   good: seizing a role from a DC that comes back splits the domain.
 
+### Functional level
+
+The **Functional level** card shows the level of the domain and the forest, and the highest
+level each DC can run at. A DC's highest level comes from `ad dc functional level` in its
+`smb.conf`. Only admins can raise a level.
+
+- The domain cannot go above its lowest DC, and the forest cannot go above its domains. So
+  raise the DCs first, then the domain, then the forest. When a level cannot be raised, the
+  card says why.
+- **Raise…** offers only the levels allowed now, up to Windows Server 2016, and asks you to
+  type the domain's name.
+- The domain is changed on the PDC emulator and the forest on the domain naming master. Both
+  must be running, and EasyDC checks the limits again on that DC before writing.
+- A domain still in mixed mode is not raised here. Use `samba-tool domain level raise`.
+
+!!! warning "A raise cannot be undone"
+    Going back means restoring every DC from backup. After a raise, a DC below the new level
+    can no longer join. Take a backup first.
+
+Raises are recorded in the audit log as `domain.level_raise` and `forest.level_raise`.
+
 ### Removing a dead DC
 
 When a DC is gone for good (its server died, or it was switched off without being demoted),
@@ -367,7 +388,7 @@ Samba's *password settings objects* (PSOs), the same ones
   the domain policy.
 
 These policies need the domain functional level at Windows 2008 or higher (Samba 4.9 and
-newer on every DC). On an older domain the section explains how to raise it instead.
+newer on every DC). On an older domain, raise it under [Functional level](#functional-level).
 Changes are recorded in the audit log as `pso.create`, `pso.update`, `pso.delete`,
 `pso.apply` and `pso.unapply`.
 
