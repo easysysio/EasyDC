@@ -106,6 +106,11 @@ impl Share {
     }
 
     async fn open_folder(&mut self, path: &str, access: u32) -> LdapResult<FileId> {
+        self.open_with(path, access, FILE_DIRECTORY_FILE).await
+    }
+
+    /// `create_options` 0 opens a file or a folder.
+    async fn open_with(&mut self, path: &str, access: u32, create_options: u32) -> LdapResult<FileId> {
         let req = CreateRequest {
             requested_oplock_level: OplockLevel::None,
             impersonation_level: ImpersonationLevel::Impersonation,
@@ -113,7 +118,7 @@ impl Share {
             file_attributes: 0,
             share_access: ShareAccess(ShareAccess::FILE_SHARE_READ | ShareAccess::FILE_SHARE_WRITE | ShareAccess::FILE_SHARE_DELETE),
             create_disposition: CreateDisposition::FileOpen,
-            create_options: FILE_DIRECTORY_FILE,
+            create_options,
             // As the library's own calls send it: `/` is the separator.
             name: smb2::encode_path(path),
             create_contexts: vec![],
@@ -138,7 +143,7 @@ impl Share {
     }
 
     async fn read_descriptor(&mut self, path: &str) -> LdapResult<Descriptor> {
-        let file_id = self.open_folder(path, READ_CONTROL).await?;
+        let file_id = self.open_with(path, READ_CONTROL, 0).await?;
         let req = QueryInfoRequest {
             info_type: InfoType::Security,
             file_info_class: 0,
@@ -160,7 +165,7 @@ impl Share {
     }
 
     async fn set_descriptor(&mut self, path: &str, descriptor: &Descriptor) -> LdapResult<()> {
-        let file_id = self.open_folder(path, READ_CONTROL | WRITE_DAC | WRITE_OWNER).await?;
+        let file_id = self.open_with(path, READ_CONTROL | WRITE_DAC | WRITE_OWNER, 0).await?;
         let req = SetInfoRequest {
             info_type: InfoType::Security,
             file_info_class: 0,
@@ -244,15 +249,21 @@ async fn open_pdc(server: &Server, conn: &mut ldap3::Ldap, base_dn: &str) -> Lda
 async fn fill_folder(t: &mut OnPdc, gpo_dn: &str, folder: &str) -> LdapResult<()> {
     let wanted = ldap::gpo_descriptor(&mut t.ldap, gpo_dn).await?.for_gpo_folder();
     t.share.set_descriptor(folder, &wanted).await?;
-    if !t.share.read_descriptor(folder).await?.same_access(&wanted) {
-        return Err(format!("{} did not keep the permissions set on the folder.", t.dc));
-    }
     for sub in ["Machine", "User"] {
         let path = format!("{folder}/{sub}");
         t.share.client.create_directory(&t.share.tree, &path).await.map_err(|e| format!("{path}: {e}"))?;
     }
     let ini = format!("{folder}/GPT.INI");
     t.share.client.write_file(&t.share.tree, &ini, GPT_INI).await.map_err(|e| format!("{ini}: {e}"))?;
+    // `samba-tool ntacl sysvolcheck` wants the same entries on everything inside.
+    for path in [format!("{folder}/Machine"), format!("{folder}/User"), ini] {
+        t.share.set_descriptor(&path, &wanted).await?;
+    }
+    for path in [folder.to_string(), format!("{folder}/Machine"), format!("{folder}/User"), format!("{folder}/GPT.INI")] {
+        if !t.share.read_descriptor(&path).await?.same_access(&wanted) {
+            return Err(format!("{} did not keep the permissions set on {path}.", t.dc));
+        }
+    }
     Ok(())
 }
 

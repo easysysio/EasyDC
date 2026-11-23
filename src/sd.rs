@@ -95,6 +95,19 @@ impl Ace {
         Some((guid, self.bytes.get(sid_at..)?))
     }
 
+    /// Who an allow or deny entry, plain or object, is about.
+    fn trustee(&self) -> Option<&[u8]> {
+        match self.kind() {
+            0x00 | 0x01 => self.bytes.get(8..),
+            ACCESS_ALLOWED_OBJECT_ACE | ACCESS_DENIED_OBJECT_ACE => {
+                let flags = u32_at(&self.bytes, 8).ok()?;
+                let guids = [ACE_OBJECT_TYPE_PRESENT, ACE_INHERITED_OBJECT_TYPE_PRESENT].iter().filter(|f| flags & **f != 0).count();
+                self.bytes.get(12 + 16 * guids..)
+            }
+            _ => None,
+        }
+    }
+
     /// An entry about changing the password, for Everyone or SELF.
     fn is_change_password(&self) -> bool {
         self.object_right().is_some_and(|(guid, sid)| {
@@ -336,19 +349,25 @@ impl Descriptor {
         before - self.dacl.len()
     }
 
-    /// The same permissions for a GPO's folder in SYSVOL, so that the folder
-    /// and the directory object agree. Each directory right is mapped to the
-    /// file rights it stands for, and every entry is inherited by what the
-    /// folder holds.
+    /// The same permissions for a GPO's folder in SYSVOL, in the form
+    /// `samba-tool ntacl sysvolcheck` expects. Allow entries are kept, object
+    /// ones too, and deny entries and Pre-Windows 2000 are left out. Each
+    /// directory right is mapped to the file rights it stands for, and every
+    /// entry is inherited by what the folder holds.
     pub fn for_gpo_folder(&self) -> Descriptor {
         let dacl = self
             .dacl
             .iter()
-            .filter(|a| a.kind() <= 1 && !a.bytes[8..].starts_with(&PRE_WINDOWS_2000))
+            .filter(|a| a.kind() == 0x00 || a.kind() == ACCESS_ALLOWED_OBJECT_ACE)
             .filter_map(|a| {
+                let trustee = a.trustee()?;
+                if trustee.starts_with(&PRE_WINDOWS_2000) {
+                    return None;
+                }
+                let creator = trustee.starts_with(&CREATOR_OWNER);
                 let mut bytes = a.bytes.clone();
                 bytes[1] |= OBJECT_INHERIT | CONTAINER_INHERIT;
-                if bytes[8..] == CREATOR_OWNER {
+                if creator {
                     bytes[1] |= INHERIT_ONLY;
                 }
                 let mask = directory_rights_to_file_rights(u32_at(&a.bytes, 4).ok()?);
@@ -490,28 +509,34 @@ mod tests {
             b.extend(sid);
             b
         };
-        let mut object_ace = vec![ACCESS_ALLOWED_OBJECT_ACE, 0x02];
-        object_ace.extend(40u16.to_le_bytes());
-        object_ace.extend(CONTROL_ACCESS.to_le_bytes());
-        object_ace.extend(ACE_OBJECT_TYPE_PRESENT.to_le_bytes());
-        object_ace.extend([7u8; 16]);
-        object_ace.extend(EVERYONE);
+        let object = |kind: u8, sid: &[u8]| {
+            let mut b = vec![kind, 0x02];
+            b.extend(((28 + sid.len()) as u16).to_le_bytes());
+            b.extend(CONTROL_ACCESS.to_le_bytes());
+            b.extend(ACE_OBJECT_TYPE_PRESENT.to_le_bytes());
+            b.extend([7u8; 16]);
+            b.extend(sid);
+            b
+        };
+        let authenticated = [1, 1, 0, 0, 0, 0, 0, 5, 11, 0, 0, 0];
         let raw = descriptor(&[
             ace(0x00, 0x00, 0x000f_01ff, &admins()),
-            ace(0x00, 0x02, 0x0002_0094, &[1, 1, 0, 0, 0, 0, 0, 5, 11, 0, 0, 0]),
+            ace(0x00, 0x02, 0x0002_0094, &authenticated),
             ace(0x00, 0x00, 0x0002_0094, &CREATOR_OWNER),
             ace(0x00, 0x00, 0x0002_0094, &PRE_WINDOWS_2000),
             ace(0x01, 0x00, 0x0000_0020, &SELF),
-            object_ace,
+            object(ACCESS_ALLOWED_OBJECT_ACE, &authenticated),
+            object(ACCESS_ALLOWED_OBJECT_ACE, &PRE_WINDOWS_2000),
+            object(ACCESS_DENIED_OBJECT_ACE, &EVERYONE),
         ]);
         let folder = Descriptor::parse(&raw).unwrap().for_gpo_folder();
         let e = folder.entries();
-        assert_eq!(e.len(), 4, "no object entries, and no Pre-Windows 2000 entry");
+        assert_eq!(e.len(), 4, "no deny entries, and no Pre-Windows 2000 entry");
         assert_eq!((e[0].flags, e[0].mask), (0x03, 0x001f_01ff), "full control");
         assert_eq!((e[1].flags, e[1].mask), (0x03, 0x0012_00a9), "read and list");
         assert_eq!(e[2].flags, 0x0b, "CREATOR OWNER applies only to what is inside");
-        assert!(e[3].deny);
-        assert_eq!(e[3].mask, 0x0010_0116, "write");
+        assert_eq!((e[3].flags, e[3].mask), (0x03, 0), "the object entry stays, granting no file rights");
+        assert!(e.iter().all(|x| !x.deny));
         assert_eq!(folder.acl_revision, ACL_REVISION);
         assert!(folder.same_access(&Descriptor::parse(&folder.to_bytes()).unwrap()));
     }
