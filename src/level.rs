@@ -73,6 +73,35 @@ pub struct Snapshot {
     /// The role's holder if it can be used, or why it cannot.
     pub pdc: Result<String, String>,
     pub naming: Result<String, String>,
+    pub prep: Prep,
+}
+
+/// How far the schema and the forest and domain updates have gone.
+#[derive(Debug, Clone, Copy)]
+pub struct Prep {
+    pub schema: i64,
+    pub forest: i64,
+    pub domain: i64,
+}
+
+/// What a level needs first: the schema version, the forest and domain update
+/// revisions, and the names `samba-tool` uses for the schema and the level.
+fn prep_for(level: i64) -> Option<(Prep, &'static str, &'static str)> {
+    let prep = |schema, forest, domain| Prep { schema, forest, domain };
+    match level {
+        5 => Some((prep(56, 11, 9), "2012", "2012")),
+        6 => Some((prep(69, 15, 10), "2012_R2", "2012_R2")),
+        7 => Some((prep(87, 16, 16), "2019", "2016")),
+        _ => None,
+    }
+}
+
+fn prep_advice(level: i64) -> String {
+    let (schema, function) = prep_for(level).map_or(("", ""), |p| (p.1, p.2));
+    format!(
+        "{} needs the directory prepared first. On the DC holding the schema and infrastructure master roles, run samba-tool domain schemaupgrade --schema={schema}, then samba-tool domain functionalprep --function-level={function}.",
+        label(level)
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +123,8 @@ pub struct ScopeView {
     pub targets: Vec<Target>,
     /// Why it cannot be raised now, when it cannot.
     pub why_not: Option<String>,
+    /// What a higher level still needs, when a lower one can be raised to.
+    pub prep_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,7 +176,19 @@ impl Snapshot {
 
     pub fn targets(&self, scope: Scope) -> Vec<i64> {
         let (current, ceiling) = (self.current(scope), self.ceiling(scope).min(HIGHEST_TARGET));
-        (LOWEST_TARGET..=ceiling).filter(|l| *l > current).collect()
+        (LOWEST_TARGET..=ceiling).filter(|l| *l > current && self.prepared(*l)).collect()
+    }
+
+    fn prepared(&self, level: i64) -> bool {
+        prep_for(level).is_none_or(|(need, ..)| {
+            self.prep.schema >= need.schema && self.prep.forest >= need.forest && self.prep.domain >= need.domain
+        })
+    }
+
+    /// The highest level the DCs allow that is not prepared yet.
+    fn unprepared(&self, scope: Scope) -> Option<i64> {
+        let (current, ceiling) = (self.current(scope), self.ceiling(scope).min(HIGHEST_TARGET));
+        (LOWEST_TARGET..=ceiling).rev().find(|l| *l > current && !self.prepared(*l))
     }
 
     /// Why this level cannot be raised at all right now.
@@ -182,6 +225,11 @@ impl Snapshot {
                 }
             }
         }
+        if self.targets(scope).is_empty()
+            && let Some(level) = self.unprepared(scope)
+        {
+            return Some(prep_advice(level));
+        }
         self.holder(scope).as_ref().err().cloned()
     }
 
@@ -192,6 +240,9 @@ impl Snapshot {
         }
         if target <= self.current(scope) {
             return Err(format!("It is already at {}, and a level can only be raised.", label(self.current(scope))));
+        }
+        if target <= self.ceiling(scope).min(HIGHEST_TARGET) && !self.prepared(target) {
+            return Err(prep_advice(target));
         }
         if !self.targets(scope).contains(&target) {
             return Err(format!("{} is above what this {} can run at.", label(target), scope.key()));
@@ -210,6 +261,7 @@ impl Snapshot {
             holder: self.holder(scope).clone().unwrap_or_default(),
             role,
             why_not: self.why_not(scope),
+            prep_note: if self.why_not(scope).is_none() { self.unprepared(scope).map(prep_advice) } else { None },
             targets: match self.why_not(scope) {
                 Some(_) => Vec::new(),
                 None => self.targets(scope).into_iter().map(|level| Target { level, label: label(level) }).collect(),
@@ -249,6 +301,11 @@ fn number(value: String, what: &str) -> LdapResult<i64> {
     value.parse().map_err(|_| format!("The {what} level in the directory is not a number: {value}"))
 }
 
+/// A number from one object. Missing or unreadable counts as not prepared.
+async fn prep_number(conn: &mut ldap3::Ldap, dn: &str, attr: &str) -> i64 {
+    read_one(conn, dn, vec![attr]).await.ok().and_then(|e| attr_ci(&e, attr).parse().ok()).unwrap_or(0)
+}
+
 pub async fn read(conn: &mut ldap3::Ldap, p: &Partitions, roles: &[Holder]) -> LdapResult<Snapshot> {
     let partitions = format!("CN=Partitions,{}", p.config);
     let forest = number(attr_ci(&read_one(conn, &partitions, vec![ATTR]).await?, ATTR), "forest")?;
@@ -277,6 +334,12 @@ pub async fn read(conn: &mut ldap3::Ldap, p: &Partitions, roles: &[Holder]) -> L
     }
     dcs.sort_by_key(|d| d.0.to_lowercase());
 
+    let prep = Prep {
+        schema: prep_number(conn, &p.schema, "objectVersion").await,
+        forest: prep_number(conn, &format!("CN=ActiveDirectoryUpdate,CN=ForestUpdates,{}", p.config), "revision").await,
+        domain: prep_number(conn, &format!("CN=ActiveDirectoryUpdate,CN=DomainUpdates,CN=System,{}", p.domain), "revision").await,
+    };
+
     Ok(Snapshot {
         forest,
         domain,
@@ -288,6 +351,7 @@ pub async fn read(conn: &mut ldap3::Ldap, p: &Partitions, roles: &[Holder]) -> L
         other_domains,
         pdc: usable(roles, Role::Pdc),
         naming: usable(roles, Role::Naming),
+        prep,
     })
 }
 
@@ -383,7 +447,38 @@ mod tests {
             other_domains: vec![],
             pdc: Ok("DC1".into()),
             naming: Ok("DC1".into()),
+            prep: Prep { schema: 88, forest: 16, domain: 16 },
         }
+    }
+
+    #[test]
+    fn a_level_waits_for_its_prep() {
+        let mut s = snapshot(4, 4, &[7, 7]);
+        s.prep = Prep { schema: 47, forest: 5, domain: 5 };
+        assert!(s.targets(Scope::Domain).is_empty());
+        assert!(s.why_not(Scope::Domain).unwrap().contains("schemaupgrade --schema=2019"));
+        assert!(s.check(Scope::Domain, 7).unwrap_err().contains("functionalprep --function-level=2016"));
+
+        // The schema alone is not enough.
+        s.prep = Prep { schema: 88, forest: 5, domain: 5 };
+        assert!(s.targets(Scope::Domain).is_empty());
+
+        s.prep = Prep { schema: 56, forest: 11, domain: 9 };
+        assert_eq!(s.targets(Scope::Domain), [5]);
+        assert!(s.check(Scope::Domain, 5).is_ok());
+        assert!(s.check(Scope::Domain, 6).unwrap_err().contains("--function-level=2012_R2"));
+        assert!(s.view().scopes[0].prep_note.as_deref().unwrap().contains("--function-level=2016"));
+
+        s.prep = Prep { schema: 88, forest: 16, domain: 16 };
+        assert_eq!(s.targets(Scope::Domain), [5, 6, 7]);
+        assert!(s.view().scopes[0].prep_note.is_none());
+    }
+
+    #[test]
+    fn levels_up_to_2008_r2_need_no_prep() {
+        let mut s = snapshot(2, 2, &[4, 4]);
+        s.prep = Prep { schema: 47, forest: 5, domain: 5 };
+        assert_eq!(s.targets(Scope::Domain), [3, 4]);
     }
 
     #[test]

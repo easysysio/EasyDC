@@ -78,6 +78,7 @@
                 {% elif s.why_not %}
                 <div class="small text-muted">{{ s.why_not }}</div>
                 {% endif %}
+                {% if s.prep_note %}<div class="small text-muted mt-2">{{ s.prep_note }}</div>{% endif %}
             </div>
             {% endfor %}
         </div>

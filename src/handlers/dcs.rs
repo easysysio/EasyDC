@@ -109,9 +109,9 @@ fn raised_message(v: &level::View, m: &Moved) -> Option<(bool, String)> {
     }
     let to = level::label(m.level);
     Some(if s.level >= m.level {
-        (true, format!("The {} {} is now at {to}.", s.key, s.name))
+        (true, format!("The {} {} is now at {to}. Restart Samba on every DC.", s.key, s.name))
     } else {
-        (false, format!("The {} {} was raised to {to}. This page shows what the DC EasyDC reads from knows, and it catches up as it replicates, within a few minutes.", s.key, s.name))
+        (false, format!("The {} {} was raised to {to}. This page shows what the DC EasyDC reads from knows, and it catches up as it replicates, within a few minutes. Restart Samba on every DC.", s.key, s.name))
     })
 }
 
@@ -382,6 +382,7 @@ mod tests {
             other_domains: vec![],
             pdc: Ok("DC1".into()),
             naming: Ok("DC2".into()),
+            prep: level::Prep { schema: 88, forest: 16, domain: 16 },
         }
         .view()
     }
@@ -407,7 +408,7 @@ mod tests {
     fn a_raise_is_reported_as_it_stands() {
         let v = levels(5);
         let m = |raised: &str, level| Moved { raised: raised.into(), level, ..Default::default() };
-        assert_eq!(raised_message(&v, &m("domain", 5)).unwrap(), (true, "The domain x.com is now at Windows Server 2012.".to_string()));
+        assert_eq!(raised_message(&v, &m("domain", 5)).unwrap(), (true, "The domain x.com is now at Windows Server 2012. Restart Samba on every DC.".to_string()));
         let (shown, text) = raised_message(&v, &m("forest", 5)).unwrap();
         assert!(!shown && text.contains("catches up"), "this DC has not seen it yet");
         assert_eq!(raised_message(&v, &m("nonsense", 5)), None);

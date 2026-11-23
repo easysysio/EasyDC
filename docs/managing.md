@@ -277,8 +277,12 @@ level each DC can run at. A DC's highest level comes from `ad dc functional leve
 - The domain cannot go above its lowest DC, and the forest cannot go above its domains. So
   raise the DCs first, then the domain, then the forest. When a level cannot be raised, the
   card says why.
+- Levels above Windows Server 2008 R2 need the directory prepared first. EasyDC refuses until
+  `samba-tool domain schemaupgrade` and `samba-tool domain functionalprep` have been run, and
+  the card shows the exact commands.
 - **Raise…** offers only the levels allowed now, up to Windows Server 2016, and asks you to
   type the domain's name.
+- Restart Samba on every DC after a raise.
 - The domain is changed on the PDC emulator and the forest on the domain naming master. Both
   must be running, and EasyDC checks the limits again on that DC before writing.
 - A domain still in mixed mode is not raised here. Use `samba-tool domain level raise`.
