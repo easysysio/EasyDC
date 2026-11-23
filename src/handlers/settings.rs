@@ -18,7 +18,7 @@ use tera::Context;
 use crate::{
     access::{self, Area, AREAS},
     auth::{extract_session_cookie, CurrentUser},
-    db, ldap, AppState,
+    db, ldap, tls, AppState,
 };
 
 const MIN_PASSWORD_LEN: usize = 8;
@@ -43,6 +43,8 @@ fn done_message(code: &str) -> Option<&'static str> {
         "created" => Some("Account added."),
         "deleted" => Some("Account removed and signed out."),
         "permissions" => Some("Permissions saved. They apply from that account's next click."),
+        "certificate" => Some("Certificate saved. New connections use it now, with no restart."),
+        "generated" => Some("A new self-signed certificate is in use. Your browser will warn about it once."),
         _ => None,
     }
 }
@@ -68,6 +70,9 @@ async fn render(
     ctx.insert("servers", &servers);
     ctx.insert("areas", &area_rows());
     ctx.insert("min_password_len", &MIN_PASSWORD_LEN);
+    if let Some(live) = &state.tls {
+        ctx.insert("tls", &live.info());
+    }
     if let Some(e) = error {
         ctx.insert("error", &e);
     }
@@ -84,6 +89,46 @@ pub async fn settings(
 ) -> Response {
     let done = q.done.as_deref().and_then(done_message);
     render(&state, &actor, None, done).await
+}
+
+// ── the HTTPS certificate ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CertificateForm {
+    pub cert: String,
+    pub key: String,
+}
+
+/// Stores a certificate, then starts serving it. The key is never echoed back.
+async fn use_certificate(state: &AppState, pair: Result<tls::Pair, String>) -> Result<String, String> {
+    let live = state.tls.as_ref().ok_or("HTTPS is turned off (EASYDC_TLS=off).")?;
+    let pair = pair?;
+    db::save_tls_pair(&state.db, &pair).await.map_err(|e| format!("Could not save the certificate: {e}"))?;
+    live.set(&pair)?;
+    Ok(live.info().fingerprint)
+}
+
+pub async fn upload_certificate(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Form(form): Form<CertificateForm>,
+) -> Response {
+    let result = use_certificate(&state, tls::check_upload(&form.cert, &form.key)).await;
+    certificate_changed(&state, &actor, "tls.upload", result, "certificate").await
+}
+
+pub async fn generate_certificate(State(state): State<AppState>, CurrentUser(actor): CurrentUser) -> Response {
+    let result = use_certificate(&state, tls::self_signed()).await;
+    certificate_changed(&state, &actor, "tls.generate", result, "generated").await
+}
+
+async fn certificate_changed(state: &AppState, actor: &str, action: &str, result: Result<String, String>, done: &str) -> Response {
+    let target = result.as_deref().unwrap_or("HTTPS certificate").to_string();
+    db::log_action(&state.db, actor, action, &target, None, &result.as_ref().map(|_| ()).map_err(Clone::clone)).await;
+    match result {
+        Ok(_) => Redirect::to(&format!("/settings?done={done}")).into_response(),
+        Err(e) => render(state, actor, Some(e), None).await,
+    }
 }
 
 // ── change your own password ──────────────────────────────────────────────────
@@ -602,6 +647,49 @@ mod tests {
         assert!(!super::valid_username("a/b"));
         assert!(!super::valid_username("x');alert(1);//"));
         assert!(!super::valid_username("two words"));
+    }
+
+    fn tls_info(uploaded: bool, days_left: i32) -> crate::tls::Info {
+        crate::tls::Info {
+            name: "easydc-01".into(),
+            issuer: if uploaded { "Example CA".into() } else { "easydc-01".into() },
+            names: vec!["easydc-01".into(), "localhost".into()],
+            not_after: "Feb 25 10:00:00 2029 GMT".into(),
+            days_left,
+            expired: days_left < 0,
+            fingerprint: "AA:BB:CC".into(),
+            uploaded,
+        }
+    }
+
+    #[test]
+    fn the_certificate_card_shows_what_is_served() {
+        let render = |tls: Option<crate::tls::Info>, admin: bool| {
+            let me = Access { username: "root".into(), admin, ..Default::default() };
+            let mut c = ctx_for("root", me, &[account("root", admin, &[])]);
+            if let Some(t) = tls {
+                c.insert("tls", &t);
+            }
+            tera().render("settings.html", &c).unwrap()
+        };
+        let html = render(Some(tls_info(false, 800)), true);
+        assert!(html.contains("HTTPS certificate") && html.contains("Self-signed"));
+        assert!(html.contains("AA:BB:CC") && html.contains("easydc-01, localhost"));
+        assert!(html.contains(r#"action="/settings/certificate""#));
+        assert!(html.contains(r#"action="/settings/certificate/generate""#));
+
+        let html = render(Some(tls_info(true, 12)), true);
+        assert!(html.contains("Example CA") && html.contains("Expires in 12 days"));
+
+        let html = render(Some(tls_info(true, -1)), true);
+        assert!(html.contains("Expired"));
+
+        let html = render(Some(tls_info(false, 800)), false);
+        assert!(html.contains("AA:BB:CC"), "anyone can see which certificate is served");
+        assert!(!html.contains(r#"action="/settings/certificate""#), "only an admin can change it");
+
+        let html = render(None, true);
+        assert!(html.contains("EASYDC_TLS=off") && !html.contains(r#"action="/settings/certificate""#));
     }
 
     #[test]

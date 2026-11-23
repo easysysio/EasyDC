@@ -73,14 +73,17 @@ jobs:
           docker volume create easydc-ci
           docker run -d --name easydc -p 3000:3000 -v easydc-ci:/data easydc:ci
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/login || true)
+            code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:3000/login || true)
             [ "$code" = "200" ] || [ "$code" = "303" ] && break
             sleep 1
           done
           echo "GET /login: $code"
           [ "$code" = "200" ] || [ "$code" = "303" ] || { docker logs easydc; exit 1; }
           # A fresh install sends the first visitor to /setup.
-          curl -s -o /dev/null -w 'GET /: %{http_code} -> %{redirect_url}\n' http://127.0.0.1:3000/
+          curl -sk -o /dev/null -w 'GET /: %{http_code} -> %{redirect_url}\n' https://127.0.0.1:3000/
+          # Plain HTTP on the same port goes to HTTPS.
+          curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:3000/login \
+            | tee /dev/stderr | grep -q '^307 https://127.0.0.1:3000/login$'
           docker exec easydc sh -c 'id; ls -la /data; test -f /data/easydc.db'
           docker exec easydc sh -c 'test "$(stat -c %a /data)" = 700'
           # The health check passes once the start period is over.

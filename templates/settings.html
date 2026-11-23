@@ -52,7 +52,7 @@
     <i class="bi bi-gear fs-2 text-primary me-3"></i>
     <div>
         <h4 class="mb-0">Settings</h4>
-        <small class="text-muted">Who can sign in to EasyDC, and what they may change</small>
+        <small class="text-muted">Who can sign in to EasyDC, what they may change, and its HTTPS certificate</small>
     </div>
 </div>
 
@@ -72,8 +72,8 @@
 
 <div class="row g-4">
 
-    <div class="col-lg-6">
-        <div class="card shadow-sm h-100">
+    <div class="col-lg-6 d-flex flex-column gap-4">
+        <div class="card shadow-sm">
             <div class="card-header bg-white">
                 <i class="bi bi-key me-2 text-primary"></i><strong>Change your password</strong>
             </div>
@@ -109,6 +109,55 @@
                         <i class="bi bi-check2 me-1"></i> Change password
                     </button>
                 </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span><i class="bi bi-lock me-2 text-primary"></i><strong>HTTPS certificate</strong></span>
+                {% if tls %}
+                {% if tls.expired %}<span class="badge bg-danger">Expired</span>
+                {% elif tls.days_left < 30 %}<span class="badge bg-warning text-dark">Expires in {{ tls.days_left }} days</span>
+                {% elif tls.uploaded %}<span class="badge bg-success">Your certificate</span>
+                {% else %}<span class="badge bg-light text-secondary border">Self-signed</span>{% endif %}
+                {% endif %}
+            </div>
+            <div class="card-body">
+                {% if tls %}
+                <dl class="row small mb-3">
+                    <dt class="col-sm-3 fw-medium">Issued to</dt>
+                    <dd class="col-sm-9">{{ tls.name }}</dd>
+                    <dt class="col-sm-3 fw-medium">Issued by</dt>
+                    <dd class="col-sm-9">{{ tls.issuer }}</dd>
+                    <dt class="col-sm-3 fw-medium">Valid for</dt>
+                    <dd class="col-sm-9">{{ tls.names | join(sep=", ") }}</dd>
+                    <dt class="col-sm-3 fw-medium">Expires</dt>
+                    <dd class="col-sm-9">{{ tls.not_after }}</dd>
+                    <dt class="col-sm-3 fw-medium">SHA-256</dt>
+                    <dd class="col-sm-9 mb-0"><code class="text-break">{{ tls.fingerprint }}</code></dd>
+                </dl>
+                {% if not tls.uploaded %}
+                <p class="text-muted small">
+                    EasyDC made this certificate itself and renews it, so traffic is encrypted but browsers
+                    warn about it. To remove the warning, use a certificate from your own CA.
+                </p>
+                {% endif %}
+                {% if access.admin %}
+                <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#certificateModal">
+                    <i class="bi bi-upload me-1"></i> Use my certificate&hellip;
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#generateModal">
+                    <i class="bi bi-arrow-repeat me-1"></i> Generate a new one&hellip;
+                </button>
+                {% else %}
+                <p class="text-muted small mb-0">Only an EasyDC admin can change the certificate.</p>
+                {% endif %}
+                {% else %}
+                <p class="text-muted small mb-0">
+                    HTTPS is turned off with <code>EASYDC_TLS=off</code>, so EasyDC serves plain HTTP.
+                    Keep it behind a reverse proxy that handles TLS.
+                </p>
                 {% endif %}
             </div>
         </div>
@@ -235,6 +284,66 @@
 
 </div>
 
+{% if tls and access.admin %}
+<div class="modal fade" id="certificateModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="/settings/certificate">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Use my certificate</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted">
+                    PEM files. New connections use the certificate as soon as it is saved, with no restart.
+                </p>
+                <div class="mb-3">
+                    <label class="form-label" for="certPem">Certificate</label>
+                    <input type="file" class="form-control form-control-sm mb-2 js-pem-file" data-target="certPem"
+                        accept=".pem,.crt,.cer,.txt" aria-label="Choose the certificate file">
+                    <textarea class="form-control font-monospace small" id="certPem" name="cert" rows="6" required
+                        spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+                    <div class="form-text">The server's certificate first, then any intermediates.</div>
+                </div>
+                <div class="mb-0">
+                    <label class="form-label" for="keyPem">Private key</label>
+                    <input type="file" class="form-control form-control-sm mb-2 js-pem-file" data-target="keyPem"
+                        accept=".pem,.key,.txt" aria-label="Choose the private key file">
+                    <textarea class="form-control font-monospace small" id="keyPem" name="key" rows="6" required
+                        spellcheck="false" autocomplete="off" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+                    <div class="form-text">Without a passphrase. It is stored in EasyDC's database.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save certificate</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="generateModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/settings/certificate/generate">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-arrow-repeat me-2"></i>Generate a new certificate</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">
+                    {% if tls.uploaded %}This replaces your certificate and its key, which EasyDC does not keep a copy of.
+                    {% else %}This replaces the current self-signed certificate.{% endif %}
+                    Browsers will warn about the new one.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Generate</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
 {% if access.admin %}
 {% for a in accounts %}
 {% if a.username != actor %}
@@ -287,6 +396,15 @@ document.querySelectorAll('.js-new-account').forEach(function (form) {
     }
     form.querySelectorAll('input[name=kind]').forEach(r => r.addEventListener('change', update));
     update();
+});
+
+// A PEM file chosen in the certificate dialog fills in its text box.
+document.querySelectorAll('.js-pem-file').forEach(function (input) {
+    input.addEventListener('change', function () {
+        const file = input.files[0];
+        if (!file) return;
+        file.text().then(text => { document.getElementById(input.dataset.target).value = text; });
+    });
 });
 
 // Admin covers every area: its areas show Edit and cannot be changed.

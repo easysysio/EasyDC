@@ -2,7 +2,9 @@
 
 ## Create the admin account
 
-The first visit to `http://<host>:3000/` redirects to **`/setup`**. Choose a username and
+The first visit to `https://<host>:3000/` redirects to **`/setup`**. EasyDC makes its own
+certificate, so the browser warns once; [your own certificate](install.md#https) removes the
+warning. Choose a username and
 password; the password is stored as a bcrypt hash in the EasyDC database. From then on
 the setup page is closed and the UI requires a login.
 

@@ -4,7 +4,7 @@
 
 ```mermaid
 graph LR
-    A["Administrators · any browser"] -->|"HTTP :3000"| B["EasyDC (Rust / Axum)"]
+    A["Administrators · any browser"] -->|"HTTPS :3000"| B["EasyDC (Rust / Axum)"]
     B -->|"LDAP / LDAPS"| C[("Samba AD DC")]
     B -->|"LDAP / LDAPS"| D[("Samba AD DC")]
     B --> E[("SQLite: logins · servers · audit log")]
@@ -34,7 +34,7 @@ few minutes; the audit log records it as failed, with the reason.
 
 | | |
 |---|---|
-| **Web UI** | HTTP on `0.0.0.0:3000`, or `--port` / `EASYDC_PORT` |
+| **Web UI** | HTTPS on `0.0.0.0:3000`, or `--port` / `EASYDC_PORT`; plain HTTP is redirected. `EASYDC_TLS=off` serves plain HTTP |
 | **Database** | `/var/lib/easydc/easydc.db` when installed from a package; `/data/easydc.db` in the Docker image; `easydc.db` in the working directory otherwise |
 | **Outbound** | LDAP / LDAPS to each domain controller you add |
 
@@ -47,8 +47,8 @@ few minutes; the audit log records it as failed, with the reason.
 - **Sessions end** after 8 hours without activity, and 24 hours after sign-in however
   active. Changing a password, or removing an administrator, drops that account's other
   sessions.
-- The web UI is **plain HTTP**; publish it through a TLS reverse proxy (see
-  [Installation](install.md#put-tls-in-front-of-it)).
+- The web UI is **HTTPS**, with a self-signed certificate until you add your own (see
+  [HTTPS](install.md#https)). Session cookies are `Secure` and `HttpOnly`.
 - **Password writes** require LDAPS; Samba refuses them over plain LDAP.
 
 ## Technology

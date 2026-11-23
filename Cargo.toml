@@ -25,6 +25,12 @@ tracing-subscriber = "0.3.23"
 tera = { version = "1", default-features = false, features = ["urlencode"] }
 uuid = { version = "1", features = ["v4"] }
 openssl = { version = "0.10", features = ["vendored"] }
+# HTTPS on EasyDC's own port, with the OpenSSL already here for LDAPS. hyper and
+# hyper-util are already in the tree through axum; named for the accept loop.
+tokio-openssl = "0.6"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower-service = "0.3"
 rust-embed = { version = "8", features = ["include-exclude"] }
 
 [dev-dependencies]

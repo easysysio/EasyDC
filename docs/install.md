@@ -74,7 +74,7 @@ line.
 | **Binary** | `/usr/bin/easydc` |
 | **Service** | `easydc.service`, running as the `easydc` system user |
 | **Database** | `/var/lib/easydc/easydc.db`, in a directory only the service user can read |
-| **Port** | 3000 — set `EASYDC_PORT` in `/etc/default/easydc` (Debian) or `/etc/sysconfig/easydc` (Red Hat) to change it |
+| **Port** | 3000, over [HTTPS](#https) — set `EASYDC_PORT` in `/etc/default/easydc` (Debian) or `/etc/sysconfig/easydc` (Red Hat) to change it |
 
 The database holds the EasyDC logins, the audit log and the **bind password of every
 domain controller you add**, which is why its directory is mode `0700`.
@@ -198,7 +198,7 @@ Run it in place:
 ./easydc
 ```
 
-It listens on **port 3000** on all interfaces and creates `easydc.db` in the **current
+It serves [HTTPS](#https) on **port 3000** on all interfaces and creates `easydc.db` in the **current
 working directory**. To use a different port, pass `--port` or set `EASYDC_PORT`; the
 flag wins:
 
@@ -262,7 +262,7 @@ same static binary as the packages, and runs as its own non-root user.
       easydc-data:
     ```
 
-Then open `http://<host>:3000/` to create the admin account.
+Then open `https://<host>:3000/` to create the admin account.
 
 - **Your data** is one file, `easydc.db`, in the `/data` volume: the EasyDC accounts,
   the servers with their bind passwords, and the audit log. Back up the volume. To use a
@@ -285,23 +285,46 @@ Then open `http://<host>:3000/` to create the admin account.
 - **Building the image yourself**: `docker build -t easydc .` in a checkout of the
   repository.
 
-## Put TLS in front of it
+## HTTPS
 
-EasyDC serves **plain HTTP** on port 3000. Anywhere beyond a trusted management network,
-publish it through a TLS reverse proxy — [EasyWAF](https://easywaf.easysys.io), Nginx or
-Caddy all work — and firewall port 3000 to the proxy.
+EasyDC serves **HTTPS on port 3000**. There is no second port: `http://<host>:3000/`
+redirects to `https://<host>:3000/`, so firewalls and Docker port mappings stay as they
+are, including when you upgrade from a version before 0.6.
 
-Have the proxy send `X-Forwarded-Proto` (Caddy does by default; in Nginx add
-`proxy_set_header X-Forwarded-Proto $scheme;`). EasyDC then marks its session cookie
-`Secure`, so the browser never sends it over plain HTTP.
+**The browser's warning.** On first start EasyDC makes a self-signed certificate and
+renews it itself. Traffic is encrypted, but browsers warn about it because nothing vouches
+for it. To be sure it is really EasyDC before you accept, compare the browser's SHA-256
+fingerprint with the one in the log (`journalctl -u easydc` or `docker logs easydc`).
+
+**Your own certificate.** In **Settings → HTTPS certificate**, choose **Use my
+certificate** and give it the certificate and its private key as PEM files, without a
+passphrase. Put the server's certificate first, then any intermediates. It applies to new
+connections right away, with no restart. EasyDC warns in Settings as it nears expiry, but
+renewing it is up to you. The certificate and key are stored in `easydc.db`, so back that
+file up and keep it private.
+
+**Behind a reverse proxy.** [EasyWAF](https://easywaf.easysys.io), Nginx and Caddy all work.
+Choose one:
+
+- Keep HTTPS on, and have the proxy send `X-Forwarded-Proto` (Caddy does by default; in
+  Nginx add `proxy_set_header X-Forwarded-Proto $scheme;`). EasyDC then answers it over
+  plain HTTP and marks its session cookie `Secure`.
+- Or turn EasyDC's HTTPS off with `EASYDC_TLS=off`, in `/etc/default/easydc`,
+  `/etc/sysconfig/easydc`, or the container's environment. Firewall port 3000 to the proxy.
+
+!!! warning "A proxy without that header"
+    It gets the redirect to HTTPS instead of the page. Add the header or set
+    `EASYDC_TLS=off` when you upgrade to 0.6.
 
 !!! note "Two separate TLS links"
-    The proxy protects the browser → EasyDC connection. The EasyDC → domain controller
+    This protects the browser → EasyDC connection. The EasyDC → domain controller
     connection is protected by using an `ldaps://` URL when you add the server.
+
+**Health checks.** `/healthz` answers `ok` over plain HTTP too, without a redirect.
 
 ## First run
 
-Open `http://<host>:3000/`. On a fresh install you are sent to **`/setup`** to create the
+Open `https://<host>:3000/`. On a fresh install you are sent to **`/setup`** to create the
 admin account; after that every page requires a login.
 
 Next: [create the admin account and add your first domain controller](getting-started.md).

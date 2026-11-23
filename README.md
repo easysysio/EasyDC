@@ -21,6 +21,7 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 - **Sites and subnets** — sites, subnets and site links
 - **EasyDC accounts** — View or Edit per area for each account, local or signing in with a domain password; every change in an audit log
 - **Domain health check** — diagnose clock skew, FSMO holders, replication, the DNS service records clients need, LDAPS certificate expiry, and security posture; read-only, over LDAP
+- **HTTPS built in** — a self-signed certificate from the first start, or your own from Settings
 - **First-run setup** — guided setup wizard on fresh install; no config files needed
 
 ## Tech Stack
@@ -77,8 +78,9 @@ The database is then `easydc.db` in the `easydc-data` volume. The Docker Hub pag
 The [installation guide](https://easydc.easysys.io/install/) covers RHEL / Fedora,
 openSUSE, Docker, air-gapped hosts, moving from a manual install, and running the bare binary.
 
-The web interface is then at `http://<server-ip>:3000`, where the first visit creates the
-admin account. With the packages, the database is `/var/lib/easydc/easydc.db`.
+The web interface is then at `https://<server-ip>:3000`, where the first visit creates the
+admin account. EasyDC makes its own certificate, so the browser warns once; Settings takes
+your own. With the packages, the database is `/var/lib/easydc/easydc.db`.
 
 ## Adding a Server
 

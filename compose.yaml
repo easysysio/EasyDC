@@ -1,5 +1,6 @@
 # EasyDC with Docker Compose:  docker compose up -d
-# Then open http://<host>:3000/ to create the admin account.
+# Then open https://<host>:3000/ to create the admin account. The browser warns
+# once about the self-signed certificate; Settings takes your own.
 #
 # Upgrade:  docker compose pull && docker compose up -d
 # The compose.yaml attached to each GitHub release names that version instead
@@ -20,6 +21,7 @@ services:
       # - ./domain-ca.pem:/certs/domain-ca.pem:ro
     # environment:
     #   SSL_CERT_FILE: /certs/domain-ca.pem
+    #   EASYDC_TLS: "off"    # only behind a reverse proxy that handles HTTPS
     # If the DCs' names are only in the domain's DNS:
     # dns:
     #   - 192.0.2.10

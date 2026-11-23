@@ -105,6 +105,40 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // One row: the certificate EasyDC serves, and its private key.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tls_certificate (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            cert_pem TEXT NOT NULL,
+            key_pem TEXT NOT NULL,
+            uploaded INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn tls_pair(pool: &SqlitePool) -> Option<crate::tls::Pair> {
+    let row: (String, String, bool) =
+        sqlx::query_as("SELECT cert_pem, key_pem, uploaded FROM tls_certificate WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .ok()??;
+    Some(crate::tls::Pair { cert: row.0, key: row.1, uploaded: row.2 })
+}
+
+pub async fn save_tls_pair(pool: &SqlitePool, pair: &crate::tls::Pair) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO tls_certificate (id, cert_pem, key_pem, uploaded) VALUES (1, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET cert_pem = excluded.cert_pem, key_pem = excluded.key_pem, uploaded = excluded.uploaded",
+    )
+    .bind(&pair.cert)
+    .bind(&pair.key)
+    .bind(pair.uploaded)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

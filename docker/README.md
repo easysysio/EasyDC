@@ -20,7 +20,8 @@ docker run -d --name easydc --restart unless-stopped \
   easysysio/easydc:latest
 ```
 
-Then open **http://localhost:3000/**. The first visit creates the admin account. After
+Then open **https://localhost:3000/**. EasyDC makes its own certificate, so the browser
+warns once. The first visit creates the admin account. After
 signing in, click **Add Server** and give it a DC's `ldaps://` URL and a bind account.
 
 ---
@@ -86,8 +87,9 @@ volume. The database is updated on first start.
 | DC names | If the DCs are only in the domain's DNS, add `--dns <DC address>` (`dns:` in Compose) |
 | LDAPS certificate | Samba makes its own. Turn on *Skip TLS verify* for the server, or mount the domain's CA: `-v ./domain-ca.pem:/certs/domain-ca.pem:ro -e SSL_CERT_FILE=/certs/domain-ca.pem` |
 
-EasyDC serves plain HTTP. Beyond a trusted management network, put a TLS reverse proxy
-in front of it.
+EasyDC serves HTTPS on port 3000 and redirects plain HTTP to it. To remove the browser's
+warning, add your own certificate in **Settings**; it is kept in `/data`. Behind a reverse
+proxy that handles HTTPS, have it send `X-Forwarded-Proto`, or set `-e EASYDC_TLS=off`.
 
 ---
 

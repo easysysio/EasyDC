@@ -60,7 +60,7 @@ Get started
 <span class="t-p">$</span> sudo apt install easydc
 <span class="t-p">$</span> sudo systemctl enable --now easydc
 <span class="t-c"># create the admin, then add your DC</span>
-<span class="t-ok">→</span> http://mgmt-01:3000/setup</div>
+<span class="t-ok">→</span> https://mgmt-01:3000/setup</div>
 <div class="es-term-meta">
 <div><div class="es-term-meta-label">Web UI</div><div class="es-term-meta-value es-mono">:3000</div></div>
 <div><div class="es-term-meta-label">Directory</div><div class="es-term-meta-value es-mono">LDAP · LDAPS</div></div>
@@ -267,7 +267,7 @@ Get started
 </div>
 <div class="es-diagram">
 <div class="es-diagram-scroll">
-<svg viewBox="0 0 1120 360" role="img" aria-label="Diagram: administrators use the EasyDC web console over HTTP; EasyDC keeps logins, servers and the audit log in SQLite and reads and writes Samba AD domain controllers over LDAP or LDAPS, with nothing installed on them.">
+<svg viewBox="0 0 1120 360" role="img" aria-label="Diagram: administrators use the EasyDC web console over HTTPS; EasyDC keeps logins, servers and the audit log in SQLite and reads and writes Samba AD domain controllers over LDAP or LDAPS, with nothing installed on them.">
 <defs>
 <marker id="ed-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-head" d="M0 0L10 5L0 10z"></path></marker>
 <marker id="ed-ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-head a-head--es" d="M0 0L10 5L0 10z"></path></marker>
@@ -283,7 +283,7 @@ Get started
 <g class="a-ext"><rect x="880" y="50" width="240" height="84" rx="10"></rect><text class="a-title" x="900" y="84">Samba AD DC</text><text class="a-sub" x="900" y="110">nothing installed</text></g>
 <g class="a-ext"><rect x="880" y="186" width="240" height="84" rx="10"></rect><text class="a-title" x="900" y="220">Samba AD DC</text><text class="a-sub" x="900" y="246">nothing installed</text></g>
 <line class="a-line" x1="220" y1="160" x2="322" y2="160" marker-end="url(#ed-ah)"></line>
-<text class="a-label" x="271" y="150" text-anchor="middle">HTTP</text>
+<text class="a-label" x="271" y="150" text-anchor="middle">HTTPS</text>
 <line class="a-line a-line--es" x1="534" y1="160" x2="564" y2="160" marker-end="url(#ed-ahb)"></line>
 <line class="a-line a-line--es" x1="429" y1="200" x2="429" y2="238" marker-end="url(#ed-ahb)"></line>
 <text class="a-label a-label--es" x="441" y="224">audit</text>
@@ -308,7 +308,7 @@ Get started
 <p class="es-desc">EasyDC installs from the signed EasySYS package repository, starts on boot under systemd, and upgrades through the package manager you already use. Already running it by hand? The package moves it over for you. Or run the <a href="install/#docker">Docker image</a> on any system. The <a href="install/">installation guide</a> has the details.</p>
 <div class="es-steps">
 <div class="es-step"><span class="es-step-num es-mono">1</span><div><div class="es-step-title">Add the signed repository</div><div class="es-step-text">apt, dnf and zypper channels for x86_64 and arm64, signed with the same key as the other EasySYS products.</div></div></div>
-<div class="es-step"><span class="es-step-num es-mono">2</span><div><div class="es-step-title">Install and enable the service</div><div class="es-step-text">It runs as its own user, listens on port 3000 and keeps its state in one SQLite file.</div></div></div>
+<div class="es-step"><span class="es-step-num es-mono">2</span><div><div class="es-step-title">Install and enable the service</div><div class="es-step-text">It runs as its own user, serves HTTPS on port 3000 and keeps its state in one SQLite file.</div></div></div>
 <div class="es-step"><span class="es-step-num es-mono">3</span><div><div class="es-step-title">Create your admin, add a DC</div><div class="es-step-text">Point it at a domain controller with an ldaps:// URL and a bind account.</div></div></div>
 </div>
 </div>
@@ -335,7 +335,7 @@ Get started
 <span class="t-p">$</span> sudo apt update &amp;&amp; sudo apt install easydc
 <span class="t-p">$</span> sudo systemctl enable --now easydc
 <span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<span class="t-ok">→</span> https://&lt;host&gt;:3000/</div></div>
 <div class="es-panel es-panel--rpm"><div class="es-term-body es-mono"><span class="t-c"># 1 — trust the repository</span>
 <span class="t-p">$</span> sudo tee /etc/yum.repos.d/easydc.repo &gt;/dev/null &lt;&lt;'EOF'
 [easydc]
@@ -349,7 +349,7 @@ EOF
 <span class="t-p">$</span> sudo dnf install easydc
 <span class="t-p">$</span> sudo systemctl enable --now easydc
 <span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<span class="t-ok">→</span> https://&lt;host&gt;:3000/</div></div>
 <div class="es-panel es-panel--suse"><div class="es-term-body es-mono"><span class="t-c"># 1 — trust the repository</span>
 <span class="t-p">$</span> sudo zypper addrepo -fg \
     https://repo.easysys.io/easydc/stable/redhat easydc
@@ -357,7 +357,7 @@ EOF
 <span class="t-p">$</span> sudo zypper install easydc
 <span class="t-p">$</span> sudo systemctl enable --now easydc
 <span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<span class="t-ok">→</span> https://&lt;host&gt;:3000/</div></div>
 <div class="es-panel es-panel--docker"><div class="es-term-body es-mono"><span class="t-c"># 1 — any system with Docker or Podman, x86_64 or arm64</span>
 <span class="t-c">#     hub.docker.com/r/easysysio/easydc</span>
 <span class="t-c"># 2 — run it, with its data in a volume</span>
@@ -368,7 +368,7 @@ EOF
 <span class="t-c">#     release, github.com/easysysio/EasyDC/releases</span>
 <span class="t-p">$</span> docker compose up -d
 <span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<span class="t-ok">→</span> https://&lt;host&gt;:3000/</div></div>
 <div class="es-panel es-panel--air"><div class="es-term-body es-mono"><span class="t-c"># 1 — download the package for your architecture</span>
 <span class="t-c">#     github.com/easysysio/EasyDC/releases</span>
 <span class="t-c"># 2 — install and start</span>
@@ -376,7 +376,7 @@ EOF
 <span class="t-p">$</span> sudo rpm  -i easydc-*.x86_64.rpm    <span class="t-c"># or .aarch64.rpm</span>
 <span class="t-p">$</span> sudo systemctl enable --now easydc
 <span class="t-c"># 3 — create your admin</span>
-<span class="t-ok">→</span> http://&lt;host&gt;:3000/</div></div>
+<span class="t-ok">→</span> https://&lt;host&gt;:3000/</div></div>
 </div>
 </div>
 </section>

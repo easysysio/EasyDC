@@ -47,9 +47,10 @@ pub fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
         .find_map(|s| s.trim().strip_prefix("session=").map(String::from))
 }
 
-/// True when the browser reached EasyDC over HTTPS through a reverse proxy.
-/// EasyDC itself only speaks HTTP, so the proxy's header is the only signal.
-/// A client faking it gains nothing: it only makes its own cookie Secure.
+/// True when the browser reached EasyDC over HTTPS: directly, where the
+/// listener in `tls` sets this header itself, or through a reverse proxy.
+/// A client faking it on plain HTTP gains nothing: it skips the redirect and
+/// makes its own cookie Secure.
 pub fn via_https(headers: &HeaderMap) -> bool {
     let first = |name: &str| {
         headers

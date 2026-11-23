@@ -14,6 +14,7 @@ mod replication;
 mod csv;
 mod sd;
 mod sites;
+mod tls;
 
 use std::sync::Arc;
 
@@ -31,6 +32,8 @@ struct Templates;
 pub struct AppState {
     pub db: SqlitePool,
     pub tera: Arc<Tera>,
+    /// The certificate being served; None with EASYDC_TLS=off.
+    pub tls: Option<Arc<tls::Live>>,
 }
 
 /// A CSV file of users, checked or imported: about 50,000 users. Other
@@ -50,6 +53,14 @@ async fn main() {
             return;
         }
         Ok(Command::Serve(p)) => p,
+        Err(e) => {
+            eprintln!("EasyDC: {}\n\n{}", e, USAGE);
+            std::process::exit(2);
+        }
+    };
+
+    let https = match tls::enabled(std::env::var("EASYDC_TLS").ok().as_deref()) {
+        Ok(on) => on,
         Err(e) => {
             eprintln!("EasyDC: {}\n\n{}", e, USAGE);
             std::process::exit(2);
@@ -87,14 +98,29 @@ async fn main() {
         Ok(tera::Value::String(env!("CARGO_PKG_VERSION").to_string()))
     });
 
+    let live = if https {
+        match tls::load(&pool).await {
+            Ok(live) => Some(live),
+            Err(e) => {
+                eprintln!("EasyDC cannot start: {e}");
+                eprintln!("Set EASYDC_TLS=off to run without HTTPS.");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     let state = AppState {
         db: pool,
         tera: Arc::new(tera),
+        tls: live.clone(),
     };
 
     let public = Router::new()
         .route("/setup", get(handlers::setup::get_setup).post(handlers::setup::post_setup))
         .route("/login", get(handlers::auth_handlers::get_login).post(handlers::auth_handlers::post_login))
+        .route("/healthz", get(|| async { "ok" }))
         .route("/static/*path", get(assets::serve));
 
     let protected = Router::new()
@@ -102,6 +128,8 @@ async fn main() {
         .route("/audit", get(handlers::servers::audit))
         .route("/settings", get(handlers::settings::settings))
         .route("/settings/password", post(handlers::settings::change_password))
+        .route("/settings/certificate", post(handlers::settings::upload_certificate))
+        .route("/settings/certificate/generate", post(handlers::settings::generate_certificate))
         .route("/settings/accounts/new", post(handlers::settings::create_account))
         .route("/settings/accounts/:username/permissions", post(handlers::settings::update_permissions))
         .route("/settings/accounts/:username/delete", post(handlers::settings::delete_account))
@@ -189,7 +217,7 @@ async fn main() {
         .merge(public)
         .merge(protected)
         .layer(tower_http::compression::CompressionLayer::new())
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -213,7 +241,15 @@ async fn main() {
         }
     };
 
-    println!("EasyDC running on http://{}", addr);
+    if let Some(live) = live {
+        let info = live.info();
+        println!("EasyDC running on https://{addr} (plain HTTP is redirected)");
+        println!("Certificate SHA-256: {}", info.fingerprint);
+        tokio::spawn(tls::renew_generated(state.db.clone(), live.clone()));
+        tls::serve(listener, app, live).await;
+        return;
+    }
+    println!("EasyDC running on http://{addr} (EASYDC_TLS=off)");
     if let Err(e) = axum::serve(listener, app).await {
         eprintln!("EasyDC stopped: {}", e);
         std::process::exit(1);
@@ -229,6 +265,9 @@ Options:
   -p, --port <PORT>    Port to listen on [default: 3000, or $EASYDC_PORT]
   -V, --version        Print the version
   -h, --help           Print this help
+
+EasyDC serves HTTPS on its port and redirects plain HTTP to it. Set
+EASYDC_TLS=off to serve plain HTTP, behind a reverse proxy.
 
 The SQLite database (easydc.db) is created in the working directory.";
 

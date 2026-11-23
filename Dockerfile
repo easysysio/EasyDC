@@ -41,7 +41,7 @@ ENV EASYDC_PORT=3000
 EXPOSE 3000
 USER easydc
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -q -O /dev/null "http://127.0.0.1:${EASYDC_PORT}/login" || exit 1
+    CMD wget -q -O /dev/null "http://127.0.0.1:${EASYDC_PORT}/healthz" || exit 1
 ENTRYPOINT ["/usr/bin/easydc"]
 
 LABEL org.opencontainers.image.title="EasyDC" \

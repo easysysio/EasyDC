@@ -5,12 +5,10 @@ in `CHANGELOG.md`.
 
 ## Securing EasyDC itself
 
-EasyDC keeps the bind passwords of accounts that can change the whole domain, yet it serves
-plain HTTP and signs in with a password alone.
+EasyDC keeps the bind passwords of accounts that can change the whole domain.
 
-- **HTTPS built in.** Generate a self-signed certificate on first start, as EasyWAF does,
-  and let an admin upload their own in Settings. Plain HTTP stays possible behind a reverse
-  proxy. The packages, the Docker image and the docs ("put TLS in front of it") follow.
+- ~~**HTTPS built in.**~~ Done: on port 3000, with plain HTTP redirected, a self-signed
+  certificate or your own from Settings, and `EASYDC_TLS=off` for reverse proxies.
 - **Two-factor sign-in** with an authenticator app (TOTP) for local EasyDC accounts: set
   up from a QR code, with recovery codes, and a way for an admin to reset it. Admins may be
   required to use it. Domain accounts keep signing in with their domain password.

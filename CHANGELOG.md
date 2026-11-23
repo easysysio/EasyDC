@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- HTTPS on port 3000, with a self-signed certificate from the first start or your own from Settings. Plain HTTP on the same port redirects to it.
+
+### Upgrade notes
+- A reverse proxy must send `X-Forwarded-Proto`, or set `EASYDC_TLS=off`; otherwise it gets the redirect to HTTPS.
+
 ## [0.5.1] - 2026-11-22
 
 ### Added
