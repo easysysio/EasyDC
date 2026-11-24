@@ -374,7 +374,7 @@ async fn create_domain_account(
         }
         let (mut conn, base_dn) = ldap::open(server).await?;
         let user = ldap::find_domain_user(&mut conn, &base_dn, typed).await?;
-        let _ = conn.unbind().await;
+        drop(conn);
         let user = user.ok_or_else(|| format!("{} has no user named {typed}.", server.name))?;
         let name = format!("{}@{}", user.username, ldap::base_dn_to_domain(&base_dn).to_lowercase());
         if db::account_name_taken(&state.db, &name).await {

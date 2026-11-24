@@ -51,7 +51,7 @@ async fn render(state: &AppState, server: &Server, flash_error: Option<String>, 
     let loaded = async {
         let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
         let rows = spn::list(&mut conn, &base_dn).await;
-        let _ = conn.unbind().await;
+        drop(conn);
         rows
     }
     .await;
@@ -115,7 +115,7 @@ pub async fn add(State(state): State<AppState>, CurrentUser(actor): CurrentUser,
         allowed(&state, &actor, id, &account, &target).await?;
         crate::handlers::ldap_mgmt::Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &account.dn).await?;
         spn::add(&mut conn, &base_dn, &account, &value).await?;
-        let _ = conn.unbind().await;
+        drop(conn);
         Ok((value, account.sam))
     }
     .await;
@@ -137,7 +137,7 @@ pub async fn remove(State(state): State<AppState>, CurrentUser(actor): CurrentUs
         allowed(&state, &actor, id, &account, &target).await?;
         crate::handlers::ldap_mgmt::Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &account.dn).await?;
         spn::remove(&mut conn, &account, f.spn.trim()).await?;
-        let _ = conn.unbind().await;
+        drop(conn);
         Ok(account.sam)
     }
     .await;

@@ -115,7 +115,7 @@ pub async fn dashboard(State(state): State<AppState>, Query(view): Query<Dashboa
         .unwrap_or_default();
 
     let checked = match view.check.parse::<i64>().ok().and_then(|id| servers.iter().find(|s| s.id == id)) {
-        Some(server) => Some((server.name.clone(), crate::ldap::open(server).await.map(|(_, base_dn)| base_dn))),
+        Some(server) => Some((server.name.clone(), crate::ldap::open_new(server).await.map(|(_, base_dn)| base_dn))),
         None => None,
     };
     Html(crate::access::render(&state.tera, "dashboard.html", &dashboard_context(&servers, checked)))
@@ -169,11 +169,30 @@ pub async fn server_level(State(state): State<AppState>, Path(id): Path<i64>) ->
     let Ok(Some(server)) = server else {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     };
+    let key = (server.id, server.ldap_url.clone());
+    let kept = LEVELS.lock().ok().and_then(|l| l.as_ref()?.get(&key).filter(|(at, _)| at.elapsed() < LEVEL_KEPT).map(|(_, v)| v.clone()));
+    if let Some(levels) = kept {
+        return axum::Json(levels).into_response();
+    }
     match crate::ldap::root_levels(&server).await {
-        Ok((domain, forest, dc)) => axum::Json(crate::level::badge(domain, forest, dc)).into_response(),
+        Ok((domain, forest, dc)) => {
+            let levels = serde_json::to_value(crate::level::badge(domain, forest, dc)).unwrap_or_default();
+            if let Ok(mut l) = LEVELS.lock() {
+                l.get_or_insert_with(Default::default).insert(key, (std::time::Instant::now(), levels.clone()));
+            }
+            axum::Json(levels).into_response()
+        }
         Err(_) => axum::http::StatusCode::BAD_GATEWAY.into_response(),
     }
 }
+
+/// The level is on every page of a server (in the sidebar), and on the
+/// Servers page for each one, but it only changes when someone raises it
+/// with samba-tool: read it at most this often. A failed read is not kept.
+const LEVEL_KEPT: std::time::Duration = std::time::Duration::from_secs(600);
+
+type KeptLevels = std::collections::HashMap<(i64, String), (std::time::Instant, serde_json::Value)>;
+static LEVELS: std::sync::Mutex<Option<KeptLevels>> = std::sync::Mutex::new(None);
 
 // ── the sidebar and the Overview ────────────────────────────────────────────
 

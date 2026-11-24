@@ -82,8 +82,8 @@
             </thead>
             <tbody data-paged="computers" data-search-input="listSearch">
                 {#- A domain can hold thousands of computers, so each row is kept short. #}
-                {% for computer in computers %}
-<tr data-computer="{{ computer.account }}" data-name="{{ computer.name }}" data-dns="{{ computer.dns_hostname }}" data-os="{{ computer.os }}" data-version="{{ computer.os_version }}" data-location="{{ computer.location }}" data-enabled="{{ computer.enabled }}"{% if computer.is_dc %} data-dc="1"{% endif %} data-search="{{ computer.name }} {{ computer.dns_hostname }} {{ computer.os }} {{ computer.os_version }} {{ computer.location }} {% if computer.is_dc %}domain controller{% endif %} {% if computer.enabled %}enabled{% else %}disabled{% endif %}">
+                {% for computer in computers %}{% set locked = privileged is defined and computer.sam_account in privileged %}
+<tr data-computer="{{ computer.account }}"{% if locked %} data-privileged{% endif %} data-name="{{ computer.name }}" data-dns="{{ computer.dns_hostname }}" data-os="{{ computer.os }}" data-version="{{ computer.os_version }}" data-location="{{ computer.location }}" data-enabled="{{ computer.enabled }}"{% if computer.is_dc %} data-dc="1"{% endif %} data-search="{{ computer.name }} {{ computer.dns_hostname }} {{ computer.os }} {{ computer.os_version }} {{ computer.location }} {% if computer.is_dc %}domain controller{% endif %} {% if computer.enabled %}enabled{% else %}disabled{% endif %}">
 <td>{% if computer.is_dc %}<input type="checkbox" class="form-check-input js-select" value="{{ computer.account }}" disabled title="A domain controller stays as it is" aria-label="{{ computer.name }} is a domain controller and cannot be selected">{% else %}<input type="checkbox" class="form-check-input js-select" value="{{ computer.account }}" aria-label="Select {{ computer.name }}">{% endif %}</td>
 <td><div class="row-name"><span class="avatar" aria-hidden="true"><i class="bi bi-{% if computer.is_dc %}hdd-rack{% else %}pc-display{% endif %}"></i></span><div class="min-w-0"><button type="button" class="row-open js-open-row">{{ computer.name }}</button>{% if computer.is_dc %}<div class="status-badges"><span class="badge bg-primary-subtle text-primary-emphasis">Domain controller</span></div>{% endif %}</div></div></td>
 <td class="d-none d-md-table-cell text-muted small text-break">{{ computer.dns_hostname }}</td>
@@ -91,7 +91,7 @@
 {% if show_location %}<td class="d-none d-xl-table-cell">{% if computer.location %}<div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ computer.location }}</div>{% endif %}</td>{% endif %}
 <td class="status-badges js-status">{% if computer.enabled %}<span class="badge bg-success-subtle text-success-emphasis"><i class="bi bi-check-circle me-1"></i>Enabled</span>
 {% else %}<span class="badge bg-secondary-subtle text-secondary-emphasis"><i class="bi bi-x-circle me-1"></i>Disabled</span>{% endif %}</td>
-<td class="text-end">{% if not computer.is_dc %}<div class="btn-group btn-group-sm row-actions row-actions-wide" data-needs="computers">
+<td class="text-end">{% if not computer.is_dc %}<div class="btn-group btn-group-sm row-actions row-actions-wide" data-needs="{% if locked %}privileged{% else %}computers{% endif %}">
 <form method="post" action="/servers/{{ server.id }}/computers/{{ computer.account | urlencode_strict }}/toggle{{ view_qs }}" class="d-inline js-toggle">{% if computer.enabled %}<input type="hidden" name="enable" value="false"><button type="submit" class="btn btn-outline-warning btn-sm" title="Disable computer account" aria-label="Disable {{ computer.name }}"><i class="bi bi-pause-circle"></i></button>{% else %}<input type="hidden" name="enable" value="true"><button type="submit" class="btn btn-outline-success btn-sm" title="Enable computer account" aria-label="Enable {{ computer.name }}"><i class="bi bi-play-circle"></i></button>{% endif %}</form>
 <button type="button" class="btn btn-outline-secondary btn-sm js-move-one" title="Move to another OU" aria-label="Move {{ computer.name }}"><i class="bi bi-folder-symlink"></i></button>
 <button type="button" class="btn btn-outline-secondary btn-sm js-delete" data-bs-toggle="modal" data-bs-target="#deleteComputerModal" data-name="{{ computer.name }}" data-url="/servers/{{ server.id }}/computers/{{ computer.account | urlencode_strict }}/delete{{ view_qs }}" title="Remove from domain" aria-label="Remove {{ computer.name }} from the domain"><i class="bi bi-trash"></i></button>
@@ -170,7 +170,7 @@
 <script>
 // The panel acts through the row's own links, so the two cannot disagree.
 const computerPanel = document.getElementById('computerPanel');
-const computerDetails = EasyPanel({ table: 'computers', panel: 'computerPanel', key: 'computer', fill: function (row) {
+const computerDetails = EasyPanel({ table: 'computers', panel: 'computerPanel', key: 'computer', area: 'computers', fill: function (row) {
     const data = row.dataset;
     const p = computerPanel;
     const dc = data.dc === '1';

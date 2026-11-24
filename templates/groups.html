@@ -58,8 +58,8 @@
                 </tr>
             </thead>
             <tbody data-paged="groups" data-search-input="listSearch">
-                {% for group in groups %}
-                <tr data-group="{{ group.name }}"
+                {% for group in groups %}{% set locked = privileged is defined and group.name in privileged %}
+                <tr data-group="{{ group.name }}"{% if locked %} data-privileged{% endif %}
                     data-search="{{ group.name }} {{ group.description }} {{ group.group_type_label }}"
                     data-description="{{ group.description }}" data-label="{{ group.group_type_label }}"
                     data-scope="{% if group.scope and not group.system %}{{ group.scope }}{% endif %}"
@@ -79,7 +79,7 @@
                         {% endif %}
                     </td>
                     <td><a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members" class="text-decoration-none" title="Manage members of {{ group.name }}"><i class="bi bi-people me-1" aria-hidden="true"></i>{{ group.member_count }}</a></td>
-                    <td class="text-end" data-needs="groups">
+                    <td class="text-end" data-needs="{% if locked %}privileged{% else %}groups{% endif %}">
                         <div class="btn-group btn-group-sm row-actions row-actions-wide">
                             <a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members"
                                 class="btn btn-outline-secondary btn-sm" title="Manage members" aria-label="Manage members of {{ group.name }}">
@@ -226,7 +226,7 @@
 (function () {
     const panel = document.getElementById('groupPanel');
     const form = panel.querySelector('.js-group-form');
-    EasyPanel({ table: 'groups', panel: 'groupPanel', key: 'group', fill: function (row) {
+    EasyPanel({ table: 'groups', panel: 'groupPanel', key: 'group', area: 'groups', fill: function (row) {
         const data = row.dataset;
         const fixed = !data.scope;
         const members = Number(data.count);

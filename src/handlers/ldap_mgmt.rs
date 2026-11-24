@@ -53,11 +53,15 @@ async fn render_groups(
         let groups = ldap::list_groups(&mut conn, &base_dn).await?;
         let objects_in: Vec<&str> = groups.iter().map(|g| g.container.as_str()).collect();
         let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in, &format!("CN=Users,{base_dn}")).await?;
-        Ok((base_dn, groups, tree))
+        let privileged = Guard::new(&mut conn, &base_dn).await?.names(&mut conn).await?;
+        Ok((base_dn, groups, tree, privileged))
     }
     .await;
     let load_error = match loaded {
-        Ok((base_dn, groups, tree)) => groups_context(&mut ctx, server, &base_dn, &groups, &tree, view),
+        Ok((base_dn, groups, tree, privileged)) => {
+            ctx.insert("privileged", &privileged);
+            groups_context(&mut ctx, server, &base_dn, &groups, &tree, view)
+        }
         Err(e) => {
             ctx.insert("groups", &Vec::<ldap::LdapGroup>::new());
             Some(e)
@@ -232,12 +236,21 @@ async fn render_group(
         Err(e) => Err(e),
         Ok((mut conn, base_dn)) => match ldap::group_detail(&mut conn, &base_dn, name).await {
             Err(e) => Err(e),
-            // Suggestions only: the page works without them.
-            Ok(d) => Ok((d, ldap::member_candidates(&mut conn, &base_dn).await.unwrap_or_default())),
+            Ok(d) => {
+                // Suggestions only: the page works without them.
+                let candidates = ldap::member_candidates(&mut conn, &base_dn).await.unwrap_or_default();
+                // Only to grey out the buttons: each change is checked again.
+                let locked = match Guard::new(&mut conn, &base_dn).await {
+                    Ok(guard) => guard.check_account(&mut conn, &base_dn, name).await.is_err(),
+                    Err(_) => false,
+                };
+                Ok((d, candidates, locked))
+            }
         },
     };
     let load_error = match loaded {
-        Ok((detail, candidates)) => {
+        Ok((detail, candidates, locked)) => {
+            ctx.insert("privileged_group", &locked);
             ctx.insert("group", &detail.group);
             ctx.insert("members", &detail.members);
             ctx.insert("member_of", &detail.member_of);
@@ -394,11 +407,15 @@ async fn render_computers(
         let computers = ldap::list_computers(&mut conn, &base_dn).await?;
         let objects_in: Vec<&str> = computers.iter().map(|c| c.container.as_str()).collect();
         let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in, &format!("CN=Computers,{base_dn}")).await?;
-        Ok((base_dn, computers, tree))
+        let privileged = Guard::new(&mut conn, &base_dn).await?.names(&mut conn).await?;
+        Ok((base_dn, computers, tree, privileged))
     }
     .await;
     let load_error = match loaded {
-        Ok((base_dn, computers, tree)) => computers_context(&mut ctx, server, &base_dn, &computers, &tree, view),
+        Ok((base_dn, computers, tree, privileged)) => {
+            ctx.insert("privileged", &privileged);
+            computers_context(&mut ctx, server, &base_dn, &computers, &tree, view)
+        }
         Err(e) => {
             computers_failed_context(&mut ctx, view);
             Some(e)
@@ -1612,12 +1629,14 @@ async fn render_users(
         let objects_in: Vec<&str> = users.iter().map(|u| u.container.as_str()).collect();
         let tree = ldap::list_containers(&mut conn, &base_dn, &objects_in, &format!("CN=Users,{base_dn}")).await?;
         let groups = ldap::group_names(&mut conn, &base_dn).await?;
-        Ok((base_dn, users, tree, groups))
+        let privileged = Guard::new(&mut conn, &base_dn).await?.names(&mut conn).await?;
+        Ok((base_dn, users, tree, groups, privileged))
     }
     .await;
     let load_error = match loaded {
-        Ok((base_dn, users, tree, groups)) => {
+        Ok((base_dn, users, tree, groups, privileged)) => {
             ctx.insert("group_names", &groups);
+            ctx.insert("privileged", &privileged);
             users_context(&mut ctx, server, &base_dn, &users, &tree, view)
         }
         Err(e) => {
@@ -1906,6 +1925,15 @@ impl Guard {
             None => Ok(()),
             Some(why) => Err(privileged_refusal(&why)),
         }
+    }
+
+    /// The accounts this one would refuse, for a list to grey out: none for
+    /// an admin. Sorted, so a page lists them the same way each time.
+    pub(crate) async fn names(&self, conn: &mut ldap3::Ldap) -> Result<Vec<String>, String> {
+        let Some(powerful) = &self.0 else { return Ok(Vec::new()) };
+        let mut names: Vec<String> = powerful.all_names(conn).await?.into_iter().collect();
+        names.sort();
+        Ok(names)
     }
 
     /// By account name: a user, a group, or a computer's `name$`.
@@ -2482,6 +2510,26 @@ mod users_page_tests {
 
     fn user(name: &str) -> LdapUser {
         user_in(name, "CN=Users")
+    }
+
+    #[test]
+    fn an_admin_account_row_needs_an_easydc_admin() {
+        let users = [user("alice"), user("Administrator")];
+        let tree = tree_of(vec![(format!("CN=Users,{BASE}"), false)], &users);
+        let mut c = Context::new();
+        c.insert("server", &server());
+        c.insert("privileged", &["Administrator"]);
+        users_context(&mut c, &server(), BASE, &users, &tree, &ListView::default());
+        let html = tera().render("users.html", &c).unwrap();
+        let row = |name: &str| {
+            let start = html.find(&format!(r#" data-user="{name}""#)).unwrap();
+            let tr = html[..start].rfind("<tr").unwrap();
+            html[tr..tr + html[tr..].find("</tr>").unwrap()].to_string()
+        };
+        assert!(row("Administrator").starts_with("<tr data-privileged "));
+        assert!(row("Administrator").contains(r#"data-needs="privileged""#));
+        assert!(!row("alice").contains("data-privileged"));
+        assert!(row("alice").contains(r#"data-needs="users""#));
     }
 
     fn view(ou: &str, nested: bool, status: &str) -> ListView {

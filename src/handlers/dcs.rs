@@ -52,7 +52,7 @@ async fn render(state: &AppState, server: &Server, flash_error: Option<String>, 
         let (o, _, p) = fsmo::overview(&mut conn, &base_dn).await?;
         // The rest of the page is still useful if the levels cannot be read.
         let levels = level::read(&mut conn, &p, &o.roles).await.map(|s| s.view());
-        let _ = conn.unbind().await;
+        drop(conn);
         Ok::<_, String>((o, levels))
     }
     .await;

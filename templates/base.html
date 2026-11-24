@@ -253,6 +253,10 @@
         }
 
         function why(need) {
+            if (need === 'privileged') {
+                return 'Only an EasyDC admin can change this: it is an admin account or group, or is in one, ' +
+                    'so changing it could give someone control of the whole domain.';
+            }
             return need === 'admin' || !access.labels[need]
                 ? 'Only an EasyDC admin can do this.'
                 : 'You can view ' + access.labels[need] + ' but not change them. An EasyDC admin can give you Edit on ' +
@@ -291,7 +295,7 @@
             try { access = JSON.parse(document.body.dataset.access || 'null'); } catch (e) { access = null; }
             if (access && !access.admin) {
                 // Grey out what may not be changed, in every row, shown or not yet.
-                const off = Object.keys(access.edit).filter(k => !access.edit[k]).concat(['admin']);
+                const off = Object.keys(access.edit).filter(k => !access.edit[k]).concat(['admin', 'privileged']);
                 const style = document.createElement('style');
                 style.textContent = off.map(k =>
                     '[data-needs="' + k + '"] :is(.btn, .dropdown-item, [type=submit]):not(' + FREE + '),' +
@@ -313,7 +317,8 @@
     // One details panel for a whole list, beside it: a click on a row opens it,
     // a click on another row switches it, and a change brings you back to the
     // same row. o: table (its EasyTable name), panel (the .offcanvas id), key
-    // (the data-* holding the row's name), fill(row).
+    // (the data-* holding the row's name), fill(row), and area (the panel's
+    // data-needs, turned to "privileged" for a row marked data-privileged).
     window.EasyPanel = function (o) {
         const panel = document.getElementById(o.panel);
         const saved = 'easydc.open.' + o.table;
@@ -323,6 +328,11 @@
             if (current) current.classList.remove('is-open');
             current = row;
             row.classList.add('is-open');
+            if (o.area) {
+                const need = row.dataset.privileged !== undefined ? 'privileged' : o.area;
+                panel.querySelectorAll('[data-needs="' + o.area + '"], [data-needs="privileged"]')
+                    .forEach(el => { el.dataset.needs = need; });
+            }
             o.fill(row);
             panel.dispatchEvent(new CustomEvent('easydc:open', { detail: row }));
             bootstrap.Offcanvas.getOrCreateInstance(panel).show();

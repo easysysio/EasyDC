@@ -553,7 +553,8 @@ Only an admin can change the domain's most powerful accounts and groups: the bui
 Administrator and krbtgt, the admin groups (Domain Admins, Enterprise Admins, Schema Admins,
 Administrators, the Operators groups and a few more), and anyone in them, directly or through
 other groups. EasyDC makes changes as a domain admin, so otherwise Edit on Users or Groups
-would be enough to reset an admin's password or join Domain Admins.
+would be enough to reset an admin's password or join Domain Admins. For everyone else, the
+buttons on those rows are greyed out.
 
 When upgrading from a version without permissions, every existing account becomes an admin.
 

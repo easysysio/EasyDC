@@ -5,12 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Security
-- Only an admin can change the domain's admin accounts and groups, or anyone in them. Before, Edit on Users or Groups was enough to reset a domain admin's password or join Domain Admins.
+- Only an admin can change the domain's admin accounts and groups, or anyone in them. Before, Edit on Users or Groups was enough to reset a domain admin's password or join Domain Admins. Their buttons are greyed out for others.
 - After five wrong passwords for one name, sign-in pauses for a minute, then longer. A burst of sign-ins no longer slows EasyDC for everyone.
 - Pages can no longer be shown inside another site's frame.
 
 ### Changed
 - New look: a sidebar with the current server always in view, a domain Overview, search with Ctrl-K or ⌘K, light and dark mode, and details in a side panel for users, groups, computers, OUs, GPOs and DNS records.
+- Pages load faster: EasyDC reuses its connection to the DC between pages, and keeps the functional level for ten minutes.
 
 ## [0.6.0] - 2026-11-23
 

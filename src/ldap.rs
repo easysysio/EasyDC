@@ -444,7 +444,7 @@ pub async fn check_domain_password(server: &Server, username: &str, password: &s
     }
     let (mut ldap, base_dn) = open(server).await.map_err(DomainSignIn::Unavailable)?;
     let found = find_domain_user(&mut ldap, &base_dn, username).await;
-    let _ = ldap.unbind().await;
+    drop(ldap);
     let user = match found {
         Ok(Some(u)) => u,
         Ok(None) => return Err(DomainSignIn::Refused),
@@ -533,17 +533,180 @@ pub(crate) fn is_timeout(error: &str) -> bool {
 /// `open`, for showing a page after an action. If the action just failed
 /// because the DC did not answer, reading the page from the same DC would
 /// only wait as long again: the action's error is returned instead.
-pub async fn open_after(server: &Server, earlier: Option<&str>) -> LdapResult<(ldap3::Ldap, String)> {
+pub async fn open_after(server: &Server, earlier: Option<&str>) -> LdapResult<(Conn, String)> {
     match earlier {
         Some(e) if is_timeout(e) => Err(e.to_string()),
         _ => open(server).await,
     }
 }
 
-pub async fn open(server: &Server) -> LdapResult<(ldap3::Ldap, String)> {
+/// A signed-in connection to the server's DC, with the domain's base DN.
+/// A connection made for an earlier page is used again when there is one:
+/// each new one costs a TLS handshake and a sign-in.
+pub async fn open(server: &Server) -> LdapResult<(Conn, String)> {
+    let key = pool::key(server);
+    while let Some((mut ldap, born)) = pool::take(&key) {
+        // Reading the base DN again also shows the DC still answers on it.
+        if let Ok(base_dn) = reused_base_dn(&mut ldap).await {
+            return Ok((Conn { ldap: Some(ldap), key, born }, base_dn));
+        }
+    }
+    open_new(server).await
+}
+
+/// [`open`] with a new connection and sign-in, for testing a server's
+/// settings: a kept connection would pass even after its password changed.
+pub async fn open_new(server: &Server) -> LdapResult<(Conn, String)> {
     let mut ldap = connect_and_bind(server).await?;
     let base_dn = get_base_dn(&mut ldap).await?;
-    Ok((ldap, base_dn))
+    Ok((Conn { ldap: Some(ldap), key: pool::key(server), born: std::time::Instant::now() }, base_dn))
+}
+
+/// [`get_base_dn`] on a kept connection, with a short limit: one the DC has
+/// dropped without saying so is given up quickly for a new one.
+async fn reused_base_dn(ldap: &mut ldap3::Ldap) -> LdapResult<String> {
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+    let (entries, _) = ldap
+        .with_timeout(WAIT)
+        .search("", Scope::Base, "(objectClass=*)", vec!["defaultNamingContext"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    entries
+        .into_iter()
+        .next()
+        .map(SearchEntry::construct)
+        .and_then(|e| e.attrs.get("defaultNamingContext")?.first().cloned())
+        .ok_or_else(|| "Could not determine domain base DN from server".to_string())
+}
+
+/// A connection from [`open`]. Used as a `ldap3::Ldap`; when dropped it is
+/// kept for the next page rather than closed.
+pub struct Conn {
+    ldap: Option<ldap3::Ldap>,
+    key: pool::Key,
+    born: std::time::Instant,
+}
+
+impl std::ops::Deref for Conn {
+    type Target = ldap3::Ldap;
+    fn deref(&self) -> &ldap3::Ldap {
+        self.ldap.as_ref().expect("a connection is kept until it is dropped")
+    }
+}
+
+impl std::ops::DerefMut for Conn {
+    fn deref_mut(&mut self) -> &mut ldap3::Ldap {
+        self.ldap.as_mut().expect("a connection is kept until it is dropped")
+    }
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        if let Some(ldap) = self.ldap.take() {
+            pool::give_back(std::mem::take(&mut self.key), ldap, self.born);
+        }
+    }
+}
+
+/// Connections kept between pages, a few for each server.
+///
+/// Only one page uses a connection at a time. One is kept for a minute
+/// after its last use and ten minutes in all, and only while it is open and
+/// signed in with the server's current settings: a changed address, bind
+/// account, password or TLS setting starts over with a new connection.
+mod pool {
+    use std::hash::{Hash, Hasher};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use crate::models::Server;
+
+    const IDLE: Duration = Duration::from_secs(60);
+    const AGE: Duration = Duration::from_secs(600);
+    const PER_SERVER: usize = 4;
+
+    /// The server and a fingerprint of how EasyDC signs in to it, so the
+    /// password itself is not kept here.
+    #[derive(Clone, Default, PartialEq, Eq, Debug)]
+    pub struct Key(i64, u64);
+
+    pub fn key(server: &Server) -> Key {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&server.ldap_url, &server.bind_dn, &server.bind_password, server.skip_tls).hash(&mut h);
+        Key(server.id, h.finish())
+    }
+
+    struct Kept {
+        key: Key,
+        ldap: ldap3::Ldap,
+        born: Instant,
+        since: Instant,
+    }
+
+    static KEPT: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
+
+    fn fresh(born: Instant, since: Instant) -> bool {
+        born.elapsed() < AGE && since.elapsed() < IDLE
+    }
+
+    /// The most recently used kept connection for this key, if any.
+    pub fn take(key: &Key) -> Option<(ldap3::Ldap, Instant)> {
+        let mut kept = KEPT.lock().ok()?;
+        kept.retain(|k| fresh(k.born, k.since));
+        let at = kept.iter().rposition(|k| &k.key == key)?;
+        let mut k = kept.remove(at);
+        if k.ldap.is_closed() {
+            return None;
+        }
+        Some((k.ldap, k.born))
+    }
+
+    pub fn give_back(key: Key, mut ldap: ldap3::Ldap, born: Instant) {
+        if key.0 == 0 || !fresh(born, Instant::now()) || ldap.is_closed() {
+            return;
+        }
+        let Ok(mut kept) = KEPT.lock() else { return };
+        kept.retain(|k| fresh(k.born, k.since));
+        if kept.iter().filter(|k| k.key == key).count() >= PER_SERVER {
+            return;
+        }
+        kept.push(Kept { key, ldap, born, since: Instant::now() });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn server(password: &str) -> Server {
+            Server {
+                id: 7,
+                name: "DC".into(),
+                ldap_url: "ldaps://dc.lab.test".into(),
+                bind_dn: "CN=Administrator,CN=Users,DC=lab,DC=test".into(),
+                bind_password: password.into(),
+                skip_tls: false,
+            }
+        }
+
+        #[test]
+        fn new_sign_in_settings_need_a_new_connection() {
+            assert_eq!(key(&server("a")), key(&server("a")));
+            assert_ne!(key(&server("a")), key(&server("b")));
+            let mut other = server("a");
+            other.skip_tls = true;
+            assert_ne!(key(&server("a")), key(&other));
+        }
+
+        #[test]
+        fn a_connection_is_kept_only_for_a_while() {
+            let now = Instant::now();
+            assert!(fresh(now, now));
+            assert!(!fresh(now - AGE, now));
+            assert!(!fresh(now, now - IDLE));
+        }
+    }
 }
 
 // ── user lookup ───────────────────────────────────────────────────────────────
@@ -2018,6 +2181,67 @@ impl Powerful {
         }
         Ok(None)
     }
+
+    /// The account names of every user, group and computer that only an
+    /// EasyDC admin may change, so a list can grey out their buttons.
+    ///
+    /// Membership is followed one level at a time, a search for each level:
+    /// Samba answers "in this group at any depth" for the whole domain far
+    /// more slowly (seconds, with a few thousand users).
+    pub async fn all_names(&self, ldap: &mut ldap3::Ldap) -> LdapResult<HashSet<String>> {
+        let mut names: HashSet<String> = self.groups.iter().map(|g| g.1.clone()).collect();
+        let mut seen: HashSet<String> = self.groups.iter().map(|g| g.0.to_lowercase()).collect();
+        let mut level: Vec<String> = self.groups.iter().map(|g| g.0.clone()).collect();
+        // Primary groups count as membership too: the powerful ones, and any
+        // domain group found inside one.
+        let mut primary: Vec<String> = POWERFUL_DOMAIN.iter().map(|r| r.to_string()).collect();
+        let domain_prefix = format!("{}-", self.domain_sid);
+        // Deep enough for any real nesting, and an end if groups loop.
+        for _ in 0..16 {
+            let mut next = Vec::new();
+            for part in level.chunks(64) {
+                let any: String = part.iter().map(|dn| format!("(memberOf={})", ldap_escape(dn))).collect();
+                for e in member_entries(ldap, &self.base_dn, &format!("(|{any})")).await? {
+                    if !seen.insert(e.dn.to_lowercase()) {
+                        continue;
+                    }
+                    if e.attrs.get("objectClass").is_some_and(|c| c.iter().any(|c| c.eq_ignore_ascii_case("group"))) {
+                        if let Some(rid) = object_sid(&e).as_deref().and_then(|sid| sid.strip_prefix(&domain_prefix)) {
+                            primary.push(rid.to_string());
+                        }
+                        next.push(e.dn.clone());
+                    }
+                    names.insert(attr(&e, "sAMAccountName"));
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            level = next;
+        }
+        let accounts: String = POWERFUL_ACCOUNTS
+            .iter()
+            .map(|(rid, _)| format!("(objectSid={domain_prefix}{rid})"))
+            .chain(primary.iter().filter(|r| r.bytes().all(|b| b.is_ascii_digit())).map(|r| format!("(primaryGroupID={r})")))
+            .collect();
+        for e in member_entries(ldap, &self.base_dn, &format!("(|{accounts})")).await? {
+            names.insert(attr(&e, "sAMAccountName"));
+        }
+        names.remove("");
+        Ok(names)
+    }
+}
+
+/// Accounts matching `filter`, with what [`Powerful::all_names`] needs.
+async fn member_entries(ldap: &mut ldap3::Ldap, base_dn: &str, filter: &str) -> LdapResult<Vec<SearchEntry>> {
+    let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(base_dn, Scope::Subtree, filter, vec!["sAMAccountName", "objectClass", "objectSid"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    Ok(entries.into_iter().map(SearchEntry::construct).collect())
 }
 
 /// In `group_dn`, at any depth (LDAP_MATCHING_RULE_IN_CHAIN).

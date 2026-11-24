@@ -44,7 +44,7 @@ async fn read(server: &crate::models::Server, kind: Kind, days: Option<i64>, now
     let expiring = expiring.or(Kind::Expiring.days().map(|d| d.0)).unwrap_or(14);
     let (mut conn, base_dn) = ldap::open(server).await?;
     let result = reports::read(&mut conn, &base_dn, expiring, now).await;
-    let _ = conn.unbind().await;
+    drop(conn);
     result
 }
 
