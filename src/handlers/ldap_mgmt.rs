@@ -1469,7 +1469,7 @@ fn resolve_view<'t>(
     (view, selected, error)
 }
 
-/// The tree on the left and what goes with it, the same on the Users and
+/// The OU picker and what goes with it, the same on the Users and
 /// Groups pages. `page` turns a view into its URL; `total` counts everything.
 fn insert_tree(
     ctx: &mut Context,
@@ -2846,9 +2846,9 @@ mod groups_page_tests {
     }
 
     fn listed(html: &str) -> Vec<String> {
-        html.split(r#"<i class="bi bi-people-fill me-1 text-secondary"></i>"#)
+        html.split(r#"<tr data-group=""#)
             .skip(1)
-            .map(|s| s.split_whitespace().next().unwrap_or_default().to_string())
+            .map(|s| s.split('"').next().unwrap_or_default().to_string())
             .collect()
     }
 
@@ -2912,9 +2912,9 @@ mod groups_page_tests {
         c.insert("server", &server());
         c.insert("groups", &vec![group("Team", -2147483646, false), group("Domain Admins", -2147483646, true)]);
         let html = tera().render("groups.html", &c).unwrap();
-        // One Edit dialog for every group, filled from the row's button.
-        assert_eq!(html.matches(r#"id="editGroupModal""#).count(), 1);
-        assert_eq!(html.matches(r#"<select name="scope""#).count(), 1);
+        // One details panel for every group, filled from the row.
+        assert_eq!(html.matches(r#"id="groupPanel""#).count(), 1);
+        assert_eq!(html.matches(r#"name="scope""#).count(), 1);
         // An ordinary group carries its scope; a built-in one none, so the
         // dialog shows scope and type as fixed and does not send them.
         assert!(html.contains(r#"data-scope="global""#), "{html}");
@@ -3089,9 +3089,9 @@ mod computer_gpo_page_tests {
     }
 
     fn listed(html: &str) -> Vec<String> {
-        html.split(r#" me-1 text-secondary"></i>"#)
+        html.split(r#"<tr data-computer=""#)
             .skip(1)
-            .map(|s| s.split(['\n', '<']).next().unwrap_or_default().trim().to_string())
+            .map(|s| s.split('"').next().unwrap_or_default().to_string())
             .collect()
     }
 

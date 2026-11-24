@@ -1,31 +1,22 @@
-{# The OU and container tree on the left of the Users and Groups pages.
-   Expects `tree` (links: name, depth, is_ou, count, href, active), and
-   `selected`, `nested` and `nested_href` for the "Include nested OUs" switch. #}
+{# The OU and container picker in the toolbar of the Users, Groups and
+   Computers pages. Expects `tree` (links: name, depth, is_ou, count, href,
+   active), and `selected`, `nested` and `nested_href` for "Include nested OUs". #}
 {% if tree %}
-<div class="col-lg-3 col-xxl-2">
-    <div class="card shadow-sm">
-        <div class="card-header bg-white small text-muted text-uppercase">OUs and containers</div>
-        <div class="list-group list-group-flush small" style="max-height: 70vh; overflow-y: auto;">
-            {% for node in tree %}
-            <a href="{{ node.href }}"
-                class="list-group-item list-group-item-action d-flex align-items-center{% if node.active %} active{% endif %}"
-                style="padding-left: {{ node.depth * 0.9 + 0.75 }}rem;"{% if node.active %} aria-current="true"{% endif %}>
-                {% if node.depth == 0 %}<i class="bi bi-diagram-3 me-2"></i>
-                {% elif node.is_ou %}<i class="bi bi-folder2{% if not node.active %} text-warning{% endif %} me-2"></i>
-                {% else %}<i class="bi bi-folder{% if not node.active %} text-secondary{% endif %} me-2"></i>{% endif %}
-                <span class="text-truncate">{{ node.name }}</span>
-                <span class="badge rounded-pill {% if node.active %}bg-light text-dark{% else %}bg-secondary-subtle text-secondary{% endif %} ms-auto">{{ node.count }}</span>
-            </a>
-            {% endfor %}
-        </div>
+<div class="dropdown">
+    <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-folder2 me-1" aria-hidden="true"></i>{% if selected %}{{ selected }}{% else %}All OUs{% endif %}
+    </button>
+    <ul class="dropdown-menu ou-menu">
+        {% for node in tree %}
+        <li><a href="{{ node.href }}" class="dropdown-item{% if node.active %} active{% endif %}" style="padding-left: {{ node.depth * 0.9 + 1 }}rem;"{% if node.active %} aria-current="true"{% endif %}>
+            <i class="bi {% if node.depth == 0 %}bi-diagram-3{% elif node.is_ou %}bi-folder2{% else %}bi-folder{% endif %}" aria-hidden="true"></i>
+            <span class="text-truncate">{{ node.name }}</span><span class="count">{{ node.count }}</span>
+        </a></li>
+        {% endfor %}
         {% if selected %}
-        <div class="card-footer bg-white small">
-            <a href="{{ nested_href }}" class="text-decoration-none">
-                <i class="bi bi-{% if nested %}check-square{% else %}square{% endif %} me-1"></i>Include nested OUs
-            </a>
-        </div>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="{{ nested_href }}"><i class="bi bi-{% if nested %}check-square{% else %}square{% endif %}" aria-hidden="true"></i>Include nested OUs</a></li>
         {% endif %}
-    </div>
+    </ul>
 </div>
 {% endif %}
-

@@ -105,15 +105,10 @@
     let timer = null;
     let asked = 0;
 
-    function segment(name) {
-        return encodeURIComponent(name).replace(/[.!'()*~]/g,
-            c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
-    }
     function hrefFor(f) {
         const base = '/servers/' + serverId;
-        if (f.kind === 'user') return base + '/users#user=' + encodeURIComponent(f.name);
-        if (f.kind === 'group') return base + '/groups/' + segment(f.name) + '/members';
-        return base + '/computers#q=' + encodeURIComponent(f.name);
+        const page = { user: 'users', group: 'groups', computer: 'computers' }[f.kind];
+        return base + '/' + page + '#open=' + encodeURIComponent(f.name);
     }
     function mark() {
         items.forEach((el, i) => {
@@ -220,7 +215,7 @@
     });
     // A link to this same page with another #: the page itself reacts to it.
     results.addEventListener('click', function (e) {
-        if (e.target.closest('.find-item')) bootstrap.Modal.getInstance(dialog).hide();
+        if (e.target.closest('.find-item')) bootstrap.Modal.getOrCreateInstance(dialog).hide();
     });
     window.addEventListener('hashchange', function () {
         const m = dialog.classList.contains('show') && bootstrap.Modal.getInstance(dialog);
@@ -234,19 +229,4 @@
             openSearch();
         }
     });
-
-    // A search result can open a list already narrowed to one name.
-    function applyHashSearch() {
-        const m = location.hash.match(/^#q=(.*)$/);
-        if (!m || !window.EasyTable) return;
-        EasyTable.ready(function () {
-            const box = document.querySelector('tbody[data-search-input]');
-            const field = box && document.getElementById(box.dataset.searchInput);
-            if (!field) return;
-            field.value = decodeURIComponent(m[1]);
-            field.dispatchEvent(new Event('input'));
-        });
-    }
-    applyHashSearch();
-    window.addEventListener('hashchange', applyHashSearch);
 })();

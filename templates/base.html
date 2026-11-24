@@ -310,6 +310,73 @@
         return { allowed: allowed, notice: notice };
     })();
 
+    // One details panel for a whole list, beside it: a click on a row opens it,
+    // a click on another row switches it, and a change brings you back to the
+    // same row. o: table (its EasyTable name), panel (the .offcanvas id), key
+    // (the data-* holding the row's name), fill(row).
+    window.EasyPanel = function (o) {
+        const panel = document.getElementById(o.panel);
+        const saved = 'easydc.open.' + o.table;
+        let current = null;
+
+        function open(row) {
+            if (current) current.classList.remove('is-open');
+            current = row;
+            row.classList.add('is-open');
+            o.fill(row);
+            panel.dispatchEvent(new CustomEvent('easydc:open', { detail: row }));
+            bootstrap.Offcanvas.getOrCreateInstance(panel).show();
+            document.body.classList.add('panel-open');
+            panel.focus({ preventScroll: true });
+        }
+        panel.addEventListener('hidden.bs.offcanvas', function () {
+            document.body.classList.remove('panel-open');
+            // So the same search result can open this row again.
+            if (location.hash.startsWith('#open=')) history.replaceState(null, '', location.pathname + location.search);
+            if (!current) return;
+            const back = current.querySelector('.row-open');
+            current.classList.remove('is-open');
+            current = null;
+            if (back && back.isConnected) back.focus({ preventScroll: true });
+        });
+        document.addEventListener('submit', function (e) {
+            if (!current || !e.target.closest('#' + o.panel + ', .modal, #bulkForm')) return;
+            try {
+                sessionStorage.setItem(saved, JSON.stringify({ at: Date.now(), name: current.dataset[o.key] }));
+            } catch (err) { /* ignore */ }
+        });
+        EasyTable.ready(function () {
+            const list = EasyTable.get(o.table);
+            if (!list) return;
+            list.body.addEventListener('click', function (e) {
+                const row = e.target.closest('tr');
+                if (!row || row.dataset[o.key] === undefined) return;
+                if (e.target.closest('.js-open-row')) return open(row);
+                // The rest of the row opens it too, but not its own controls.
+                if (e.target.closest('a, button, input, label, form, .dropdown-menu') || String(getSelection())) return;
+                open(row);
+            });
+            const byName = name => list.rows.find(r => (r.dataset[o.key] || '').toLowerCase() === name.toLowerCase());
+            function fromHash() {
+                const m = location.hash.match(/^#open=(.*)$/);
+                if (!m) return;
+                let name = '';
+                try { name = decodeURIComponent(m[1]); } catch (e) { return; }
+                const row = byName(name);
+                if (row) open(row);
+            }
+            let back = null;
+            try {
+                back = JSON.parse(sessionStorage.getItem(saved) || 'null');
+                sessionStorage.removeItem(saved);
+            } catch (e) { /* storage blocked */ }
+            if (location.hash) fromHash();
+            else if (back && Date.now() - back.at < 60000 && byName(back.name)) open(byName(back.name));
+            window.addEventListener('hashchange', fromHash);
+        });
+        return { get row() { return current; } };
+    };
+
     document.addEventListener('show.bs.modal', function (e) {
         const modal = e.target;
         if (!modal.classList.contains('js-row-dialog')) return;

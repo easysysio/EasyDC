@@ -3,19 +3,11 @@
 {% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">Group Management</li>
-    </ol>
-</nav>
-
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0">
-        <i class="bi bi-diagram-3 me-2 text-success"></i>Groups{% if selected %}
-        <span class="text-muted fw-normal">in {{ selected }}</span>{% endif %}
-    </h4>
+<div class="page-head">
+    <div>
+        <h1 class="page-title">Groups{% if selected %} <span class="text-muted fw-normal">in {{ selected }}</span>{% endif %}</h1>
+        <div class="page-sub">{{ groups | length }} group{% if groups | length != 1 %}s{% endif %}</div>
+    </div>
     <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addGroupModal" data-needs="groups">
         <i class="bi bi-plus-circle me-1"></i> Add Group
     </button>
@@ -27,13 +19,22 @@
 </div>
 {% endif %}
 
-<div class="row g-4">
-{% include "ou_tree.html" %}
+{% if tree or groups | length > 0 %}
+<div class="toolbar">
+    {% include "ou_tree.html" %}
+    {% if groups | length > 0 %}
+    <div class="toolbar-search">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search" id="listSearch" class="form-control form-control-sm"
+            placeholder="Search name, description, type…" aria-label="Search groups">
+    </div>
+    {% endif %}
+</div>
+{% endif %}
 
-<div class="{% if tree %}col-lg-9 col-xxl-10{% else %}col-12{% endif %}">
 {% if groups | length == 0 and not error %}
 <div class="text-center py-5 text-muted">
-    <i class="bi bi-diagram-3 fs-1"></i>
+    <i class="bi bi-people fs-1"></i>
     {% if any_groups %}
     <p class="mt-3 fs-5">No groups here</p>
     <p class="small">This OU or container holds no groups.{% if not nested and below > 0 %} Turn on <strong>Include nested OUs</strong> to see the groups below it.{% endif %}</p>
@@ -42,74 +43,56 @@
     <p class="small">Click <strong>Add Group</strong> to create the first domain group.</p>
     {% endif %}
 </div>
-{% else %}
-<div class="d-flex mb-3">
-    <input type="search" id="listSearch" class="form-control form-control-sm ms-auto" style="max-width: 16rem;"
-        placeholder="Search name, description, type…" aria-label="Search groups">
-</div>
-<div class="card shadow-sm">
+{% elif groups | length > 0 %}
+<div class="card">
     <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
+        <table class="table table-hover table-rows align-middle mb-0">
             <thead class="table-light">
                 <tr>
                     <th>Name</th>
-                    <th>Description</th>
+                    <th class="d-none d-md-table-cell">Description</th>
+                    {% if show_location %}<th class="d-none d-xl-table-cell">OU</th>{% endif %}
                     <th>Type</th>
                     <th>Members</th>
-                    <th class="text-end">Actions</th>
+                    <th class="text-end"><span class="visually-hidden">Actions</span></th>
                 </tr>
             </thead>
             <tbody data-paged="groups" data-search-input="listSearch">
                 {% for group in groups %}
-                <tr
-                    data-search="{{ group.name }} {{ group.description }} {{ group.group_type_label }}">
-                    <td class="fw-medium">
-                        <i class="bi bi-people-fill me-1 text-secondary"></i>
-                        {{ group.name }}
-                        {% if show_location and group.location %}
-                        <div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ group.location }}</div>
-                        {% endif %}
-                    </td>
-                    <td class="text-muted small">{{ group.description }}</td>
-                    <td>
+                <tr data-group="{{ group.name }}"
+                    data-search="{{ group.name }} {{ group.description }} {{ group.group_type_label }}"
+                    data-description="{{ group.description }}" data-label="{{ group.group_type_label }}"
+                    data-scope="{% if group.scope and not group.system %}{{ group.scope }}{% endif %}"
+                    data-kind="{% if group.security %}security{% else %}distribution{% endif %}"
+                    {% if group.system %}data-system="1"{% endif %}
+                    data-count="{{ group.member_count }}"
+                    data-edit="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/edit{{ view_qs | default(value="") }}"
+                    data-members="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members">
+                    <td><div class="row-name"><span class="avatar" aria-hidden="true"><i class="bi bi-people"></i></span><div class="min-w-0"><button type="button" class="row-open js-open-row">{{ group.name }}</button></div></div></td>
+                    <td class="d-none d-md-table-cell text-muted small">{{ group.description }}</td>
+                    {% if show_location %}<td class="d-none d-xl-table-cell">{% if group.location %}<div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ group.location }}</div>{% endif %}</td>{% endif %}
+                    <td class="status-badges">
                         {% if group.security %}
-                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">
-                            {{ group.group_type_label }}
-                        </span>
+                        <span class="badge bg-primary-subtle text-primary-emphasis">{{ group.group_type_label }}</span>
                         {% else %}
-                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">
-                            {{ group.group_type_label }}
-                        </span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis">{{ group.group_type_label }}</span>
                         {% endif %}
                     </td>
-                    <td>
-                        <a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members"
-                            class="badge bg-light text-dark border text-decoration-none">
-                            <i class="bi bi-people me-1"></i>{{ group.member_count }}
-                        </a>
-                    </td>
+                    <td><a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members" class="text-decoration-none" title="Manage members of {{ group.name }}"><i class="bi bi-people me-1" aria-hidden="true"></i>{{ group.member_count }}</a></td>
                     <td class="text-end" data-needs="groups">
-                        <div class="btn-group btn-group-sm">
+                        <div class="btn-group btn-group-sm row-actions row-actions-wide">
                             <a href="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/members"
-                                class="btn btn-outline-primary btn-sm" title="Manage members">
+                                class="btn btn-outline-secondary btn-sm" title="Manage members" aria-label="Manage members of {{ group.name }}">
                                 <i class="bi bi-person-lines-fill"></i>
                             </a>
-                            <button type="button" class="btn btn-outline-secondary btn-sm"
-                                data-bs-toggle="modal" data-bs-target="#editGroupModal"
-                                data-name="{{ group.name }}" data-description="{{ group.description }}"
-                                data-url="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/edit{{ view_qs | default(value="") }}"
-                                data-label="{{ group.group_type_label }}"
-                                data-scope="{% if group.scope and not group.system %}{{ group.scope }}{% endif %}"
-                                data-kind="{% if group.security %}security{% else %}distribution{% endif %}"
-                                {% if group.system %}data-system="1"{% endif %}
-                                title="Edit" data-needs="">
+                            <button type="button" class="btn btn-outline-secondary btn-sm js-open-row" title="Open details" aria-label="Open details for {{ group.name }}" data-needs="">
                                 <i class="bi bi-pencil"></i>
                             </button>
-                            <button type="button" class="btn btn-outline-danger btn-sm"
+                            <button type="button" class="btn btn-outline-secondary btn-sm js-delete"
                                 data-bs-toggle="modal" data-bs-target="#deleteGroupModal"
                                 data-name="{{ group.name }}"
                                 data-url="/servers/{{ server.id }}/groups/{{ group.name | urlencode_strict }}/delete{{ view_qs | default(value="") }}"
-                                title="Delete">
+                                title="Delete" aria-label="Delete {{ group.name }}">
                                 <i class="bi bi-trash"></i>
                             </button>
                         </div>
@@ -117,15 +100,13 @@
                 </tr>
                 {% endfor %}
                 <tr class="js-no-match d-none">
-                    <td colspan="5" class="text-center text-muted py-4">No group matches the search.</td>
+                    <td colspan="{% if show_location %}6{% else %}5{% endif %}" class="text-center text-muted py-4">No group matches the search.</td>
                 </tr>
             </tbody>
         </table>
     </div>
 </div>
 {% endif %}
-</div>
-</div>
 
 <!-- ── Add Group Modal ───────────────────────────────────────────────────── -->
 <div class="modal fade" id="addGroupModal" tabindex="-1">
@@ -140,7 +121,7 @@
                     <p class="small text-muted">
                         <i class="bi bi-folder2 me-1"></i>Created in
                         <strong>{% if create_in %}{{ create_in }}{% else %}Users{% endif %}</strong>{% if not create_in %},
-                        the default container.{% if not selected %} Pick an OU on the left to create the group there.{% endif %}{% endif %}
+                        the default container.{% if not selected %} Pick an OU above the list to create the group there.{% endif %}{% endif %}
                     </p>
                     <div class="mb-3">
                         <label class="form-label">Group Name <span class="text-danger">*</span></label>
@@ -173,77 +154,104 @@
     </div>
 </div>
 
-<!-- ── Edit: one dialog, filled from the row's button ──────────────────── -->
-<div class="modal fade js-row-dialog" id="editGroupModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-pencil me-1"></i> Edit — <span data-fill="name"></span>
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="post" data-fill-action data-needs="groups">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">Group Name</label>
-                        <input type="text" class="form-control" data-fill="name" disabled>
-                        <div class="form-text">Group name cannot be changed here.</div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Description</label>
-                        <input type="text" name="description" class="form-control" data-fill="description">
-                    </div>
-                    <!-- A built-in group, or one of no known scope, keeps its scope and type. -->
-                    <div class="mb-1 text-muted small js-fixed">
-                        <i class="bi bi-lock me-1"></i>
-                        <span data-fill="label"></span><span class="js-builtin">: a built-in group, so its scope and type stay as they are</span>.
-                    </div>
-                    <div class="js-changeable">
-                        <div class="row">
-                            <div class="col mb-3">
-                                <label class="form-label">Scope</label>
-                                <select name="scope" class="form-select" data-fill="scope">
-                                    <option value="global">Global</option>
-                                    <option value="domain_local">Domain Local</option>
-                                    <option value="universal">Universal</option>
-                                </select>
-                            </div>
-                            <div class="col mb-3">
-                                <label class="form-label">Type</label>
-                                <select name="kind" class="form-select" data-fill="kind">
-                                    <option value="security">Security</option>
-                                    <option value="distribution">Distribution</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="form-text">
-                            Global and domain local change only through universal. A change that would
-                            break this group's memberships is refused, with the reason.
-                            Distribution groups are for email lists and do not grant access.
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Changes</button>
-                </div>
-            </form>
+<!-- ── The details panel: one for every group, filled from the row ───────── -->
+<div class="offcanvas offcanvas-end app-panel" id="groupPanel" tabindex="-1" aria-labelledby="groupPanelTitle" data-bs-scroll="true" data-bs-backdrop="false">
+    <div class="offcanvas-header">
+        <span class="avatar avatar-lg" aria-hidden="true"><i class="bi bi-people"></i></span>
+        <div class="min-w-0 flex-grow-1">
+            <h2 class="offcanvas-title h5 text-truncate" id="groupPanelTitle"></h2>
+            <div class="small text-muted text-truncate js-panel-sub"></div>
         </div>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close details"></button>
+    </div>
+    <div class="panel-actions">
+        <a class="btn btn-outline-secondary btn-sm js-panel-members"><i class="bi bi-person-lines-fill me-1" aria-hidden="true"></i>Manage members</a>
+        <span class="ms-auto" data-needs="groups">
+            <button type="button" class="btn btn-outline-danger btn-sm js-panel-delete" data-bs-toggle="modal" data-bs-target="#deleteGroupModal"><i class="bi bi-trash me-1" aria-hidden="true"></i>Delete</button>
+        </span>
+    </div>
+    <div class="panel-body border-top">
+        <form method="post" class="js-group-form" data-needs="groups">
+            <div class="panel-section">
+                <div class="mb-3">
+                    <label class="form-label" for="groupPanelName">Group Name</label>
+                    <input type="text" id="groupPanelName" class="form-control js-group-name" disabled>
+                    <div class="form-text">Group name cannot be changed here.</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="groupPanelDescription">Description</label>
+                    <input type="text" id="groupPanelDescription" name="description" class="form-control">
+                </div>
+                <!-- A built-in group, or one of no known scope, keeps its scope and type. -->
+                <div class="mb-1 text-muted small js-fixed">
+                    <i class="bi bi-lock me-1"></i>
+                    <span class="js-label"></span><span class="js-builtin">: a built-in group, so its scope and type stay as they are</span>.
+                </div>
+                <div class="js-changeable">
+                    <div class="row">
+                        <div class="col mb-3">
+                            <label class="form-label" for="groupPanelScope">Scope</label>
+                            <select id="groupPanelScope" name="scope" class="form-select">
+                                <option value="global">Global</option>
+                                <option value="domain_local">Domain Local</option>
+                                <option value="universal">Universal</option>
+                            </select>
+                        </div>
+                        <div class="col mb-3">
+                            <label class="form-label" for="groupPanelKind">Type</label>
+                            <select id="groupPanelKind" name="kind" class="form-select">
+                                <option value="security">Security</option>
+                                <option value="distribution">Distribution</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-text">
+                        Global and domain local change only through universal. A change that would
+                        break this group's memberships is refused, with the reason.
+                        Distribution groups are for email lists and do not grant access.
+                    </div>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="offcanvas">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
     </div>
 </div>
 
 <script>
 // Scope and type are offered only for ordinary groups. When they are hidden
 // they are also disabled, so the form does not send them.
-document.getElementById('editGroupModal').addEventListener('show.bs.modal', function (event) {
-    const data = event.relatedTarget ? event.relatedTarget.dataset : {};
-    const fixed = !data.scope;
-    this.querySelector('.js-fixed').classList.toggle('d-none', !fixed);
-    this.querySelector('.js-builtin').classList.toggle('d-none', !data.system);
-    this.querySelector('.js-changeable').classList.toggle('d-none', fixed);
-    this.querySelectorAll('.js-changeable select').forEach(el => { el.disabled = fixed; });
-});
+(function () {
+    const panel = document.getElementById('groupPanel');
+    const form = panel.querySelector('.js-group-form');
+    EasyPanel({ table: 'groups', panel: 'groupPanel', key: 'group', fill: function (row) {
+        const data = row.dataset;
+        const fixed = !data.scope;
+        const members = Number(data.count);
+        panel.querySelector('#groupPanelTitle').textContent = data.group;
+        panel.querySelector('.js-panel-sub').textContent = data.label + ' · ' + members.toLocaleString() + (members === 1 ? ' member' : ' members');
+        panel.querySelector('.js-panel-members').href = data.members;
+        const del = panel.querySelector('.js-panel-delete');
+        const source = row.querySelector('.js-delete');
+        del.dataset.name = source.dataset.name;
+        del.dataset.url = source.dataset.url;
+        form.reset();
+        form.action = data.edit;
+        form.querySelector('.js-group-name').value = data.group;
+        form.elements.description.value = data.description || '';
+        form.querySelector('.js-label').textContent = data.label;
+        form.querySelector('.js-fixed').classList.toggle('d-none', !fixed);
+        form.querySelector('.js-builtin').classList.toggle('d-none', !data.system);
+        form.querySelector('.js-changeable').classList.toggle('d-none', fixed);
+        form.querySelectorAll('.js-changeable select').forEach(el => { el.disabled = fixed; });
+        if (!fixed) {
+            form.elements.scope.value = data.scope;
+            form.elements.kind.value = data.kind;
+        }
+    } });
+})();
 </script>
 
 <!-- Delete: one dialog, filled from the row's button -->

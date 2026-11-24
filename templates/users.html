@@ -37,25 +37,7 @@
     <div>
         {% if statuses or tree %}
         <div class="toolbar">
-            {% if tree %}
-            <div class="dropdown">
-                <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="bi bi-folder2 me-1" aria-hidden="true"></i>{% if selected %}{{ selected }}{% else %}All OUs{% endif %}
-                </button>
-                <ul class="dropdown-menu ou-menu">
-                    {% for node in tree %}
-                    <li><a href="{{ node.href }}" class="dropdown-item{% if node.active %} active{% endif %}" style="padding-left: {{ node.depth * 0.9 + 1 }}rem;"{% if node.active %} aria-current="true"{% endif %}>
-                        <i class="bi {% if node.depth == 0 %}bi-diagram-3{% elif node.is_ou %}bi-folder2{% else %}bi-folder{% endif %}" aria-hidden="true"></i>
-                        <span class="text-truncate">{{ node.name }}</span><span class="count">{{ node.count }}</span>
-                    </a></li>
-                    {% endfor %}
-                    {% if selected %}
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item" href="{{ nested_href }}"><i class="bi bi-{% if nested %}check-square{% else %}square{% endif %}" aria-hidden="true"></i>Include nested OUs</a></li>
-                    {% endif %}
-                </ul>
-            </div>
-            {% endif %}
+            {% include "ou_tree.html" %}
             {% if statuses %}
             <div class="d-flex flex-wrap gap-1" role="group" aria-label="Filter by account status">
                 {% for st in statuses %}
@@ -134,7 +116,7 @@
                         {% for user in users %}
 <tr data-search="{{ user.username }} {{ user.display_name }} {{ user.description }} {{ user.email }} {{ user.title }} {{ user.department }}" data-user="{{ user.username }}" data-name="{{ user.display_name }}" data-first="{{ user.first_name }}" data-last="{{ user.last_name }}" data-email="{{ user.email }}" data-description="{{ user.description }}" data-title="{{ user.title }}" data-department="{{ user.department }}" data-office="{{ user.office }}" data-manager="{{ user.manager }}" data-phone="{{ user.phone }}" data-mobile="{{ user.mobile }}" data-expires="{{ user.expires }}" data-enabled="{{ user.enabled }}" data-locked="{{ user.locked }}">
 <td><input type="checkbox" class="form-check-input js-select" value="{{ user.username }}" aria-label="Select {{ user.username }}"></td>
-<td><div class="row-name"><span class="avatar" aria-hidden="true">{% if user.first_name and user.last_name %}{{ user.first_name | truncate(length=1, end="") | upper }}{{ user.last_name | truncate(length=1, end="") | upper }}{% else %}{{ user.username | truncate(length=2, end="") | upper }}{% endif %}</span><div class="min-w-0"><button type="button" class="row-open js-open-user">{% if user.display_name %}{{ user.display_name }}{% else %}{{ user.username }}{% endif %}</button><div class="small text-muted text-break">{{ user.username }}</div></div></div></td>
+<td><div class="row-name"><span class="avatar" aria-hidden="true">{% if user.first_name and user.last_name %}{{ user.first_name | truncate(length=1, end="") | upper }}{{ user.last_name | truncate(length=1, end="") | upper }}{% else %}{{ user.username | truncate(length=2, end="") | upper }}{% endif %}</span><div class="min-w-0"><button type="button" class="row-open js-open-row">{% if user.display_name %}{{ user.display_name }}{% else %}{{ user.username }}{% endif %}</button><div class="small text-muted text-break">{{ user.username }}</div></div></div></td>
 <td class="d-none d-md-table-cell small">{% if user.title or user.department %}<div>{{ user.title }}{% if user.title and user.department %} · {% endif %}{{ user.department }}</div>{% endif %}{% if user.email %}<div class="text-muted text-break">{{ user.email }}</div>{% endif %}{% if user.description %}<div class="text-muted text-break">{{ user.description }}</div>{% endif %}</td>
 {% if show_location %}<td class="d-none d-xl-table-cell">{% if user.location %}<div class="small text-muted fw-normal"><i class="bi bi-folder2 me-1"></i>{{ user.location }}</div>{% endif %}</td>{% endif %}
 <td class="d-none d-lg-table-cell small text-muted text-nowrap js-seen"{% if user.last_sign_in %} data-at="{{ user.last_sign_in }}"{% endif %}>{% if not user.last_sign_in %}Never{% endif %}</td>
@@ -149,7 +131,7 @@
 <td class="text-end" data-needs="users"><div class="btn-group btn-group-sm row-actions">
 <form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/toggle{{ view_qs }}" class="d-inline">{% if user.enabled %}<input type="hidden" name="enable" value="false"><button type="submit" class="btn btn-outline-warning btn-sm" title="Disable account" aria-label="Disable {{ user.username }}"><i class="bi bi-pause-circle"></i></button>{% else %}<input type="hidden" name="enable" value="true"><button type="submit" class="btn btn-outline-success btn-sm" title="Enable account" aria-label="Enable {{ user.username }}"><i class="bi bi-play-circle"></i></button>{% endif %}</form>
 {% if user.locked %}<form method="post" action="/servers/{{ server.id }}/users/{{ user.username | urlencode_strict }}/unlock{{ view_qs }}" class="d-inline"><button type="submit" class="btn btn-outline-warning btn-sm" title="Unlock account" aria-label="Unlock {{ user.username }}"><i class="bi bi-unlock"></i></button></form>
-{% endif %}<button type="button" class="btn btn-outline-secondary btn-sm js-open-user" title="Open details" aria-label="Open details for {{ user.username }}" data-needs=""><i class="bi bi-pencil"></i></button>
+{% endif %}<button type="button" class="btn btn-outline-secondary btn-sm js-open-row" title="Open details" aria-label="Open details for {{ user.username }}" data-needs=""><i class="bi bi-pencil"></i></button>
 <div class="btn-group btn-group-sm"><button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="More actions" aria-label="More actions for {{ user.username }}"><i class="bi bi-three-dots"></i></button>
 <ul class="dropdown-menu dropdown-menu-end"><li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#resetUserModal"><i class="bi bi-key me-2"></i>Reset password</button></li><li><button type="button" class="dropdown-item js-move-one"><i class="bi bi-folder-symlink me-2"></i>Move to another OU</button></li><li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#deleteUserModal"><i class="bi bi-trash me-2"></i>Delete</button></li></ul></div>
 </div></td>
@@ -183,7 +165,7 @@
                     <p class="small text-muted">
                         <i class="bi bi-folder2 me-1"></i>Created in
                         <strong>{% if create_in %}{{ create_in }}{% else %}Users{% endif %}</strong>{% if not create_in %},
-                        the default container.{% if not selected %} Pick an OU on the left to create the user there.{% endif %}{% endif %}
+                        the default container.{% if not selected %} Pick an OU above the list to create the user there.{% endif %}{% endif %}
                     </p>
                     <div class="mb-3">
                         <label class="form-label">Username <span class="text-danger">*</span></label>
@@ -592,10 +574,9 @@ const editFields = {
     title: 'title', department: 'department', office: 'office', manager: 'manager',
     phone: 'phone', mobile: 'mobile', expires: 'expires',
 };
-let openRow = null;
 function rowFor(trigger) {
     if (!trigger) return null;
-    return trigger.closest('#userPanel') ? openRow : trigger.closest('tr');
+    return trigger.closest('#userPanel') ? details.row : trigger.closest('tr');
 }
 function signedIn(unix) {
     if (!unix) return 'Never';
@@ -614,10 +595,7 @@ function showSeen(rows) {
         cell.title = new Date(cell.dataset.at * 1000).toLocaleString();
     });
 }
-function openUser(row) {
-    if (openRow) openRow.classList.remove('is-open');
-    openRow = row;
-    row.classList.add('is-open');
+function fillUser(row) {
     const data = row.dataset;
     const enabled = data.enabled === 'true';
     userPanel.querySelector('#userPanelTitle').textContent = data.name || data.user;
@@ -643,21 +621,8 @@ function openUser(row) {
     form.reset();
     form.action = userUrl(data.user, 'edit');
     Object.entries(editFields).forEach(([name, key]) => { form.elements[name].value = data[key] || ''; });
-    userPanel.dispatchEvent(new CustomEvent('easydc:user', { detail: row }));
-    bootstrap.Offcanvas.getOrCreateInstance(userPanel).show();
-    document.body.classList.add('panel-open');
-    userPanel.focus({ preventScroll: true });
 }
-userPanel.addEventListener('hidden.bs.offcanvas', function () {
-    document.body.classList.remove('panel-open');
-    // So the same search result can open this user again.
-    if (location.hash.startsWith('#user=')) history.replaceState(null, '', location.pathname + location.search);
-    if (!openRow) return;
-    const back = openRow.querySelector('.row-open');
-    openRow.classList.remove('is-open');
-    openRow = null;
-    if (back && back.isConnected) back.focus({ preventScroll: true });
-});
+const details = EasyPanel({ table: 'users', panel: 'userPanel', key: 'user', fill: fillUser });
 userActions.querySelectorAll('.modal').forEach(function (modal) {
     modal.addEventListener('show.bs.modal', function (event) {
         const row = rowFor(event.relatedTarget);
@@ -669,38 +634,11 @@ userActions.querySelectorAll('.modal').forEach(function (modal) {
         form.action = userUrl(data.user, form.dataset.path);
     });
 });
-// After a change the page reloads: come back to the same user.
-userActions.addEventListener('submit', function () {
-    if (!openRow) return;
-    try { sessionStorage.setItem('easydc.openUser', JSON.stringify({ at: Date.now(), user: openRow.dataset.user })); } catch (e) { /* ignore */ }
-});
 EasyTable.ready(function () {
     const list = EasyTable.get('users');
     if (!list) return;
     showSeen(list.shown);
     list.on(t => showSeen(t.shown));
-    list.body.addEventListener('click', function (e) {
-        const row = e.target.closest('tr[data-user]');
-        if (!row) return;
-        if (e.target.closest('.js-open-user')) return openUser(row);
-        // The rest of the row opens it too, but not its own controls.
-        if (e.target.closest('a, button, input, label, form, .dropdown-menu') || String(getSelection())) return;
-        openUser(row);
-    });
-    const byName = name => list.rows.find(r => r.dataset.user.toLowerCase() === name.toLowerCase());
-    function fromHash() {
-        const m = location.hash.match(/^#user=(.*)$/);
-        const row = m && byName(decodeURIComponent(m[1]));
-        if (row) openUser(row);
-    }
-    let back = null;
-    try {
-        back = JSON.parse(sessionStorage.getItem('easydc.openUser') || 'null');
-        sessionStorage.removeItem('easydc.openUser');
-    } catch (e) { /* storage blocked */ }
-    if (location.hash) fromHash();
-    else if (back && Date.now() - back.at < 60000 && byName(back.user)) openUser(byName(back.user));
-    window.addEventListener('hashchange', fromHash);
 });
 
 // The panel's Groups tab: read when it is opened, changed in place.
@@ -798,7 +736,7 @@ EasyTable.ready(function () {
     input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); addButton.click(); }
     });
-    modal.addEventListener('easydc:user', function (event) {
+    modal.addEventListener('easydc:open', function (event) {
         user = event.detail.dataset.user;
         dn = null;
         input.value = '';
@@ -870,7 +808,7 @@ EasyTable.ready(function () {
         await load();
         say('Saved.', true);
     });
-    modal.addEventListener('easydc:user', function (event) {
+    modal.addEventListener('easydc:open', function (event) {
         user = event.detail.dataset.user;
         say(null);
         ready(false);
@@ -1042,7 +980,7 @@ EasyTable.ready(function () {
 // Select users and act on them at once (bulk.html); adding them to a group is the Users page's own.
 EasyBulk.setup({ table: 'users', one: 'user', many: 'users' }, function (bulk) {
     userPanel.querySelector('.js-panel-move').addEventListener('click', function () {
-        if (openRow) bulk.openMove([openRow.dataset.user]);
+        if (details.row) bulk.openMove([details.row.dataset.user]);
     });
     document.getElementById('groupGo').addEventListener('click', function () {
         const group = document.getElementById('groupTarget').value.trim();

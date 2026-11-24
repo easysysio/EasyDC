@@ -249,7 +249,7 @@ nav[aria-label="breadcrumb"].mb-4 { margin-bottom: .75rem !important; }
 }
 .table > thead th { font-size: .75rem; font-weight: 500; white-space: nowrap; }
 .table-rows > tbody > tr > td { padding-top: .45rem; padding-bottom: .45rem; }
-.table-rows > tbody > tr[data-user] { cursor: pointer; }
+.table-rows > tbody > tr:not(.js-no-match) { cursor: pointer; }
 .table-rows > tbody > tr.is-open > td { background: var(--ed-accent-soft); box-shadow: none; }
 
 .row-name { display: flex; align-items: center; gap: .6rem; min-width: 0; }
@@ -271,7 +271,7 @@ tr:hover .row-actions, tr:focus-within .row-actions, tr.is-open .row-actions, .r
 
 /* On a phone a tap on the row opens everything; only the menu stays in it. */
 @media (max-width: 575.98px) {
-    .row-actions > form, .row-actions > .js-open-user { display: none; }
+    .row-actions > form, .row-actions > .js-open-row, .row-actions-wide { display: none !important; }
     .table-rows .avatar { display: none; }
     .toolbar-search { flex: 1 1 100%; margin-left: 0; }
 }
@@ -302,6 +302,11 @@ tr:hover .row-actions, tr:focus-within .row-actions, tr.is-open .row-actions, .r
     body.panel-open .app-panel { box-shadow: none; }
     body.panel-open .app-topbar { margin-right: -31rem; }
 }
+
+/* A name and its value, in a panel. */
+.detail-list { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); gap: .55rem 1rem; }
+.detail-list dt { font-weight: 400; color: var(--ed-muted); }
+.detail-list dd { margin: 0; overflow-wrap: anywhere; }
 
 /* ── the overview ────────────────────────────────────────────────────────── */
 
