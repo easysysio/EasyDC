@@ -270,12 +270,17 @@ tr:hover .row-actions, tr:focus-within .row-actions, tr.is-open .row-actions, .r
 .badge { font-weight: 500; }
 .status-badges .badge { border: 0 !important; margin: 0 .2rem .1rem 0; }
 .status-badges .badge i { display: none; }
+/* Breaks a long name only where it must, never mid-word to make room. */
+.name-break { overflow-wrap: break-word; min-width: 0; }
 
 /* On a phone a tap on the row opens everything; only the menu stays in it. */
 @media (max-width: 575.98px) {
     .row-actions > form, .row-actions > .js-open-row, .row-actions-wide { display: none !important; }
     .table-rows .avatar { display: none; }
     .toolbar-search { flex: 1 1 100%; margin-left: 0; }
+    /* A long badge wraps rather than squeezing the name. */
+    .status-badges .badge { white-space: normal; text-align: left; }
+    .table-rows td.status-badges.js-status { width: 1%; }
 }
 
 /* ── the details panel ───────────────────────────────────────────────────── */

@@ -13,6 +13,7 @@ hide:
 <span class="es-brand-name">Easy<span>DC</span></span>
 </a>
 <nav class="es-nav-links" aria-label="Page sections">
+<a href="#tour">Tour</a>
 <a href="#manage">Manage</a>
 <a href="#health">Health check</a>
 <a href="#architecture">Architecture</a>
@@ -80,6 +81,22 @@ Get started
 <span>Air-gapped .deb / .rpm</span>
 <span class="es-mono">x86_64 · arm64</span>
 </div>
+</div>
+</div>
+</section>
+<section id="tour" class="es-band es-section">
+<div class="es-wrap">
+<div class="es-head--stack">
+<span class="es-kicker-lg">A quick tour</span>
+<h2 class="es-h2">One console for the whole domain.</h2>
+<p class="es-desc">A sidebar with the current server always in view, details beside the list, search with Ctrl-K, and light and dark mode. It works on a phone too. The screenshots show a test domain with made-up people.</p>
+</div>
+<figure class="es-shot es-shot--main"><img src="assets/screenshots/users.png" alt="The Users page, with a user's details open beside the list" loading="lazy" /></figure>
+<div class="es-shots">
+<figure class="es-shot"><img src="assets/screenshots/overview.png" alt="Overview of a domain: counts, what needs attention, and replication" loading="lazy" /><figcaption>Overview: what needs attention, and replication</figcaption></figure>
+<figure class="es-shot"><img src="assets/screenshots/search.png" alt="Search across users, groups, computers and pages" loading="lazy" /><figcaption>Search users, groups, computers and pages</figcaption></figure>
+<figure class="es-shot"><img src="assets/screenshots/users-dark.png" alt="The Users page in dark mode" loading="lazy" /><figcaption>Dark mode</figcaption></figure>
+<figure class="es-shot"><img src="assets/screenshots/health.png" alt="The domain health check in dark mode" loading="lazy" /><figcaption>The domain health check</figcaption></figure>
 </div>
 </div>
 </section>

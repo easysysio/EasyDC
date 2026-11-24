@@ -5,6 +5,8 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 
 📖 **Documentation: [easydc.easysys.io](https://easydc.easysys.io)**
 
+![The Users page, with a user's details open beside the list](docs/assets/screenshots/users.png)
+
 ---
 
 ## Features
@@ -26,6 +28,16 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 - **HTTPS built in** — a self-signed certificate from the first start, or your own from Settings
 - **Two-factor sign-in** — an authenticator app for local accounts, with recovery codes
 - **First-run setup** — guided setup wizard on fresh install; no config files needed
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Overview of a domain: counts, what needs attention, and replication](docs/assets/screenshots/overview.png) | ![Search across users, groups, computers and pages with Ctrl-K](docs/assets/screenshots/search.png) |
+| ![The Users page in dark mode](docs/assets/screenshots/users-dark.png) | ![A group's details in the side panel](docs/assets/screenshots/groups.png) |
+| ![The domain health check](docs/assets/screenshots/health.png) | ![The Users page on a phone](docs/assets/screenshots/mobile.png) |
+
+The screenshots show a test domain with made-up people.
 
 ## Tech Stack
 
