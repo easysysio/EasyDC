@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- New look, started: a sidebar with the current server always in view, a domain Overview, search with Ctrl-K or ⌘K, light and dark mode, and details in a side panel for users, groups, computers, OUs, GPOs and DNS records.
+- New look: a sidebar with the current server always in view, a domain Overview, search with Ctrl-K or ⌘K, light and dark mode, and details in a side panel for users, groups, computers, OUs, GPOs and DNS records.
 
 ## [0.6.0] - 2026-11-23
 

@@ -1,28 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Sites and subnets - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">Sites and Subnets</li>
-    </ol>
-</nav>
-
-<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2">
-    <h4 class="mb-0"><i class="bi bi-geo-alt me-2 text-success"></i>Sites and Subnets</h4>
-    {% if t %}
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addSiteModal" data-needs="sites">
-        <i class="bi bi-plus-lg me-1"></i> Add Site
-    </button>
-    {% endif %}
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Sites and subnets</h1>
+        <div class="page-sub">A site is a place with a fast network, such as an office. A computer finds the site it is in by its address, from the subnets, and then uses a DC in that site. Site links say which sites replicate with each other, and how often.</div>
+    </div>
+    {% if t %}<button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addSiteModal" data-needs="sites"><i class="bi bi-plus-circle me-1"></i> Add Site</button>{% endif %}
 </div>
-<p class="text-muted small mb-4">
-    A site is a place with a fast network, such as an office. A computer finds the site it is in
-    by its address, from the subnets, and then uses a DC in that site. Site links say which sites
-    replicate with each other, and how often.
-</p>
 
 {% if error %}
 <div class="alert alert-danger">

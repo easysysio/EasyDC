@@ -1,12 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Dashboard - EasyDC{% endblock %}
+{% block title %}Servers - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0"><i class="bi bi-server me-2 text-primary"></i>DC Servers</h4>
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addServerModal" data-needs="admin">
-        <i class="bi bi-plus-circle me-1"></i> Add Server
-    </button>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Servers</h1>
+        <div class="page-sub">{{ servers | length }} domain{% if servers | length != 1 %}s{% endif %} managed by this EasyDC</div>
+    </div>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addServerModal" data-needs="admin"><i class="bi bi-plus-circle me-1"></i> Add Server</button>
 </div>
 
 {% if check %}
@@ -23,45 +25,46 @@
     <p class="small">Click <strong>Add Server</strong> to connect your first Samba DC.</p>
 </div>
 {% else %}
-<div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4">
+<div class="row row-cols-1 row-cols-md-2 row-cols-xxl-3 g-3">
     {% for server in servers %}
     <div class="col">
-        <div class="card h-100 shadow-sm">
+        <div class="card h-100 server-card">
             <div class="card-body">
-                <h5 class="card-title">
-                    <i class="bi bi-server text-primary me-1"></i> {{ server.name }}
-                </h5>
-                <p class="card-text text-muted small mb-1">
-                    <i class="bi bi-link-45deg"></i> {{ server.ldap_url }}
-                </p>
-                <p class="card-text text-muted small mb-1">
-                    <i class="bi bi-layers"></i> <span class="js-server-level" data-url="/servers/{{ server.id }}/level">Functional level…</span>
-                </p>
-                <p class="card-text text-muted small mb-2">
-                    <i class="bi bi-person-badge"></i> {{ server.bind_dn }}
-                </p>
+                <div class="d-flex align-items-start gap-3 mb-3">
+                    <span class="avatar avatar-lg" aria-hidden="true"><i class="bi bi-hdd-network"></i></span>
+                    <div class="min-w-0">
+                        <h2 class="h6 mb-0 text-truncate"><a class="stretched-link text-reset text-decoration-none" href="/servers/{{ server.id }}">{{ server.name }}</a></h2>
+                        <div class="small text-muted text-truncate">{{ server.ldap_url }}</div>
+                    </div>
+                </div>
+                <dl class="detail-list small mb-3">
+                    <dt>Level</dt><dd><span class="js-server-level" data-short data-url="/servers/{{ server.id }}/level">Level…</span></dd>
+                    <dt>Signs in as</dt><dd class="text-break">{{ server.bind_dn }}</dd>
+                </dl>
+                <div class="status-badges">
                 {% if server.ldap_url is not starting_with("ldaps://") and server.ldap_url is not starting_with("LDAPS://") %}
-                <span class="badge bg-danger"><i class="bi bi-shield-x me-1"></i>Not encrypted</span>
+                <span class="badge bg-danger-subtle text-danger-emphasis"><i class="bi bi-shield-x me-1"></i>Not encrypted</span>
                 {% elif server.skip_tls %}
-                <span class="badge bg-warning text-dark" title="Encrypted, but the DC's certificate is not checked"><i class="bi bi-shield-exclamation me-1"></i>Certificate not checked</span>
+                <span class="badge bg-warning-subtle text-warning-emphasis" title="Encrypted, but the DC's certificate is not checked"><i class="bi bi-shield-exclamation me-1"></i>Certificate not checked</span>
                 {% else %}
-                <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Certificate checked</span>
+                <span class="badge bg-success-subtle text-success-emphasis"><i class="bi bi-shield-check me-1"></i>Certificate checked</span>
                 {% endif %}
+                </div>
             </div>
-            <div class="card-footer bg-transparent d-flex gap-2">
-                <a href="/servers/{{ server.id }}" class="btn btn-primary btn-sm flex-fill">
-                    <i class="bi bi-gear me-1"></i> Manage
+            <div class="card-footer bg-transparent d-flex gap-2 server-card-actions">
+                <a href="/servers/{{ server.id }}" class="btn btn-outline-secondary btn-sm flex-fill">
+                    Open <i class="bi bi-arrow-right ms-1"></i>
                 </a>
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-needs="admin"
                     data-bs-toggle="modal"
                     data-bs-target="#editModal{{ server.id }}"
-                    title="Edit">
+                    title="Edit" aria-label="Edit {{ server.name }}">
                     <i class="bi bi-pencil"></i>
                 </button>
-                <button type="button" class="btn btn-outline-danger btn-sm" data-needs="admin"
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-needs="admin"
                     data-bs-toggle="modal"
                     data-bs-target="#deleteModal{{ server.id }}"
-                    title="Delete">
+                    title="Delete" aria-label="Delete {{ server.name }}">
                     <i class="bi bi-trash"></i>
                 </button>
             </div>

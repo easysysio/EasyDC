@@ -1,26 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Replication - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">Replication</li>
-    </ol>
-</nav>
-
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div class="d-flex align-items-center">
-        <i class="bi bi-arrow-left-right fs-2 text-info me-3"></i>
-        <div>
-            <h4 class="mb-0">Replication</h4>
-            <small class="text-muted">What each domain controller receives, from whom, and when it last worked</small>
-        </div>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Replication</h1>
+        <div class="page-sub">What each domain controller receives, from whom, and when it last worked</div>
     </div>
-    <a href="/servers/{{ server.id }}/replication" class="btn btn-outline-secondary btn-sm">
-        <i class="bi bi-arrow-clockwise me-1"></i> Refresh
-    </a>
+    <a href="/servers/{{ server.id }}/replication" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>Check again</a>
 </div>
 
 {% if error %}

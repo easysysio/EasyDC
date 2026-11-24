@@ -1,25 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Health Check - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">Health Check</li>
-    </ol>
-</nav>
-
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h4 class="mb-0"><i class="bi bi-clipboard-pulse me-2 text-primary"></i>Domain Health Check</h4>
-        <small class="text-muted">
-            {% if report %}{{ report.domain }} — completed in {{ report.elapsed_ms }} ms{% else %}{{ server.ldap_url }}{% endif %}
-        </small>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Health check</h1>
+        <div class="page-sub">{% if report %}{{ report.domain }} · checked in {{ report.elapsed_ms }} ms{% else %}{{ server.ldap_url }}{% endif %}</div>
     </div>
-    <a href="/servers/{{ server.id }}/health" class="btn btn-outline-primary btn-sm">
-        <i class="bi bi-arrow-clockwise me-1"></i> Re-run
-    </a>
+    <a href="/servers/{{ server.id }}/health" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>Check again</a>
 </div>
 
 {% if error %}
@@ -33,42 +22,14 @@
 {% endif %}
 
 {% if report %}
-<div class="row row-cols-2 row-cols-md-4 g-3 mb-4">
-    <div class="col">
-        <div class="card shadow-sm border-danger-subtle h-100">
-            <div class="card-body text-center py-3">
-                <div class="fs-3 fw-bold text-danger">{{ report.fail_count }}</div>
-                <div class="small text-muted">Failed</div>
-            </div>
-        </div>
-    </div>
-    <div class="col">
-        <div class="card shadow-sm border-warning-subtle h-100">
-            <div class="card-body text-center py-3">
-                <div class="fs-3 fw-bold text-warning">{{ report.warn_count }}</div>
-                <div class="small text-muted">Warnings</div>
-            </div>
-        </div>
-    </div>
-    <div class="col">
-        <div class="card shadow-sm border-success-subtle h-100">
-            <div class="card-body text-center py-3">
-                <div class="fs-3 fw-bold text-success">{{ report.pass_count }}</div>
-                <div class="small text-muted">Passed</div>
-            </div>
-        </div>
-    </div>
-    <div class="col">
-        <div class="card shadow-sm h-100">
-            <div class="card-body text-center py-3">
-                <div class="fs-3 fw-bold text-secondary">{{ report.skip_count }}</div>
-                <div class="small text-muted">Skipped</div>
-            </div>
-        </div>
-    </div>
+<div class="row row-cols-2 row-cols-md-4 g-3 mb-3">
+    <div class="col"><div class="stat"><span class="stat-label"><i class="bi bi-x-circle-fill state-fail" aria-hidden="true"></i>Failed</span><div class="stat-value">{{ report.fail_count }}</div></div></div>
+    <div class="col"><div class="stat"><span class="stat-label"><i class="bi bi-exclamation-triangle-fill state-warn" aria-hidden="true"></i>Warnings</span><div class="stat-value">{{ report.warn_count }}</div></div></div>
+    <div class="col"><div class="stat"><span class="stat-label"><i class="bi bi-check-circle-fill state-ok" aria-hidden="true"></i>Passed</span><div class="stat-value">{{ report.pass_count }}</div></div></div>
+    <div class="col"><div class="stat"><span class="stat-label"><i class="bi bi-dash-circle state-idle" aria-hidden="true"></i>Skipped</span><div class="stat-value">{{ report.skip_count }}</div></div></div>
 </div>
 
-<div class="d-flex align-items-center gap-2 mb-3">
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
     <div class="btn-group btn-group-sm" role="group">
         <button type="button" class="btn btn-outline-secondary active" data-filter="all">All</button>
         <button type="button" class="btn btn-outline-danger" data-filter="fail">Failed</button>
@@ -76,7 +37,7 @@
         <button type="button" class="btn btn-outline-success" data-filter="pass">Passed</button>
         <button type="button" class="btn btn-outline-secondary" data-filter="skip">Skipped</button>
     </div>
-    <span class="text-muted small ms-2">Base DN <span class="font-monospace">{{ report.base_dn }}</span></span>
+    <span class="text-muted small ms-2 text-break">Base DN <span class="font-monospace">{{ report.base_dn }}</span></span>
 </div>
 
 <div class="card shadow-sm">

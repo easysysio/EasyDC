@@ -1,18 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Audit Log - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item active">Audit Log</li>
-    </ol>
-</nav>
-
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
-    <div>
-        <h4 class="mb-0"><i class="bi bi-journal-text me-2 text-primary"></i>Audit Log</h4>
-        <small class="text-muted">{% if filtered %}<span class="js-num">{{ total }}</span> matching action{% if total != 1 %}s{% endif %}{% else %}Every action, newest first{% endif %}{% if retention %} · <a href="/settings?tab=audit-log" class="text-muted">{{ retention }}</a>{% endif %}</small>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Audit log</h1>
+        <div class="page-sub">{% if filtered %}<span class="js-num">{{ total }}</span> matching action{% if total != 1 %}s{% endif %}{% else %}Every action, newest first{% endif %}{% if retention %} · <a href="/settings?tab=audit-log" class="text-muted">{{ retention }}</a>{% endif %}</div>
     </div>
     <!-- Searches the whole log on the server: a big bulk action does not push older entries out of reach. -->
     <form method="get" action="/audit" class="d-flex flex-wrap align-items-center gap-2" role="search">
@@ -69,7 +63,7 @@
                     <td class="text-muted small ts" data-ts="{{ e.ts }}">{{ e.ts }}</td>
                     <td class="fw-medium">{{ e.actor }}</td>
                     <td class="font-monospace small">{{ e.action }}</td>
-                    <td class="text-break">
+                    <td class="text-break" style="min-width: 14rem;">
                         {{ e.target }}
                         {% if e.detail %}
                         <div class="text-danger small">{{ e.detail }}</div>

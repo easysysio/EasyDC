@@ -2,19 +2,10 @@
 {% block title %}Two-factor sign-in - EasyDC{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/account">My account</a></li>
-        <li class="breadcrumb-item active">Two-factor sign-in</li>
-    </ol>
-</nav>
-
-<div class="d-flex align-items-center mb-4">
-    <i class="bi bi-person-circle fs-2 text-primary me-3"></i>
-    <div>
-        <h4 class="mb-0">My account</h4>
-        <small class="text-muted">Signed in as {{ actor }}</small>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">My account</h1>
+        <div class="page-sub">Signed in as {{ actor }}</div>
     </div>
 </div>
 

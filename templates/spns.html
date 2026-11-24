@@ -3,24 +3,13 @@
 {% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">SPNs</li>
-    </ol>
-</nav>
-
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-    <h4 class="mb-0"><i class="bi bi-key me-2 text-primary"></i>Service principal names</h4>
-    <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addSpnModal">
-        <i class="bi bi-plus-lg me-1"></i>Add SPN
-    </button>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Service principal names</h1>
+        <div class="page-sub">An SPN tells Kerberos which account runs a service, such as <code>HTTP/web.example.com</code>. Each SPN must be on one account only.</div>
+    </div>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addSpnModal"><i class="bi bi-plus-circle me-1"></i> Add SPN</button>
 </div>
-<p class="text-muted small mb-4">
-    An SPN tells Kerberos which account runs a service, such as <code>HTTP/web.example.com</code>.
-    Each SPN must be on one account only.
-</p>
 
 {% if error %}
 <div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> {{ error }}</div>

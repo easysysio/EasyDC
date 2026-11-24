@@ -1,22 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Password Policy - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">Password Policy</li>
-    </ol>
-</nav>
-
-<div class="d-flex align-items-center mb-4">
-    <i class="bi bi-shield-lock fs-2 text-primary me-3"></i>
-    <div>
-        <h4 class="mb-0">Password Policy</h4>
-        <small class="text-muted">
-            Applies to every account in {% if domain %}{{ domain }}{% else %}the domain{% endif %}
-        </small>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Password policy</h1>
+        <div class="page-sub">Applies to every account in {% if domain %}{{ domain }}{% else %}the domain{% endif %}</div>
     </div>
 </div>
 

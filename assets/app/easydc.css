@@ -198,7 +198,9 @@ nav[aria-label="breadcrumb"].mb-4 { margin-bottom: .75rem !important; }
 
 .page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; }
 .page-title { margin: 0; font-size: 1.35rem; }
-.page-sub { color: var(--ed-muted); }
+.page-sub { color: var(--ed-muted); max-width: 62rem; }
+.server-card:hover { border-color: var(--ed-border-strong); }
+.server-card-actions { position: relative; z-index: 2; }
 
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .75rem; }
 .toolbar-search { position: relative; margin-left: auto; flex: 0 1 17rem; min-width: 11rem; }

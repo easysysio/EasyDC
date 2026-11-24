@@ -190,7 +190,7 @@ mod tests {
         ctx.insert("report", &report);
 
         let html = tera().render("health.html", &ctx).expect("health.html renders");
-        assert!(html.contains("Domain Health Check"));
+        assert!(html.contains("Health check"));
         assert!(html.contains("A one-line verdict"));
         assert!(html.contains("do the other thing"));
         assert!(html.contains("example.com"));

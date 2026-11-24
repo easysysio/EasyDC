@@ -1,21 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Delegation - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}/ous">Organizational Units</a></li>
-        <li class="breadcrumb-item active">Delegation</li>
-    </ol>
-</nav>
-
-<h4 class="mb-2"><i class="bi bi-shield-lock me-2 text-primary"></i>Delegation</h4>
-<p class="text-muted small mb-4">
-    Let a group do a job in an OU without making its members domain admins: a help desk that resets passwords,
-    say. What a group is given here applies in the OU and in the OUs inside it, from any tool, not just EasyDC.
-</p>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">Delegation</h1>
+        <div class="page-sub">Let a group do a job in an OU without making its members domain admins: a help desk that resets passwords, say. What a group is given here applies in the OU and in the OUs inside it, from any tool, not just EasyDC.</div>
+    </div>
+</div>
 
 {% if error %}
 <div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> {{ error }}</div>
