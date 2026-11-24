@@ -11,7 +11,9 @@ Manage users, groups, computers, DNS records, and Group Policy Objects remotely 
 
 ## Features
 
-- **Multi-server dashboard** — add and manage multiple Samba DC servers from one place
+- **Multi-server** — add and manage multiple Samba DC servers from one place, and switch between them from the sidebar
+- **Overview and search** — each domain's counts, what needs attention and replication at a glance; Ctrl-K finds any user, group, computer or page
+- **Light and dark mode**, and a layout that works on a phone
 - **Users** — create, edit, enable/disable and delete users; reset passwords, unlock, password settings, groups, CSV export and import
 - **Groups** — create security/distribution groups, manage memberships
 - **Computers** — browse by OU, move, enable/disable and remove computer accounts

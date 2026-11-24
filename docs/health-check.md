@@ -1,12 +1,13 @@
 # Health check
 
-The **Health Check** card on a server runs a battery of diagnostics against the domain and
+**Health** in the sidebar runs a battery of diagnostics against the domain and
 reports each one as **passed**, **warning**, **failed** or **skipped**, with an explanation
 and a hint for what to do about it.
 
 It is **read-only**: every check runs over the same LDAP connection EasyDC already uses,
-and nothing is written to the directory. Open the card to run it; **Re-run** at the top of
-the report runs it again.
+and nothing is written to the directory. Opening the page runs it; **Check again** at the top
+runs it again. The server's Overview runs it too, and lists warnings and failures under
+*Needs attention*.
 
 ## What it checks
 

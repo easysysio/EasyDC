@@ -46,29 +46,41 @@ the stored one.
 
 ## Find your way around
 
-Opening a server shows one card per area:
+Opening a server shows its **Overview**: how many users, groups, computers and DCs it has,
+what **needs attention** (from the health check and the accounts), and whether replication
+works. The sidebar on the left keeps the current server in view; the box at its top
+switches to another server and stays on the same kind of page.
 
-| Card | What it covers |
+| Sidebar | What it covers |
 |---|---|
-| **User Management** | Accounts, password resets and settings, unlocks, CSV export and import |
-| **Group Management** | Security and distribution groups, membership |
-| **Computer Management** | Computer accounts, by OU |
-| **DNS Management** | AD-integrated zones and records |
-| **GPO Management** | Group Policy Objects and their OU links |
-| **Password Policy** | The domain's password and lockout policy, and policies for groups and users |
-| **Health Check** | Read-only diagnostics for the domain |
-| **Reports** | Inactive accounts, password expiry, privileged groups and more, with CSV export |
-| **Domain Controllers** | Each DC's site and FSMO roles; moving roles and removing a dead DC |
+| **Users** | Accounts, password resets and settings, unlocks, CSV export and import |
+| **Groups** | Security and distribution groups, membership |
+| **Computers** | Computer accounts, by OU |
+| **OUs** | The OU tree, and moving objects between OUs |
+| **SPNs** | Service principal names on users and computers |
+| **Group Policy** | Group Policy Objects and their OU links |
+| **Password policy** | The domain's password and lockout policy, and policies for groups and users |
+| **Delegation** | Letting a group do a job in an OU, such as resetting passwords |
+| **DNS** | AD-integrated zones and records |
+| **Domain controllers** | Each DC's site and FSMO roles; moving roles and removing a dead DC |
 | **Replication** | Which DC each DC receives from, and whether it worked |
-| **Sites and Subnets** | Sites, subnets and site links |
-| **OU Management** | The OU tree, moving objects between OUs, and delegation |
+| **Sites** | Sites, subnets and site links |
+| **Health** | Read-only diagnostics for the domain |
+| **Reports** | Inactive accounts, password expiry, privileged groups and more, with CSV export |
 
-**Settings** in the top bar manages who can sign in to EasyDC: add an account for each
-person who administers the domain, with what each may change. An account can be local,
-with its own password, or a domain account that signs in with its domain password.
-Everyone can view every page. **Your name** in the top bar has your own password and
+- **Search** at the top, or **Ctrl-K** (**⌘K** on a Mac), finds users, groups, computers and
+  pages by name. Use the arrow keys and Enter to open one.
+- A click on a user, group, computer, OU, GPO or DNS record opens its **details beside the
+  list**, where you can change it. A click on another row switches to that one.
+- The **moon** at the top switches between light and dark mode. Until you choose, EasyDC
+  follows your system's setting.
+- On a phone, the sidebar is behind the **menu** button at the top left.
+
+At the bottom of the sidebar, **All servers** lists every server, and the **Audit log** lists
+changes across all of them. **Settings** manages who can sign in to EasyDC: add an account
+for each person who administers the domain, with what each may change. An account can be
+local, with its own password, or a domain account that signs in with its domain password.
+Everyone can view every page. **Your name**, at the top right, has your own password and
 two-factor sign-in.
-
-The **Audit Log** button in the top bar is global: it lists changes across every server.
 
 Next: [what you can do in each area](managing.md).

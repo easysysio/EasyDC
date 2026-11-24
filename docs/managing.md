@@ -5,11 +5,15 @@ in the [audit log](#audit-log) with who made it and whether it succeeded.
 
 ## Users
 
-The left pane lists the domain's **OUs and containers**, as in Active Directory Users and
-Computers, with how many users each holds. Pick one to see only its users; turn on
-**Include nested OUs** to add the users in the OUs below it. The domain name at the top
-shows everyone. Containers with no users (such as `Computers`) and system ones (such as
-`System`) are left out.
+The **OU menu** above the list (it says *All OUs* at first) lists the domain's **OUs and
+containers**, as in Active Directory Users and Computers, with how many users each holds.
+Pick one to see only its users; **Include nested OUs**, at the bottom of the menu, adds the
+users in the OUs below it. *All OUs* shows everyone. Containers with no users (such as
+`Computers`) and system ones (such as `System`) are left out.
+
+A click on a user opens their **details beside the list**: **Disable**, **Reset password**,
+**Move** and **Delete** at the top, and the **Details**, **Groups** and **Password** tabs
+below. The row's own buttons and its **⋯** menu do the most common of these too.
 
 Above the list, **All / Enabled / Disabled / Locked / Expired / Password to change** filter by account status,
 with a count for each, and the search box narrows the list as you type: it looks in the
@@ -65,9 +69,9 @@ saves in some countries) and tabs all work, in UTF-8 or Windows' own encoding.
 - **Edit** names, email and description, **enable or disable** the account, or **delete**
   it. The description is also a column in the list.
 - **Profile**: job title, department, office, phone, mobile and manager, in both the
-  Add and Edit dialogs. The manager field suggests usernames as you type. Clearing a
+  Add dialog and the Details tab. The manager field suggests usernames as you type. Clearing a
   field removes the value from the directory.
-- **Groups**, a tab in the Edit dialog, lists the groups the user is directly in, with the
+- **Groups**, a tab in the user's details, lists the groups the user is directly in, with the
   primary group (usually Domain Users) marked. Add a group by name, or remove one with ×;
   each change is made at once. The primary group is kept on the user rather than in the
   group's members, so it is not removed here. Adding and removing need Edit on Groups.
@@ -81,7 +85,7 @@ saves in some countries) and tabs all work, in UTF-8 or Windows' own encoding.
   password older than the maximum password age (from the domain policy, or the user's
   PSO) shows **Password expired**. Either way the user cannot sign in with their old
   password; on a PC, Windows asks for a new one.
-- **Password**, a tab in the Edit dialog, shows when the password was last set and when it
+- **Password**, a tab in the user's details, shows when the password was last set and when it
   expires (by the domain policy or the user's PSO), and has three switches: *User must
   change password at next sign-in*, *User cannot change password* and *Password never
   expires*. As in Windows, *must change* cannot go with either of the other two, and
@@ -102,12 +106,13 @@ saves in some countries) and tabs all work, in UTF-8 or Windows' own encoding.
 Create **security** or **distribution** groups with a **global**, **domain local** or
 **universal** scope, edit and delete them, and manage membership.
 
-As on the Users page, the left pane lists the OUs and containers with how many groups each
+As on the Users page, the OU menu lists the OUs and containers with how many groups each
 holds, including `Builtin` for Windows' own groups. Pick one to see its groups, with
-**Include nested OUs** for the ones below. A new group is created in the OU you are
+**Include nested OUs** for the ones below. A click on a group opens its details beside the
+list. A new group is created in the OU you are
 looking at, or in `Users` when the whole domain or `Builtin` is shown.
 
-- **Members**: open a group to see everyone in it — users, computers, other groups, and
+- **Members**: **Manage members** (or the member count) shows everyone in the group — users, computers, other groups, and
   the built-in identities Samba puts in its own groups, such as *Authenticated Users*.
   The page also lists the groups this group is a member of.
 - **Add** a user, computer or group by name; the box suggests names as you type. A
@@ -116,7 +121,7 @@ looking at, or in `Users` when the whole domain or `Builtin` is shown.
   groups, a universal group global and universal ones, and a domain local group any of
   them. A group cannot contain itself, and EasyDC refuses a nesting that would make a
   loop (A inside B inside A).
-- **Change scope or type** in the Edit dialog. As in Windows, global and domain local
+- **Change scope or type** in the group's details. As in Windows, global and domain local
   change only through universal, and a change that would break one of the group's
   memberships is refused with the reason. Built-in groups (Administrators, Domain Admins
   and the like) keep their scope and type.
@@ -159,7 +164,8 @@ An **SRV** record's name is the service and protocol, such as `_sip._udp`, and i
 is priority, weight, port and target: `10 50 5060 sip.example.com`. A **TXT** value longer
 than 255 bytes, such as a DKIM key, is split into several strings, which resolvers join.
 
-**Edit** (the pencil) changes a record's value and TTL in one step: if the save fails, the
+A click on a record (or its pencil) opens it beside the list, to change its value and TTL in
+one step: if the save fails, the
 old record stays. Everything else about the record is kept, including whether a client
 registered it dynamically. To change a record's name or type, add a new one and delete the
 old. If someone else changed the record after your page loaded, nothing is saved and you
@@ -231,7 +237,7 @@ groups and computers from one OU to another.
 
 ### Delegation
 
-**Delegation** (on the Organizational Units page, or the shield next to an OU) lets a group
+**Delegation** (in the sidebar, or **Delegation** on an OU) lets a group
 do a job in an OU without making its members domain admins: a help desk that resets
 passwords, say. It is what `samba-tool dsacl` and Windows' Delegation of Control wizard do.
 Only admins can change it.
@@ -270,7 +276,7 @@ Move them off a DC before you take it out of service.
 
 ### Functional level
 
-The **Functional level** card shows the level of the domain and the forest, and the highest
+The **Functional level** section shows the level of the domain and the forest, and the highest
 level each DC can run at. A DC's highest level comes from `ad dc functional level` in its
 `smb.conf`. The level also shows with the server's details on the Servers page and the server's Overview, and each
 DC's level is in the DC table.
@@ -451,10 +457,10 @@ Changes are recorded in the audit log as `spn.add` and `spn.remove`.
 
 ## EasyDC accounts
 
-**Settings** in the top bar manages who can sign in to *EasyDC*. The first account is
+**Settings**, at the bottom of the sidebar, manages who can sign in to *EasyDC*. The first account is
 created by the setup wizard, and is a local admin.
 
-- **Change your password** — under your name in the top bar. It needs your current one.
+- **Change your password** — in the menu under your name, at the top right. It needs your current one.
   Your other sessions are signed out, so a changed password actually ends access anywhere
   else you were signed in.
 - **Add an account** — so each person signs in as themselves and the audit log names who
@@ -488,8 +494,8 @@ refused one, is recorded in the audit log as `auth.sign_in`.
 ### Two-factor sign-in
 
 A local account can also ask for a code from an authenticator app, such as Google
-Authenticator, Microsoft Authenticator, 1Password or Bitwarden. Click **your name** in the
-top bar, then **Two-factor sign-in → Set up**, enter your password, scan the QR code and
+Authenticator, Microsoft Authenticator, 1Password or Bitwarden. Click **your name** at the
+top right, then **Two-factor sign-in → Set up**, enter your password, scan the QR code and
 type the code it shows.
 
 EasyDC then shows **10 recovery codes, once**. Keep them away from your phone: each signs
@@ -566,7 +572,7 @@ When upgrading from a version without permissions, every existing account become
 
 ## Audit log
 
-The **Audit Log** in the top bar shows every action across all servers, newest first,
+The **Audit log**, at the bottom of the sidebar, shows every action across all servers, newest first,
 100 to a page. The search looks through the whole log, not just the latest entries, so
 one bulk action on 2,000 users does not hide what came before it: type words from the
 actor, action, target, server or error and press Enter; an entry must contain all of
