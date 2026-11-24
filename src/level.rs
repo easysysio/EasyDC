@@ -108,11 +108,22 @@ pub struct Step {
     pub on: String,
     pub detail: String,
     pub commands: Vec<String>,
+    /// What can go wrong on the way, and what to do about it.
+    pub notes: Vec<String>,
+    /// Why this step would be refused if run now.
+    pub not_yet: Option<String>,
 }
 
 fn step(title: &str, on: &str, detail: &str, commands: Vec<String>) -> Step {
-    Step { title: title.to_string(), on: on.to_string(), detail: detail.to_string(), commands }
+    Step { title: title.to_string(), on: on.to_string(), detail: detail.to_string(), commands, notes: Vec::new(), not_yet: None }
 }
+
+/// What the schema upgrade needs, and what its output means.
+const SCHEMA_NOTES: [&str; 3] = [
+    "It needs the patch program on that DC: apt install patch on Debian and Ubuntu, dnf install patch on RHEL and Fedora. Without it, samba-tool stops at once and asks whether /usr/bin/patch is missing.",
+    "Lines such as \"Unable to find attribute\" or \"Defunct object ... skipping\" are normal. The last line says whether it worked.",
+    "If Samba answers \"we are not master\" although this DC holds the schema master, move the schema master to another DC and back (Move... under FSMO roles), then run it again.",
+];
 
 /// Everything a chosen level still needs.
 #[derive(Debug, Clone, Serialize)]
@@ -171,7 +182,9 @@ impl Snapshot {
         let wait = if self.dcs.len() > 1 { "Let it reach the other DCs before the next step." } else { "" };
         if self.prep.schema < need.schema {
             let dc = self.schema_master.clone()?;
-            steps.push(step("Upgrade the schema", &dc, wait, vec![format!("samba-tool domain schemaupgrade --schema={schema}")]));
+            let mut upgrade = step("Upgrade the schema", &dc, wait, vec![format!("samba-tool domain schemaupgrade --schema={schema}")]);
+            upgrade.notes = SCHEMA_NOTES.iter().map(|n| n.to_string()).collect();
+            steps.push(upgrade);
         }
         let command = format!("samba-tool domain functionalprep --function-level={}", tool_name(level));
         let forest_dc = if self.prep.forest < need.forest { Some(self.schema_master.clone()?) } else { None };
@@ -223,13 +236,26 @@ impl Snapshot {
         if !below.is_empty() {
             steps.push(step(
                 "Allow this level on each DC",
-                &names(below),
+                &names(below.clone()),
                 "Add this line under [global] in smb.conf, then restart Samba on that DC.",
                 vec![format!("ad dc functional level = {}", tool_name(level.max(LOWEST_DC_SETTING)))],
             ));
         }
         steps.extend(self.prepare_steps(level)?);
-        steps.extend(self.raise_steps(level, domain, forest)?);
+        let mut raise = self.raise_steps(level, domain, forest)?;
+        if !below.is_empty() {
+            // Samba refuses a raise above the lowest DC, so say so before it is run.
+            let which: Vec<String> = below.iter().map(|d| format!("{} runs at {}", d.0, label(d.1))).collect();
+            let why = format!(
+                "Not yet: {}. Samba refuses this until every DC can run at {}. After the smb.conf step, choose Check the level to see where each DC stands.",
+                which.join(", "),
+                label(level)
+            );
+            for s in &mut raise {
+                s.not_yet = Some(why.clone());
+            }
+        }
+        steps.extend(raise);
         steps.push(step("Restart Samba", &everyone, "One DC at a time, so that one stays up.", Vec::new()));
         Ok(steps)
     }
@@ -410,6 +436,36 @@ mod tests {
         assert_eq!(g.steps[1].on, "DC1");
         assert_eq!(g.steps[2].on, "DC1, DC2");
         assert!(g.note.unwrap().contains("4.19"));
+        assert!(g.steps.iter().all(|s| s.not_yet.is_none()), "every DC is ready");
+    }
+
+    #[test]
+    fn the_raise_waits_for_a_dc_still_below() {
+        // As on a real domain: smb.conf not changed yet on either DC.
+        let g = snapshot(4, 4, &[4, 4]).guide(7).unwrap();
+        let raise = g.steps.iter().find(|s| s.title.starts_with("Raise")).unwrap();
+        let why = raise.not_yet.as_deref().unwrap();
+        assert!(why.contains("DC1 runs at Windows Server 2008 R2, DC2 runs at Windows Server 2008 R2"), "{why}");
+        assert!(why.contains("every DC can run at Windows Server 2016"), "{why}");
+        // Only the raise waits: the steps before it are what makes it ready.
+        assert!(g.steps.iter().filter(|s| s.not_yet.is_some()).all(|s| s.title.starts_with("Raise")));
+        // One DC behind is named alone.
+        let g = snapshot(4, 4, &[7, 4]).guide(7).unwrap();
+        let why = g.steps.iter().find_map(|s| s.not_yet.clone()).unwrap();
+        assert!(why.contains("Not yet: DC2 runs at") && !why.contains("DC1"), "{why}");
+    }
+
+    #[test]
+    fn the_schema_step_says_what_it_needs() {
+        let mut s = snapshot(4, 4, &[7, 7]);
+        s.prep = Prep { schema: 47, forest: 0, domain: 0 };
+        let g = s.guide(7).unwrap();
+        let upgrade = g.steps.iter().find(|s| s.title == "Upgrade the schema").unwrap();
+        let notes = upgrade.notes.join(" ");
+        assert!(notes.contains("apt install patch") && notes.contains("dnf install patch"), "{notes}");
+        assert!(notes.contains("we are not master") && notes.contains("schema master to another DC and back"), "{notes}");
+        assert!(notes.contains("Unable to find attribute"), "{notes}");
+        assert!(g.steps.iter().filter(|s| s.title != "Upgrade the schema").all(|s| s.notes.is_empty()));
     }
 
     #[test]

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- The guide to raising the functional level says the schema upgrade needs `patch`, what to do when Samba answers "we are not master", and marks the raise **Not yet** while a DC is still below the chosen level.
+
 ## [0.7.0] - 2026-11-24
 
 ### Security

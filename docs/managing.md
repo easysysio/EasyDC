@@ -294,6 +294,20 @@ to run each one on:
 
 Then choose **Check the level** to see the new level.
 
+While a DC is still below the chosen level, the raise step says **Not yet** and names that
+DC: Samba refuses the raise until every DC can run at the new level. After step 2, choose
+**Check the level** until every DC shows it.
+
+Things that can go wrong on the way:
+
+- The schema upgrade needs the `patch` program on the DC (`apt install patch` on Debian and
+  Ubuntu, `dnf install patch` on RHEL and Fedora). Without it, `samba-tool` stops at once and
+  asks whether `/usr/bin/patch` is missing.
+- Lines such as *Unable to find attribute* or *Defunct object ... skipping* during the
+  upgrade are normal. The last line says whether it worked.
+- If Samba answers *we are not master* although the DC holds the schema master, move the
+  schema master to another DC and back with **Move…**, then run the upgrade again.
+
 !!! warning "A raise cannot be undone"
     Going back means restoring every DC from backup, together. After a raise, a DC below the
     new level can no longer join. Samba 4.19 calls its support for levels above 2008 R2

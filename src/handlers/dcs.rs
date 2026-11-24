@@ -322,7 +322,8 @@ mod tests {
             naming: Ok("DC2".into()),
             schema_master: Ok("DC1".into()),
             infrastructure: Ok("DC1".into()),
-            prep: level::Prep { schema: 88, forest: 16, domain: 16 },
+            // The schema still at 2008 R2, so the guide upgrades it.
+            prep: level::Prep { schema: 47, forest: 16, domain: 16 },
         }
         .view()
     }
@@ -343,6 +344,9 @@ mod tests {
         assert!(html.contains("samba-tool domain level raise --domain-level=2016"));
         assert!(html.contains("ad dc functional level = 2016"));
         assert!(html.contains("cannot be undone"));
+        assert!(html.contains("samba-tool domain schemaupgrade --schema=2019"));
+        assert!(html.contains("apt install patch"), "the schema upgrade says what it needs");
+        assert!(html.contains("Not yet: DC2 runs at Windows Server 2012."), "DC2 is below 2016, so the raise waits");
     }
 
     #[test]

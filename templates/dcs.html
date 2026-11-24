@@ -117,7 +117,9 @@
                         <li class="mb-3">
                             <div class="fw-medium">{{ st.title }}</div>
                             <div class="small text-muted">On {{ st.on }}.{% if st.detail %} {{ st.detail }}{% endif %}</div>
+                            {% if st.not_yet %}<div class="alert alert-warning small py-2 px-3 mt-2 mb-0"><i class="bi bi-hourglass-split me-1" aria-hidden="true"></i>{{ st.not_yet }}</div>{% endif %}
                             {% for c in st.commands %}<pre class="bg-body-tertiary border rounded p-2 mt-2 mb-0 small text-wrap user-select-all"><code>{{ c }}</code></pre>{% endfor %}
+                            {% if st.notes %}<ul class="small text-muted mt-2 mb-0 ps-3">{% for n in st.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
                         </li>
                         {% endfor %}
                     </ol>
