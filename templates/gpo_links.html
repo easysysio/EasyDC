@@ -11,10 +11,10 @@
     </ol>
 </nav>
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <div>
-        <h4 class="mb-0"><i class="bi bi-link-45deg me-2 text-warning"></i>{{ gpo_name }}</h4>
-        <small class="text-muted font-monospace">{{ guid }}</small>
+<div class="page-head">
+    <div class="min-w-0">
+        <h1 class="page-title">{{ gpo_name }}</h1>
+        <div class="page-sub font-monospace small">{{ guid }}</div>
     </div>
     <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLinkModal" data-needs="gpos">
         <i class="bi bi-plus-circle me-1"></i> Link to OU
@@ -34,35 +34,35 @@
     <p class="small">Use "Link to OU" to apply this policy to a container.</p>
 </div>
 {% else %}
-<div class="card shadow-sm">
+<div class="card">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
-                    <th>OU / Container</th>
-                    <th style="width:30%">Distinguished Name</th>
-                    <th style="width:14%">Link Status</th>
-                    <th class="text-end" style="width:10%">Actions</th>
+                    <th>OU or container</th>
+                    <th class="d-none d-md-table-cell">Distinguished name</th>
+                    <th>Link status</th>
+                    <th class="text-end"><span class="visually-hidden">Actions</span></th>
                 </tr>
             </thead>
             <tbody>
                 {% for link in links %}
                 <tr>
-                    <td class="fw-medium">{{ link.ou_name }}</td>
-                    <td class="font-monospace small text-muted text-break">{{ link.ou_dn }}</td>
-                    <td>
+                    <td><div class="row-name"><span class="avatar" aria-hidden="true"><i class="bi bi-folder2"></i></span><span class="fw-medium">{{ link.ou_name }}</span></div></td>
+                    <td class="font-monospace small text-muted text-break d-none d-md-table-cell">{{ link.ou_dn }}</td>
+                    <td class="status-badges">
                         {% if link.link_flags == 0 %}
-                        <span class="badge bg-success-subtle text-success border border-success-subtle">Enabled</span>
+                        <span class="badge bg-success-subtle text-success-emphasis">Enabled</span>
                         {% elif link.link_flags == 1 %}
-                        <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Disabled</span>
+                        <span class="badge bg-secondary-subtle text-secondary-emphasis">Disabled</span>
                         {% elif link.link_flags == 2 %}
-                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">Enforced</span>
+                        <span class="badge bg-primary-subtle text-primary-emphasis">Enforced</span>
                         {% else %}
-                        <span class="badge bg-warning-subtle text-warning border border-warning-subtle">{{ link.link_status }}</span>
+                        <span class="badge bg-warning-subtle text-warning-emphasis">{{ link.link_status }}</span>
                         {% endif %}
                     </td>
                     <td class="text-end">
-                        <button type="button" class="btn btn-outline-danger btn-sm" data-needs="gpos"
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-needs="gpos" aria-label="Remove the link to {{ link.ou_name }}"
                             data-bs-toggle="modal" data-bs-target="#unlinkModal"
                             data-name="{{ link.ou_name }}" data-dn="{{ link.ou_dn }}"
                             title="Remove link">

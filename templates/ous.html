@@ -1,22 +1,18 @@
 {% extends "base.html" %}
 {% block title %}OUs - {{ server.name }} - EasyDC{% endblock %}
+{% block container_class %}container-fluid px-lg-4{% endblock %}
 {% block content %}
 
-<nav aria-label="breadcrumb" class="mb-4">
-    <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/"><i class="bi bi-house me-1"></i>Dashboard</a></li>
-        <li class="breadcrumb-item"><a href="/servers/{{ server.id }}">{{ server.name }}</a></li>
-        <li class="breadcrumb-item active">Organizational Units</li>
-    </ol>
-</nav>
-
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0"><i class="bi bi-folder2-open me-2 text-warning"></i>Organizational Units</h4>
-    <div class="d-flex gap-2">
-        <a class="btn btn-outline-primary" href="/servers/{{ server.id }}/delegation">
-            <i class="bi bi-shield-lock me-1"></i> Delegation
+<div class="page-head">
+    <div>
+        <h1 class="page-title">Organizational Units</h1>
+        <div class="page-sub">{{ ou_nodes | length }} OU{% if ou_nodes | length != 1 %}s{% endif %}</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-secondary" href="/servers/{{ server.id }}/delegation">
+            <i class="bi bi-person-check me-1"></i> Delegation
         </a>
-        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#moveObjectModal">
+        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#moveObjectModal">
             <i class="bi bi-arrow-left-right me-1"></i> Move Object
         </button>
         <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createOuModal" data-needs="ous">
@@ -36,50 +32,47 @@
     <i class="bi bi-folder2 fs-1"></i>
     <p class="mt-3 fs-5">No Organizational Units found</p>
 </div>
-{% else %}
-<div class="d-flex mb-3">
-    <input type="search" id="listSearch" class="form-control form-control-sm ms-auto" style="max-width: 16rem;"
-        placeholder="Search name, description, DN…" aria-label="Search OUs">
+{% elif ou_nodes | length > 0 %}
+<div class="toolbar">
+    <div class="toolbar-search">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search" id="listSearch" class="form-control form-control-sm"
+            placeholder="Search name, description, DN…" aria-label="Search OUs">
+    </div>
 </div>
-<div class="card shadow-sm">
+<div class="card">
     <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
+        <table class="table table-hover table-rows align-middle mb-0">
             <thead class="table-light">
                 <tr>
                     <th>Name</th>
-                    <th>Description</th>
-                    <th class="d-none d-lg-table-cell">Distinguished Name</th>
-                    <th class="text-end" style="width:14%">Actions</th>
+                    <th class="d-none d-md-table-cell">Description</th>
+                    <th class="d-none d-lg-table-cell">Distinguished name</th>
+                    <th class="text-end"><span class="visually-hidden">Actions</span></th>
                 </tr>
             </thead>
             <tbody data-paged="ous" data-search-input="listSearch">
                 {% for ou in ou_nodes %}
-                <tr data-search="{{ ou.name }} {{ ou.description }} {{ ou.dn }}">
-                    <td>
-                        <span style="padding-left: {{ ou.depth }}rem;">
-                            <i class="bi bi-folder2 text-warning me-1"></i>
-                            <span class="fw-medium">{{ ou.name }}</span>
-                        </span>
-                    </td>
-                    <td class="text-muted small">{{ ou.description }}</td>
+                <tr data-ou="{{ ou.dn }}" data-name="{{ ou.name }}" data-description="{{ ou.description }}" data-search="{{ ou.name }} {{ ou.description }} {{ ou.dn }}">
+                    <td><div class="row-name" style="padding-left: {{ ou.depth * 1.25 }}rem;"><span class="avatar" aria-hidden="true"><i class="bi bi-folder2"></i></span><div class="min-w-0"><button type="button" class="row-open js-open-row">{{ ou.name }}</button></div></div></td>
+                    <td class="d-none d-md-table-cell text-muted small">{{ ou.description }}</td>
                     <td class="font-monospace small text-muted text-break d-none d-lg-table-cell">{{ ou.dn }}</td>
                     <td class="text-end text-nowrap" data-needs="ous">
-                        <a class="btn btn-outline-secondary btn-sm" href="/servers/{{ server.id }}/delegation?dn={{ ou.dn | urlencode_strict }}"
-                            title="Delegation: who may do what here">
-                            <i class="bi bi-shield-lock"></i>
-                        </a>
-                        <button type="button" class="btn btn-outline-secondary btn-sm"
-                            data-bs-toggle="modal"
-                            data-bs-target="#renameModal{{ loop.index }}"
-                            title="Rename">
-                            <i class="bi bi-pencil"></i>
-                        </button>
-                        <button type="button" class="btn btn-outline-danger btn-sm"
-                            data-bs-toggle="modal" data-bs-target="#deleteOuModal"
-                            data-name="{{ ou.name }}" data-dn="{{ ou.dn }}"
-                            title="Delete">
-                            <i class="bi bi-trash"></i>
-                        </button>
+                        <div class="btn-group btn-group-sm row-actions row-actions-wide">
+                            <a class="btn btn-outline-secondary btn-sm js-delegation" href="/servers/{{ server.id }}/delegation?dn={{ ou.dn | urlencode_strict }}"
+                                title="Delegation: who may do what here" aria-label="Delegation on {{ ou.name }}">
+                                <i class="bi bi-person-check"></i>
+                            </a>
+                            <button type="button" class="btn btn-outline-secondary btn-sm js-open-row" title="Open details" aria-label="Open details for {{ ou.name }}" data-needs="">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm"
+                                data-bs-toggle="modal" data-bs-target="#deleteOuModal"
+                                data-name="{{ ou.name }}" data-dn="{{ ou.dn }}"
+                                title="Delete" aria-label="Delete {{ ou.name }}">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -91,6 +84,46 @@
     </div>
 </div>
 {% endif %}
+
+<!-- ── The details panel: one for every OU, filled from the row ──────────── -->
+<div class="offcanvas offcanvas-end app-panel" id="ouPanel" tabindex="-1" aria-labelledby="ouPanelTitle" data-bs-scroll="true" data-bs-backdrop="false">
+    <div class="offcanvas-header">
+        <span class="avatar avatar-lg" aria-hidden="true"><i class="bi bi-folder2"></i></span>
+        <div class="min-w-0 flex-grow-1">
+            <h2 class="offcanvas-title h5 text-truncate" id="ouPanelTitle"></h2>
+            <div class="small text-muted text-truncate js-panel-sub"></div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close details"></button>
+    </div>
+    <div class="panel-actions">
+        <a class="btn btn-outline-secondary btn-sm js-panel-delegation"><i class="bi bi-person-check me-1" aria-hidden="true"></i>Delegation</a>
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#createOuModal" data-needs="ous"><i class="bi bi-folder-plus me-1" aria-hidden="true"></i>New OU inside</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#moveObjectModal"><i class="bi bi-arrow-left-right me-1" aria-hidden="true"></i>Move an object here</button>
+        <span class="ms-auto" data-needs="ous">
+            <button type="button" class="btn btn-outline-danger btn-sm js-panel-delete" data-bs-toggle="modal" data-bs-target="#deleteOuModal"><i class="bi bi-trash me-1" aria-hidden="true"></i>Delete</button>
+        </span>
+    </div>
+    <div class="panel-body border-top">
+        <form method="post" action="/servers/{{ server.id }}/ous/rename" class="js-rename-form" data-needs="ous">
+            <input type="hidden" name="ou_dn">
+            <div class="panel-section">
+                <div class="mb-3">
+                    <label class="form-label" for="ouPanelName">Name</label>
+                    <input type="text" id="ouPanelName" name="new_name" class="form-control" required>
+                    <div class="form-text">Renaming keeps everything inside the OU, its links and its delegation.</div>
+                </div>
+                <dl class="detail-list mb-0">
+                    <dt>Description</dt><dd class="js-description"></dd>
+                    <dt>Distinguished name</dt><dd class="font-monospace small js-dn"></dd>
+                </dl>
+            </div>
+            <div class="panel-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="offcanvas">Cancel</button>
+                <button type="submit" class="btn btn-primary">Rename</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!-- ── Create OU Modal ────────────────────────────────────────────────────── -->
 <div class="modal fade" id="createOuModal" tabindex="-1">
@@ -114,7 +147,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Parent <span class="text-danger">*</span></label>
-                        <select name="parent_dn" class="form-select" required>
+                        <select name="parent_dn" class="form-select js-ou-choice" required>
                             {% for ou in ous_flat %}
                             <option value="{{ ou.dn }}">{{ ou.name }}</option>
                             {% endfor %}
@@ -148,7 +181,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Destination OU <span class="text-danger">*</span></label>
-                        <select name="target_ou_dn" class="form-select" required>
+                        <select name="target_ou_dn" class="form-select js-ou-choice" required>
                             {% for ou in ous_flat %}
                             <option value="{{ ou.dn }}">{{ ou.name }}</option>
                             {% endfor %}
@@ -163,35 +196,6 @@
         </div>
     </div>
 </div>
-
-<!-- ── Rename / Delete Modals ─────────────────────────────────────────────── -->
-{% for ou in ou_nodes %}
-<div class="modal fade" id="renameModal{{ loop.index }}" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-pencil me-1"></i> Rename OU</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="post" action="/servers/{{ server.id }}/ous/rename">
-                <div class="modal-body">
-                    <input type="hidden" name="ou_dn" value="{{ ou.dn }}">
-                    <div class="mb-3">
-                        <label class="form-label">New Name <span class="text-danger">*</span></label>
-                        <input type="text" name="new_name" class="form-control"
-                            value="{{ ou.name }}" required>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Rename</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-{% endfor %}
 
 <!-- Delete: one dialog, filled from the row's button -->
 <div class="modal fade js-row-dialog" id="deleteOuModal" tabindex="-1">
@@ -215,5 +219,34 @@
         </div>
     </div>
 </div>
+
+<script>
+(function () {
+    const panel = document.getElementById('ouPanel');
+    const details = EasyPanel({ table: 'ous', panel: 'ouPanel', key: 'ou', fill: function (row) {
+        const data = row.dataset;
+        panel.querySelector('#ouPanelTitle').textContent = data.name;
+        panel.querySelector('.js-panel-sub').textContent = data.ou;
+        panel.querySelector('.js-panel-delegation').href = row.querySelector('.js-delegation').getAttribute('href');
+        const del = panel.querySelector('.js-panel-delete');
+        del.dataset.name = data.name;
+        del.dataset.dn = data.ou;
+        const form = panel.querySelector('.js-rename-form');
+        form.reset();
+        form.elements.ou_dn.value = data.ou;
+        form.elements.new_name.value = data.name;
+        panel.querySelector('.js-description').textContent = data.description || '—';
+        panel.querySelector('.js-dn').textContent = data.ou;
+    } });
+    // From the panel, a new OU and a moved object go into the OU shown.
+    ['createOuModal', 'moveObjectModal'].forEach(function (id) {
+        document.getElementById(id).addEventListener('show.bs.modal', function (e) {
+            const select = this.querySelector('.js-ou-choice');
+            const fromPanel = e.relatedTarget && e.relatedTarget.closest('#ouPanel') && details.row;
+            select.value = fromPanel ? details.row.dataset.ou : select.options[0].value;
+        });
+    });
+})();
+</script>
 
 {% endblock %}

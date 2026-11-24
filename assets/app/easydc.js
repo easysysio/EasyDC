@@ -18,6 +18,13 @@
         .sort((a, b) => b.getAttribute('href').length - a.getAttribute('href').length)[0];
     if (best) best.setAttribute('aria-current', 'page');
 
+    // ── a row that leads to its own page: the whole row is the link ─────────
+    document.addEventListener('click', function (e) {
+        const row = e.target.closest('.table-rows tr[data-href]');
+        if (!row || e.target.closest('a, button, input, label, form, .dropdown-menu') || String(getSelection())) return;
+        location.href = row.dataset.href;
+    });
+
     // ── light and dark ───────────────────────────────────────────────────────
     const themeButton = document.getElementById('themeToggle');
     const system = window.matchMedia('(prefers-color-scheme: dark)');
