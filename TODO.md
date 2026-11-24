@@ -7,25 +7,13 @@ Windows admin machine, and to hear about problems before users do. Rare, risky j
 Samba is GPLv3 and EasyDC is MIT. Read its source (`python/samba/netcmd/`) and Microsoft's
 MS-ADTS to learn what is written, but do not copy its code.
 
-## 0.7.0: a full redesign
+## 0.7.x: after the redesign
 
-EasyDC has grown page by page and looks messy. Give it a clean, modern and consistent design.
-
-- **Agree on the look first.** Mock up the Dashboard, the Users page and one detail page, and
-  choose a direction before any page changes.
-- **Rethink the navigation.** Moving between a server's areas should not mean going back to a
-  grid of cards. Consider a sidebar, with the current server always visible.
-- **One design system.** Colors, type, spacing, buttons, badges, tables, forms and dialogs
-  defined in one place, replacing the 41 inline styles and per-page variations.
-- **Redo all 33 page templates** on it, with the same page header, tables, filters, row
-  actions, and empty, loading and error states everywhere.
-- **Split the largest pages.** Users (937 lines) and Settings (600) do too much in one template.
-- **Dark mode**, following the system setting, with a switch to override it.
-- **Works at every size**, from a phone to a wide screen, and by keyboard and screen reader.
-- **Nothing is lost.** Every feature and permission check stays, and all assets stay bundled,
-  so EasyDC keeps working on a network with no internet access.
 - **Launch it.** Post the release on the Samba mailing list, r/sysadmin and r/selfhosted, with
-  screenshots and the one-line Docker install, and let real users shape what comes next.
+  the screenshots and the one-line Docker install, and let real users shape what comes next.
+- **Split the largest templates.** Users (992 lines) and Settings (592) still do too much in one
+  file.
+- **The last inline styles.** 24 are left; move them into the stylesheet.
 
 ## 0.8.0: SYSVOL drift detection, then GPO settings
 

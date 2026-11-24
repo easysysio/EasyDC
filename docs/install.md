@@ -224,7 +224,7 @@ same static binary as the packages, and runs as its own non-root user.
 |---|---|
 | `latest` | The newest release |
 | `0.6` | The newest 0.6.x release |
-| `0.6.0` | That release only |
+| `0.7.0` | That release only |
 
 === "docker run"
 
