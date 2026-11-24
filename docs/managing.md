@@ -54,7 +54,7 @@ saves in some countries) and tabs all work, in UTF-8 or Windows' own encoding.
   another OU or container. The user keeps their name, groups and settings.
 - EasyDC will not disable, delete, move or reset the password of the account it signs in
   to the DC with, since that would lock it out. To do it anyway, first change the server's
-  bind account with **Edit** on the dashboard. To change that account's password, set it
+  bind account with **Edit** on the Servers page. To change that account's password, set it
   on the DC, then put the new one in the server's settings.
 - **Create** a user with a username, first and last name, email and initial password. The
   user is created in the OU or container you are looking at, or in `Users` when the whole
@@ -272,7 +272,7 @@ Move them off a DC before you take it out of service.
 
 The **Functional level** card shows the level of the domain and the forest, and the highest
 level each DC can run at. A DC's highest level comes from `ad dc functional level` in its
-`smb.conf`. The level also shows with the server's details on the Dashboard and the server page, and each
+`smb.conf`. The level also shows with the server's details on the Servers page and the server's Overview, and each
 DC's level is in the DC table.
 
 Samba allows a raise only from a shell on a DC, so EasyDC guides it instead of making it.
@@ -548,6 +548,12 @@ An action needs Edit on what it changes: adding users to a group needs Groups, a
 group or computer to another OU needs Groups or Computers. What an account may not change is
 greyed out; clicking it says why. A refused change is also recorded in the audit log as
 `access.refused`.
+
+Only an admin can change the domain's most powerful accounts and groups: the built-in
+Administrator and krbtgt, the admin groups (Domain Admins, Enterprise Admins, Schema Admins,
+Administrators, the Operators groups and a few more), and anyone in them, directly or through
+other groups. EasyDC makes changes as a domain admin, so otherwise Edit on Users or Groups
+would be enough to reset an admin's password or join Domain Admins.
 
 When upgrading from a version without permissions, every existing account becomes an admin.
 

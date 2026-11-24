@@ -99,7 +99,7 @@ fn page_links(page: i64, pages: i64) -> Vec<i64> {
     out
 }
 
-/// `?check=ID`: after a server is added or changed, the Dashboard signs in
+/// `?check=ID`: after a server is added or changed, the Servers page signs in
 /// to it once and says whether that worked, so a mistyped address or
 /// password shows up straight away rather than on the next page opened.
 #[derive(Deserialize, Default)]
@@ -134,7 +134,7 @@ fn dashboard_context(servers: &[Server], checked: Option<(String, Result<String,
     ctx
 }
 
-/// Back to the Dashboard after a save: check the server if it was saved.
+/// Back to the Servers page after a save: check the server if it was saved.
 fn saved(id: Option<i64>) -> Redirect {
     match id {
         Some(id) => Redirect::to(&format!("/?check={id}")),

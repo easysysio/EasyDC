@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::two_factor::{self, Used};
 use crate::{
     auth::{
+        self,
         challenge_cookie, clear_challenge_cookie, clear_session_cookie, extract_challenge_cookie,
         extract_session_cookie, session_cookie, via_https,
     },
@@ -57,11 +58,18 @@ pub async fn post_login(
     Form(form): Form<LoginForm>,
 ) -> impl IntoResponse {
     let typed = form.username.trim();
+    if let Some(wait) = auth::sign_in_paused(typed) {
+        let minutes = (wait + 59) / 60;
+        let e = format!("Too many wrong passwords for this account. Try again in {minutes} minute{}.", if minutes == 1 { "" } else { "s" });
+        return refused(&state, &e).await;
+    }
     let username = match db::sign_in_account(&state.db, typed).await {
         Some(db::SignIn::Local { username, hash }) => {
-            if !bcrypt::verify(&form.password, &hash).unwrap_or(false) {
+            if !auth::verify_password(&form.password, &hash).await {
+                auth::sign_in_failed(typed);
                 return refused(&state, "Invalid username or password").await;
             }
+            auth::sign_in_succeeded(typed);
             // If the database cannot say whether a code is needed, no sign-in.
             match db::two_factor(&state.db, &username).await {
                 Ok(Some(t)) if t.enabled => return ask_for_code(&state, &headers, &username).await,
@@ -80,14 +88,19 @@ pub async fn post_login(
             let logged = result.as_ref().map(|_| ()).map_err(|e| e.message());
             db::log_action(&state.db, &username, "auth.sign_in", &username, Some(server.id), &logged).await;
             if let Err(e) = result {
+                if matches!(e, ldap::DomainSignIn::Refused) {
+                    auth::sign_in_failed(typed);
+                }
                 return refused(&state, &e.message()).await;
             }
+            auth::sign_in_succeeded(typed);
             username
         }
         None => {
             // As long as a wrong password takes, so the answer does not say
             // which names exist.
-            let _ = bcrypt::verify(&form.password, dummy_hash());
+            let _ = auth::verify_password(&form.password, dummy_hash()).await;
+            auth::sign_in_failed(typed);
             return refused(&state, "Invalid username or password").await;
         }
     };

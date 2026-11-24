@@ -26,7 +26,7 @@ pub(super) const MIN_PASSWORD_LEN: usize = 8;
 /// Letters, digits, and `. _ - @`. Names appear in URL paths and in the page,
 /// so anything outside this set would need escaping somewhere it could be
 /// forgotten.
-fn valid_username(name: &str) -> bool {
+pub(super) fn valid_username(name: &str) -> bool {
     name.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@'))
 }
@@ -330,7 +330,7 @@ pub async fn create_account(
         return render(&state, &actor, Some(e), None).await;
     }
 
-    let hash = match bcrypt::hash(&form.password, bcrypt::DEFAULT_COST) {
+    let hash = match crate::auth::hash_password(&form.password).await {
         Ok(h) => h,
         Err(e) => {
             let msg = format!("Could not hash the password: {}", e);

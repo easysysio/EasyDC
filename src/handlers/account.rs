@@ -78,7 +78,7 @@ pub async fn change_password(
         .await;
     };
 
-    let error = if !bcrypt::verify(&form.current_password, &hash).unwrap_or(false) {
+    let error = if !crate::auth::verify_password(&form.current_password, &hash).await {
         Some(fail("Current password is incorrect."))
     } else if form.new_password.len() < MIN_PASSWORD_LEN {
         Some(format!(
@@ -108,7 +108,7 @@ pub async fn change_password(
         return render(&state, &actor, Some(e), None).await;
     }
 
-    let new_hash = match bcrypt::hash(&form.new_password, bcrypt::DEFAULT_COST) {
+    let new_hash = match crate::auth::hash_password(&form.new_password).await {
         Ok(h) => h,
         Err(e) => {
             let msg = format!("Could not hash the new password: {}", e);

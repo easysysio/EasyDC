@@ -274,14 +274,14 @@ fn connect_failed(url: &str, wait: std::time::Duration, e: ldap3::LdapError) -> 
                     "Connection failed: this machine does not trust the certificate of {host}, \
                      or it does not match that name. Samba makes its own certificate, which nothing trusts \
                      until you install the domain's CA certificate here. Until then, you can turn on \
-                     Skip TLS verification with the Edit button on this server's card on the Dashboard: \
+                     Skip TLS verification with the Edit button on this server's card on the Servers page: \
                      the connection stays encrypted, but the DC's identity is not checked."
                 )
             } else if port == 389 {
                 format!(
                     "Connection failed: {host} did not start a secure connection on port 389. \
                      Port 389 is for ldap://; ldaps:// uses port 636. Fix the address with the Edit button \
-                     on this server's card on the Dashboard."
+                     on this server's card on the Servers page."
                 )
             } else {
                 format!(
@@ -463,7 +463,7 @@ pub async fn check_domain_password(server: &Server, username: &str, password: &s
     }
 }
 
-const EDIT_SERVER: &str = "with the Edit button on this server's card on the Dashboard";
+const EDIT_SERVER: &str = "with the Edit button on this server's card on the Servers page";
 
 /// The bind request got no answer: the DC timed out, or closed the connection.
 fn bind_failed(url: &str, e: ldap3::LdapError) -> String {
@@ -1538,7 +1538,7 @@ pub async fn set_password_settings(
     if want.must_change && !now.must_change && entry.is_bind {
         return Err(format!(
             "EasyDC signs in to the DC as {}, so making it change its password at the next sign-in would lock \
-             EasyDC out. To do it, first change the server's bind account (Edit on the dashboard).",
+             EasyDC out. To do it, first change the server's bind account (Edit on the Servers page).",
             entry.name
         ));
     }
@@ -1887,6 +1887,167 @@ pub(crate) fn object_sid(e: &SearchEntry) -> Option<String> {
     let binary = e.bin_attrs.get("objectSid").and_then(|v| v.first()).map(Vec::as_slice);
     let text = e.attrs.get("objectSid").and_then(|v| v.first()).map(String::as_bytes);
     binary.or(text).and_then(sid_string)
+}
+
+// ── the domain's powerful groups ─────────────────────────────────────────────
+
+/// The domain's most powerful groups, by the last part of their SID: the
+/// Builtin ones (Administrators, Account Operators, Server Operators, Print
+/// Operators, Backup Operators, Replicator)…
+const POWERFUL_BUILTIN: [&str; 6] = ["544", "548", "549", "550", "551", "552"];
+/// …and the domain's own (Domain Admins, Domain Controllers, Schema Admins,
+/// Enterprise Admins, Group Policy Creator Owners, Read-only Domain
+/// Controllers, Key Admins, Enterprise Key Admins).
+const POWERFUL_DOMAIN: [&str; 8] = ["512", "516", "518", "519", "520", "521", "526", "527"];
+/// Accounts that are powerful in themselves.
+const POWERFUL_ACCOUNTS: [(&str, &str); 2] = [
+    ("500", "is the domain's built-in Administrator account"),
+    ("502", "is the krbtgt account, which signs every Kerberos ticket"),
+];
+
+/// The domain's powerful groups, read once and asked about many objects (a
+/// bulk action checks each user it changes).
+///
+/// Membership is read from the directory each time, not from `adminCount`:
+/// Samba does not set `adminCount` on someone added to Domain Admins later.
+pub struct Powerful {
+    base_dn: String,
+    domain_sid: String,
+    /// DN, name and SID of each powerful group the domain has.
+    groups: Vec<(String, String, String)>,
+}
+
+impl Powerful {
+    pub async fn read(ldap: &mut ldap3::Ldap, base_dn: &str) -> LdapResult<Powerful> {
+        let (entries, _) = ldap
+            .with_timeout(OP_TIMEOUT)
+            .search(base_dn, Scope::Base, "(objectClass=*)", vec!["objectSid"])
+            .await
+            .map_err(ldap_err)?
+            .success()
+            .map_err(ldap_err)?;
+        let domain_sid = entries
+            .into_iter()
+            .next()
+            .map(SearchEntry::construct)
+            .as_ref()
+            .and_then(object_sid)
+            .ok_or("EasyDC could not read the domain's SID, so it cannot tell whether this is an admin account.")?;
+        let terms: String = POWERFUL_BUILTIN
+            .iter()
+            .map(|rid| format!("(objectSid=S-1-5-32-{rid})"))
+            .chain(POWERFUL_DOMAIN.iter().map(|rid| format!("(objectSid={domain_sid}-{rid})")))
+            .collect();
+        let (entries, _) = ldap
+            .with_timeout(OP_TIMEOUT)
+            .search(base_dn, Scope::Subtree, &format!("(&(objectClass=group)(|{terms}))"), vec!["sAMAccountName", "objectSid"])
+            .await
+            .map_err(ldap_err)?
+            .success()
+            .map_err(ldap_err)?;
+        let groups = entries
+            .into_iter()
+            .map(SearchEntry::construct)
+            .filter_map(|e| Some((e.dn.clone(), attr(&e, "sAMAccountName"), object_sid(&e)?)))
+            .collect();
+        Ok(Powerful { base_dn: base_dn.to_string(), domain_sid, groups })
+    }
+
+    /// What makes the object itself powerful, from its SID and primary group
+    /// alone: "is the Domain Admins group", "is in Domain Controllers".
+    fn by_sid(&self, sid: Option<&str>, primary_group: &str) -> Option<String> {
+        if let Some(sid) = sid {
+            if let Some((_, name, _)) = self.groups.iter().find(|g| g.2 == sid) {
+                return Some(format!("is the {name} group"));
+            }
+            if let Some(rid) = sid.strip_prefix(&format!("{}-", self.domain_sid))
+                && let Some((_, what)) = POWERFUL_ACCOUNTS.iter().find(|(r, _)| *r == rid)
+            {
+                return Some(what.to_string());
+            }
+        }
+        if !primary_group.is_empty() {
+            let sid = format!("{}-{primary_group}", self.domain_sid);
+            if let Some((_, name, _)) = self.groups.iter().find(|g| g.2 == sid) {
+                return Some(format!("is in {name}"));
+            }
+        }
+        None
+    }
+
+    /// Why only an EasyDC admin may change the object at `dn`, if so: it is
+    /// a powerful group or account, or is in a powerful group — directly,
+    /// through other groups, or through its primary group.
+    pub async fn reason(&self, ldap: &mut ldap3::Ldap, dn: &str) -> LdapResult<Option<String>> {
+        let (entries, _) = ldap
+            .with_timeout(OP_TIMEOUT)
+            .search(dn, Scope::Base, "(objectClass=*)", vec!["objectSid", "primaryGroupID"])
+            .await
+            .map_err(ldap_err)?
+            .success()
+            .map_err(ldap_err)?;
+        // Not there: the change itself says so.
+        let Some(entry) = entries.into_iter().next().map(SearchEntry::construct) else { return Ok(None) };
+        let primary = attr(&entry, "primaryGroupID");
+        if let Some(why) = self.by_sid(object_sid(&entry).as_deref(), &primary) {
+            return Ok(Some(why));
+        }
+        // A primary group (other than Domain Users, Domain Guests or Domain
+        // Computers) that is itself inside a powerful group counts too.
+        let mut places = vec![dn.to_string()];
+        if primary.bytes().all(|b| b.is_ascii_digit()) && !matches!(primary.as_str(), "" | "513" | "514" | "515") {
+            let filter = format!("(objectSid={}-{primary})", self.domain_sid);
+            if let Some(g) = search_groups(ldap, &self.base_dn, &filter, Members::Skip).await?.into_iter().next() {
+                places.push(g.dn);
+            }
+        }
+        if self.groups.is_empty() {
+            return Ok(None);
+        }
+        let any: String = self.groups.iter().map(|g| in_chain(&g.0)).collect();
+        for place in &places {
+            // One question for all of them first; the name only when needed.
+            if !matches(ldap, place, &format!("(|{any})")).await? {
+                continue;
+            }
+            for (group_dn, name, _) in &self.groups {
+                if matches(ldap, place, &in_chain(group_dn)).await? {
+                    return Ok(Some(format!("is in {name}")));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// In `group_dn`, at any depth (LDAP_MATCHING_RULE_IN_CHAIN).
+fn in_chain(group_dn: &str) -> String {
+    format!("(memberOf:1.2.840.113556.1.4.1941:={})", ldap_escape(group_dn))
+}
+
+/// Whether the object at `dn` matches `filter`.
+async fn matches(ldap: &mut ldap3::Ldap, dn: &str, filter: &str) -> LdapResult<bool> {
+    let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(dn, Scope::Base, filter, vec!["1.1"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    Ok(!entries.is_empty())
+}
+
+/// The DN of the user, group or computer (`name$`) with this account name.
+pub async fn account_dn(ldap: &mut ldap3::Ldap, base_dn: &str, sam_account_name: &str) -> LdapResult<Option<String>> {
+    let filter = format!("(sAMAccountName={})", ldap_escape(sam_account_name));
+    let (entries, _) = ldap
+        .with_timeout(OP_TIMEOUT)
+        .search(base_dn, Scope::Subtree, &filter, vec!["1.1"])
+        .await
+        .map_err(ldap_err)?
+        .success()
+        .map_err(ldap_err)?;
+    Ok(entries.into_iter().next().map(|e| SearchEntry::construct(e).dn))
 }
 
 /// A binary SID as text: `S-1-5-21-…-1105` (revision, 48-bit authority,
@@ -6136,5 +6297,44 @@ mod refusal_tests {
     fn link_places_read_naturally() {
         assert_eq!(link_place("OU=Europe,OU=Sales,DC=lab,DC=test"), "the OU Europe");
         assert_eq!(link_place("CN=Users,DC=lab,DC=test"), "Users");
+    }
+}
+
+#[cfg(test)]
+mod powerful_tests {
+    use super::Powerful;
+
+    const D: &str = "S-1-5-21-1-2-3";
+
+    fn powerful() -> Powerful {
+        Powerful {
+            base_dn: "DC=x".into(),
+            domain_sid: D.into(),
+            groups: vec![
+                ("CN=Domain Admins,CN=Users,DC=x".into(), "Domain Admins".into(), format!("{D}-512")),
+                ("CN=Domain Controllers,CN=Users,DC=x".into(), "Domain Controllers".into(), format!("{D}-516")),
+                ("CN=Administrators,CN=Builtin,DC=x".into(), "Administrators".into(), "S-1-5-32-544".into()),
+            ],
+        }
+    }
+
+    #[test]
+    fn powerful_groups_and_accounts_are_known_by_sid() {
+        let p = powerful();
+        assert_eq!(p.by_sid(Some(&format!("{D}-512")), ""), Some("is the Domain Admins group".into()));
+        assert_eq!(p.by_sid(Some("S-1-5-32-544"), ""), Some("is the Administrators group".into()));
+        assert!(p.by_sid(Some(&format!("{D}-500")), "513").unwrap().contains("built-in Administrator"));
+        assert!(p.by_sid(Some(&format!("{D}-502")), "513").unwrap().contains("krbtgt"));
+        // Another domain's Administrator is not this one's.
+        assert_eq!(p.by_sid(Some("S-1-5-21-9-9-9-500"), "513"), None);
+    }
+
+    #[test]
+    fn a_primary_group_counts_as_membership() {
+        let p = powerful();
+        // A domain controller: its primary group is Domain Controllers.
+        assert_eq!(p.by_sid(Some(&format!("{D}-1001")), "516"), Some("is in Domain Controllers".into()));
+        assert_eq!(p.by_sid(Some(&format!("{D}-1105")), "513"), None, "Domain Users");
+        assert_eq!(p.by_sid(None, ""), None);
     }
 }

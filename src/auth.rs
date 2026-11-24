@@ -36,6 +36,101 @@ pub fn session_state(created_at: i64, last_seen: i64, now: i64) -> SessionState 
     }
 }
 
+// ── passwords ───────────────────────────────────────────────────────────────────
+
+/// bcrypt takes about a quarter of a second, on purpose. It runs on the
+/// blocking pool, never on the threads that serve pages, and only a few at a
+/// time, so a burst of sign-ins cannot stall EasyDC for everyone else.
+static HASHING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+pub async fn verify_password(password: &str, hash: &str) -> bool {
+    let (password, hash) = (password.to_string(), hash.to_string());
+    let Ok(_turn) = HASHING.acquire().await else { return false };
+    tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash).unwrap_or(false)).await.unwrap_or(false)
+}
+
+pub async fn hash_password(password: &str) -> Result<String, String> {
+    let password = password.to_string();
+    let _turn = HASHING.acquire().await.map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+// ── failed sign-ins ─────────────────────────────────────────────────────────────
+
+/// Wrong passwords allowed for one name within FAIL_WINDOW…
+const FAILS_ALLOWED: u32 = 5;
+const FAIL_WINDOW: i64 = 15 * 60;
+/// …before a pause: a minute, doubling each time up to FAIL_PAUSE_MAX. A
+/// pause, not a lockout, so someone guessing cannot keep the real admin out
+/// for long; an hour without a pause starts over.
+const FAIL_PAUSE: i64 = 60;
+const FAIL_PAUSE_MAX: i64 = 15 * 60;
+/// More names than this and the stale ones are dropped.
+const FAILS_KEPT: usize = 10_000;
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Fails {
+    count: u32,
+    first: i64,
+    pauses: u32,
+    until: i64,
+}
+
+/// Failed sign-ins by the name typed, lowercase, whether or not an account has it.
+#[derive(Default)]
+pub struct SignInFails(std::collections::HashMap<String, Fails>);
+
+impl SignInFails {
+    /// Seconds until this name may try again, if it must wait.
+    pub fn paused(&self, name: &str, now: i64) -> Option<i64> {
+        self.0.get(&name.to_lowercase()).filter(|f| f.until > now).map(|f| f.until - now)
+    }
+
+    pub fn failed(&mut self, name: &str, now: i64) {
+        if self.0.len() >= FAILS_KEPT {
+            self.0.retain(|_, f| f.until > now || now - f.first < FAIL_WINDOW);
+        }
+        let f = self.0.entry(name.to_lowercase()).or_insert_with(|| Fails { first: now, ..Fails::default() });
+        if f.until != 0 && now - f.until >= 3600 {
+            *f = Fails { first: now, ..Fails::default() };
+        } else if now - f.first >= FAIL_WINDOW {
+            f.count = 0;
+            f.first = now;
+        }
+        f.count += 1;
+        if f.count >= FAILS_ALLOWED {
+            f.until = now + (FAIL_PAUSE << f.pauses.min(8)).min(FAIL_PAUSE_MAX);
+            f.pauses += 1;
+            f.count = 0;
+            f.first = now;
+        }
+    }
+
+    pub fn succeeded(&mut self, name: &str) {
+        self.0.remove(&name.to_lowercase());
+    }
+}
+
+pub static SIGN_IN_FAILS: std::sync::LazyLock<std::sync::Mutex<SignInFails>> = std::sync::LazyLock::new(Default::default);
+
+pub fn sign_in_paused(name: &str) -> Option<i64> {
+    SIGN_IN_FAILS.lock().map(|f| f.paused(name, db::unix_now())).unwrap_or(None)
+}
+
+pub fn sign_in_failed(name: &str) {
+    if let Ok(mut f) = SIGN_IN_FAILS.lock() {
+        f.failed(name, db::unix_now());
+    }
+}
+
+pub fn sign_in_succeeded(name: &str) {
+    if let Ok(mut f) = SIGN_IN_FAILS.lock() {
+        f.succeeded(name);
+    }
+}
+
 // ── cookie ──────────────────────────────────────────────────────────────────────
 
 pub fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
@@ -215,7 +310,7 @@ pub fn wants_json(headers: &HeaderMap) -> bool {
 }
 
 /// The page a form was sent from, when the browser says and it is this site;
-/// otherwise the dashboard.
+/// otherwise the Servers page.
 pub fn back_to(headers: &HeaderMap) -> String {
     let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
     let referer = headers.get(header::REFERER).and_then(|v| v.to_str().ok());
@@ -275,6 +370,51 @@ mod tests {
     use super::*;
 
     const T: i64 = 1_800_000_000;
+
+    #[test]
+    fn five_wrong_passwords_pause_that_name_and_the_pause_grows() {
+        let mut f = SignInFails::default();
+        for i in 0..4 {
+            f.failed("Admin", T + i);
+        }
+        assert_eq!(f.paused("admin", T + 4), None, "four is fine");
+        f.failed("ADMIN", T + 4);
+        assert_eq!(f.paused("admin", T + 4), Some(60));
+        assert_eq!(f.paused("someone-else", T + 4), None, "only that name");
+        assert_eq!(f.paused("admin", T + 64), None, "the pause ends");
+        for i in 0..5 {
+            f.failed("admin", T + 64 + i);
+        }
+        assert_eq!(f.paused("admin", T + 68), Some(120), "longer the second time");
+        f.succeeded("Admin");
+        assert_eq!(f.paused("admin", T + 68), None, "a right password clears it");
+    }
+
+    #[test]
+    fn failures_spread_out_do_not_add_up() {
+        let mut f = SignInFails::default();
+        for i in 0..10 {
+            f.failed("admin", T + i * FAIL_WINDOW);
+        }
+        assert_eq!(f.paused("admin", T + 10 * FAIL_WINDOW), None);
+    }
+
+    #[test]
+    fn the_pause_stops_growing() {
+        let mut f = SignInFails::default();
+        let mut now = T;
+        for _ in 0..12 {
+            for _ in 0..5 {
+                f.failed("admin", now);
+            }
+            now += FAIL_PAUSE_MAX;
+        }
+        f.failed("admin", now);
+        for _ in 0..4 {
+            f.failed("admin", now);
+        }
+        assert_eq!(f.paused("admin", now), Some(FAIL_PAUSE_MAX));
+    }
 
     #[test]
     fn a_fresh_session_is_valid_and_not_rewritten() {

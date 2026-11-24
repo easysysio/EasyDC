@@ -245,6 +245,7 @@ async fn main() {
         .merge(public)
         .merge(protected)
         .layer(tower_http::compression::CompressionLayer::new())
+        .layer(middleware::map_response(security_headers))
         .with_state(state.clone());
 
     let addr = format!("0.0.0.0:{}", port);
@@ -283,6 +284,36 @@ async fn main() {
     if let Err(e) = axum::serve(listener, app).await {
         eprintln!("EasyDC stopped: {}", e);
         std::process::exit(1);
+    }
+}
+
+/// Headers on every answer: no other site may show EasyDC in a frame, where
+/// a click on it could be borrowed; a file is taken as the type it is sent
+/// as; and a link out does not carry EasyDC's addresses with it.
+async fn security_headers(mut response: axum::response::Response) -> axum::response::Response {
+    use axum::http::HeaderValue;
+    let headers = response.headers_mut();
+    for (name, value) in [
+        ("x-frame-options", "DENY"),
+        ("content-security-policy", "frame-ancestors 'none'"),
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "same-origin"),
+    ] {
+        headers.entry(name).or_insert(HeaderValue::from_static(value));
+    }
+    response
+}
+
+#[cfg(test)]
+mod header_tests {
+    #[tokio::test]
+    async fn every_answer_says_it_may_not_be_framed() {
+        let response = super::security_headers(axum::response::IntoResponse::into_response("page")).await;
+        let h = response.headers();
+        assert_eq!(h["x-frame-options"], "DENY");
+        assert_eq!(h["content-security-policy"], "frame-ancestors 'none'");
+        assert_eq!(h["x-content-type-options"], "nosniff");
+        assert_eq!(h["referrer-policy"], "same-origin");
     }
 }
 

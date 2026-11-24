@@ -6,6 +6,8 @@ pub struct Server {
     pub name: String,
     pub ldap_url: String,
     pub bind_dn: String,
+    /// Never sent to a page: the record is in every server page's context.
+    #[serde(skip_serializing)]
     pub bind_password: String,
     pub skip_tls: bool,
 }

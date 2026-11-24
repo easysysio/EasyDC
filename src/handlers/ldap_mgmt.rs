@@ -173,6 +173,7 @@ pub async fn update_group(
             Some(k) => return Err(format!("Unknown group type '{k}'")),
         };
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &name).await?;
         ldap::update_group(
             &mut conn,
             &base_dn,
@@ -206,6 +207,7 @@ pub async fn delete_group(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &name).await?;
         ldap::delete_group(&mut conn, &base_dn, &name).await
     }
     .await;
@@ -290,6 +292,7 @@ pub async fn add_member(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &group_name).await?;
         ldap::add_group_member(&mut conn, &base_dn, &group_name, member).await
     }
     .await;
@@ -325,6 +328,7 @@ pub async fn remove_member(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &group_name).await?;
         ldap::remove_group_member(&mut conn, &base_dn, &group_name, &form.member_dn).await
     }
     .await;
@@ -460,6 +464,7 @@ pub async fn delete_computer(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &format!("{name}$")).await?;
         ldap::delete_computer(&mut conn, &base_dn, &name).await
     }
     .await;
@@ -482,6 +487,7 @@ pub async fn toggle_computer(
     let enable = form.enable == "true";
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &format!("{name}$")).await?;
         ldap::set_computer_enabled(&mut conn, &base_dn, &name, enable).await
     }
     .await;
@@ -548,11 +554,15 @@ async fn run_bulk_computers(
         String::new()
     };
 
+    let guard = Guard::new(&mut conn, &base_dn).await?;
     let mut failed = Vec::new();
     for name in &names {
-        let r = match action {
-            "move" => ldap::move_computer(&mut conn, &base_dn, name, target).await,
-            _ => ldap::set_computer_enabled(&mut conn, &base_dn, name, action == "enable").await,
+        let r = match guard.check_account(&mut conn, &base_dn, &format!("{name}$")).await {
+            Err(e) => Err(e),
+            Ok(()) => match action {
+                "move" => ldap::move_computer(&mut conn, &base_dn, name, target).await,
+                _ => ldap::set_computer_enabled(&mut conn, &base_dn, name, action == "enable").await,
+            },
         };
         let logged = if action == "move" { format!("{name} → {target}") } else { name.to_string() };
         db::log_action(&state.db, actor, audit, &logged, Some(server.id), &r).await;
@@ -744,6 +754,7 @@ pub async fn ou_move_object(
             db::log_action(&state.db, &actor, "access.refused", &target, Some(id), &Err(reason.clone())).await;
             return Err(reason);
         }
+        Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &dn).await?;
         match kind {
             // A domain controller stays where it is.
             ldap::ObjectKind::Computer => {
@@ -1176,12 +1187,21 @@ pub async fn gpo_update(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
+        let gpo_dn = gpo_dn(&guid, &base_dn)?;
         ldap::update_gpo(&mut conn, &gpo_dn, &form.display_name, form.flags).await
     }
     .await;
     db::log_action(&state.db, &actor, "gpo.update", &form.display_name, Some(id), &result).await;
     after_gpo_action(&state, &server, result).await
+}
+
+/// A GPO's DN, from the GUID in the address. Only a GUID may pass: anything
+/// else would put a DN of the visitor's choosing in its place.
+fn gpo_dn(guid: &str, base_dn: &str) -> Result<String, String> {
+    if !crate::sysvol::is_guid(guid) {
+        return Err("That is not a GPO's ID.".to_string());
+    }
+    Ok(format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn))
 }
 
 // ── delete GPO ────────────────────────────────────────────────────────────────
@@ -1228,7 +1248,7 @@ struct GpoLinks {
 async fn render_gpo_links(state: &AppState, server: &Server, guid: &str, flash_error: Option<String>) -> Response {
     let loaded: Result<GpoLinks, String> = async {
         let (mut conn, base_dn) = ldap::open_after(server, flash_error.as_deref()).await?;
-        let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
+        let gpo_dn = gpo_dn(guid, &base_dn)?;
         // The name is only for show: the GUID stands in if it cannot be read.
         let name = ldap::list_gpos(&mut conn, &base_dn)
             .await
@@ -1307,7 +1327,7 @@ pub async fn gpo_link_add(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
+        let gpo_dn = gpo_dn(&guid, &base_dn)?;
         ldap::link_gpo_to_ou(&mut conn, &form.ou_dn, &gpo_dn).await
     }
     .await;
@@ -1331,7 +1351,7 @@ pub async fn gpo_link_remove(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
-        let gpo_dn = format!("CN={{{}}},CN=Policies,CN=System,{}", guid.to_uppercase(), base_dn);
+        let gpo_dn = gpo_dn(&guid, &base_dn)?;
         ldap::unlink_gpo_from_ou(&mut conn, &form.ou_dn, &gpo_dn).await
     }
     .await;
@@ -1743,6 +1763,7 @@ pub async fn update_user(
 
     let result: Result<(), String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &username).await?;
         ldap::update_user(
             &mut conn,
             &base_dn,
@@ -1780,6 +1801,7 @@ pub async fn delete_user(
         let (mut conn, base_dn) = ldap::open(&server).await?;
         let user = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
         refuse_bind_account(user.is_bind, &username, "deleting")?;
+        Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &user.dn).await?;
         ldap::delete_user(&mut conn, &base_dn, &username).await
     }
     .await;
@@ -1814,6 +1836,7 @@ pub async fn toggle_user(
         if !enable {
             refuse_bind_account(user.is_bind, &username, "disabling")?;
         }
+        Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &user.dn).await?;
         ldap::set_user_enabled(&mut conn, &user, enable).await
     }
     .await;
@@ -1852,12 +1875,59 @@ pub async fn reset_password(
         let (mut conn, base_dn) = ldap::open(&server).await?;
         let user = ldap::find_user_for_change(&mut conn, &base_dn, &username, &server.bind_dn).await?;
         refuse_bind_reset(user.is_bind, &username)?;
+        Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &user.dn).await?;
         ldap::reset_password(&mut conn, &user.dn, &form.password, force_change).await
     }
     .await;
     db::log_action(&state.db, &actor, "user.reset_password", &username, Some(id), &result).await;
 
     after_user_action(&state, &server, &view, result).await
+}
+
+/// Only an EasyDC admin may change a domain admin, or a group that makes one.
+/// EasyDC signs in to the DC as a domain admin, so with Edit on Users or
+/// Groups alone anyone could otherwise reset an admin's password, or put
+/// themselves in Domain Admins, and so control the whole domain.
+///
+/// Made once per request: a bulk action asks it about every user.
+pub(crate) struct Guard(Option<ldap::Powerful>);
+
+impl Guard {
+    pub(crate) async fn new(conn: &mut ldap3::Ldap, base_dn: &str) -> Result<Guard, String> {
+        if access::current().admin {
+            return Ok(Guard(None));
+        }
+        ldap::Powerful::read(conn, base_dn).await.map(|p| Guard(Some(p)))
+    }
+
+    pub(crate) async fn check(&self, conn: &mut ldap3::Ldap, dn: &str) -> Result<(), String> {
+        let Some(powerful) = &self.0 else { return Ok(()) };
+        match powerful.reason(conn, dn).await? {
+            None => Ok(()),
+            Some(why) => Err(privileged_refusal(&why)),
+        }
+    }
+
+    /// By account name: a user, a group, or a computer's `name$`.
+    pub(crate) async fn check_account(&self, conn: &mut ldap3::Ldap, base_dn: &str, name: &str) -> Result<(), String> {
+        if self.0.is_none() {
+            return Ok(());
+        }
+        match ldap::account_dn(conn, base_dn, name).await? {
+            Some(dn) => self.check(conn, &dn).await,
+            // Not there: the change itself says so.
+            None => Ok(()),
+        }
+    }
+}
+
+fn privileged_refusal(why: &str) -> String {
+    format!("Only an EasyDC admin can change this: it {why}, so changing it could give someone control of the whole domain.")
+}
+
+/// [`Guard`] for one object, by account name.
+async fn refuse_privileged(conn: &mut ldap3::Ldap, base_dn: &str, name: &str) -> Result<(), String> {
+    Guard::new(conn, base_dn).await?.check_account(conn, base_dn, name).await
 }
 
 /// Resetting the bind account's password leaves EasyDC with the old one, so
@@ -1868,7 +1938,7 @@ fn refuse_bind_reset(is_bind: bool, username: &str) -> Result<(), String> {
         Err(format!(
             "EasyDC signs in to the DC as {username}, so resetting its password here would lock EasyDC out: \
              EasyDC would still use the old one. To change it, set the new password on the DC, \
-             then put it in the server's settings (Edit on the dashboard)."
+             then put it in the server's settings (Edit on the Servers page)."
         ))
     } else {
         Ok(())
@@ -1881,7 +1951,7 @@ fn refuse_bind_account(is_bind: bool, username: &str, doing: &str) -> Result<(),
     if is_bind {
         Err(format!(
             "EasyDC signs in to the DC as {username}, so {doing} it would lock EasyDC out. \
-             To do it, first change the server's bind account (Edit on the dashboard)."
+             To do it, first change the server's bind account (Edit on the Servers page)."
         ))
     } else {
         Ok(())
@@ -2015,6 +2085,7 @@ async fn run_bulk(state: &AppState, actor: &str, server: &Server, form: &BulkFor
                 return Err("Enter the group to add to".to_string());
             }
             let found = ldap::find_group(&mut conn, &base_dn, target).await?;
+            Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &found.dn).await?;
             let place = format!(" to {}", found.name);
             group = Some(found);
             place
@@ -2025,9 +2096,10 @@ async fn run_bulk(state: &AppState, actor: &str, server: &Server, form: &BulkFor
     let results = match &group {
         Some(group) => add_users_to_group(&mut conn, &base_dn, group, &names).await?,
         None => {
+            let guard = Guard::new(&mut conn, &base_dn).await?;
             let mut results = Vec::with_capacity(names.len());
             for name in &names {
-                results.push(bulk_one(&mut conn, &base_dn, &server.bind_dn, action, name, target).await);
+                results.push(bulk_one(&mut conn, &base_dn, &server.bind_dn, &guard, action, name, target).await);
             }
             results
         }
@@ -2048,11 +2120,13 @@ async fn bulk_one(
     conn: &mut ldap3::Ldap,
     base_dn: &str,
     bind: &str,
+    guard: &Guard,
     action: &str,
     name: &str,
     target: &str,
 ) -> Result<(), String> {
     let user = ldap::find_user_for_change(conn, base_dn, name, bind).await?;
+    guard.check(conn, &user.dn).await?;
     match action {
         "enable" => ldap::set_user_enabled(conn, &user, true).await,
         "disable" => {
@@ -2150,6 +2224,7 @@ pub async fn update_password_settings(
     };
     let result: Result<Vec<String>, String> = async {
         let (mut conn, base_dn) = ldap::open(&server).await?;
+        refuse_privileged(&mut conn, &base_dn, &username).await?;
         ldap::set_password_settings(&mut conn, &base_dn, &username, &server.bind_dn, &form.change()).await
     }
     .await;
@@ -2619,13 +2694,13 @@ mod users_page_tests {
         let e = super::refuse_bind_account(true, "Administrator", "disabling").unwrap_err();
         assert!(e.contains("EasyDC signs in to the DC as Administrator"));
         assert!(e.contains("disabling it would lock EasyDC out"));
-        assert!(e.contains("Edit on the dashboard"));
+        assert!(e.contains("Edit on the Servers page"));
 
         assert!(super::refuse_bind_reset(false, "bob").is_ok());
         let e = super::refuse_bind_reset(true, "Administrator").unwrap_err();
         assert!(e.contains("EasyDC signs in to the DC as Administrator"));
         assert!(e.contains("resetting its password here would lock EasyDC out"));
-        assert!(e.contains("Edit on the dashboard"));
+        assert!(e.contains("Edit on the Servers page"));
     }
 
     #[test]

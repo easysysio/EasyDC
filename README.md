@@ -87,7 +87,7 @@ your own. With the packages, the database is `/var/lib/easydc/easydc.db`.
 
 ## Adding a Server
 
-After logging in, click **Add Server** on the dashboard and fill in:
+After logging in, click **Add Server** on the Servers page and fill in:
 
 | Field | Example |
 |-------|---------|

@@ -113,6 +113,7 @@ pub async fn add(State(state): State<AppState>, CurrentUser(actor): CurrentUser,
         let (mut conn, base_dn) = ldap::open(&server).await?;
         let account = spn::find_account(&mut conn, &base_dn, &f.account).await?;
         allowed(&state, &actor, id, &account, &target).await?;
+        crate::handlers::ldap_mgmt::Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &account.dn).await?;
         spn::add(&mut conn, &base_dn, &account, &value).await?;
         let _ = conn.unbind().await;
         Ok((value, account.sam))
@@ -134,6 +135,7 @@ pub async fn remove(State(state): State<AppState>, CurrentUser(actor): CurrentUs
         let (mut conn, base_dn) = ldap::open(&server).await?;
         let account = spn::find_account(&mut conn, &base_dn, &f.account).await?;
         allowed(&state, &actor, id, &account, &target).await?;
+        crate::handlers::ldap_mgmt::Guard::new(&mut conn, &base_dn).await?.check(&mut conn, &account.dn).await?;
         spn::remove(&mut conn, &account, f.spn.trim()).await?;
         let _ = conn.unbind().await;
         Ok(account.sam)

@@ -127,7 +127,7 @@ pub async fn get_page(State(state): State<AppState>, CurrentUser(actor): Current
 
 async fn password_ok(state: &AppState, actor: &str, password: &str) -> bool {
     match db::password_hash_for(&state.db, actor).await {
-        Some(hash) => bcrypt::verify(password, &hash).unwrap_or(false),
+        Some(hash) => crate::auth::verify_password(password, &hash).await,
         None => false,
     }
 }
