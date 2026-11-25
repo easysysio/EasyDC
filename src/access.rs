@@ -320,6 +320,8 @@ mod tests {
             "/servers/:id/edit",
             "/servers/:id/delete",
             "/servers/:id/health/fix",
+            "/servers/:id/health/hide",
+            "/servers/:id/health/show",
             "/settings/accounts/new",
             "/settings/accounts/:username/delete",
             "/settings/accounts/:username/permissions",

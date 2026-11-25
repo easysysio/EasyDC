@@ -163,6 +163,8 @@ async fn main() {
         .route("/servers/:id/delete", post(handlers::servers::delete_server))
         .route("/servers/:id/health", get(handlers::health::health_check))
         .route("/servers/:id/health/fix", post(handlers::health::health_fix))
+        .route("/servers/:id/health/hide", post(handlers::health::health_hide))
+        .route("/servers/:id/health/show", post(handlers::health::health_show))
         .route("/servers/:id/replication", get(handlers::replication::replication))
         .route("/servers/:id/reports", get(handlers::reports::page))
         .route("/servers/:id/reports/export", get(handlers::reports::export))

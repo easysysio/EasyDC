@@ -39,6 +39,27 @@ check works whether `_msdcs` is part of the domain zone or a zone of its own.
 - The report shows how long the run took. On a large domain it takes longer, because the
   hygiene checks read every user and computer account and the DNS check reads every record.
 
+## Hiding a finding
+
+Some warnings are known and accepted: a lab domain that needs no lockout, or a service account
+whose password never expires on purpose. An admin can hide such a finding with **Hide…** next
+to it, and choose how long:
+
+- **Until it changes.** The finding comes back as soon as the check finds something
+  different: another account in the list, a different setting, or a warning that becomes a
+  failure.
+- **Always.** The check stays hidden on this server whatever it finds, until someone shows it
+  again.
+
+A hidden finding is left out of the counts on the Health page and out of the problems on the
+Overview. Nothing in the directory changes, and anyone can still see it under the **Hidden**
+filter, with who hid it, when, and the reason if one was given. **Show again** brings it
+back.
+
+- Only warnings and failures can be hidden. A check that passes again shows as passed.
+- Hiding is per server, and only admins can hide or show a finding. Both are recorded in the
+  **audit log** as `health.hide` and `health.show`.
+
 ## What it does not cover
 
 Some problems can only be seen from a shell on the domain controller, and are out of reach

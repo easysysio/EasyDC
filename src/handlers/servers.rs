@@ -294,10 +294,11 @@ pub async fn overview_health(State(state): State<AppState>, Path(id): Path<i64>,
         return axum::http::StatusCode::NOT_FOUND.into_response();
     };
     let key = (id, server.ldap_url.clone());
+    let hidden = db::hidden_findings(&state.db, id).await;
     if query.fresh != "1" {
         let kept = HEALTH.lock().ok().and_then(|h| h.as_ref()?.get(&key).filter(|(at, _)| at.elapsed() < HEALTH_KEPT).map(|(_, v)| v.clone()));
         if let Some(value) = kept {
-            return axum::Json(value).into_response();
+            return axum::Json(without_hidden(value, &hidden)).into_response();
         }
     }
     let (health, replication) = tokio::join!(crate::health::run(&server), crate::replication::report(&server));
@@ -309,7 +310,19 @@ pub async fn overview_health(State(state): State<AppState>, Path(id): Path<i64>,
     if let Ok(mut kept) = HEALTH.lock() {
         kept.get_or_insert_with(Default::default).insert(key, (std::time::Instant::now(), value.clone()));
     }
-    axum::Json(value).into_response()
+    axum::Json(without_hidden(value, &hidden)).into_response()
+}
+
+/// The summary without the findings someone hid. The kept summary has them
+/// all, so hiding or showing one needs no fresh check.
+fn without_hidden(mut value: serde_json::Value, hidden: &[crate::health::HiddenRow]) -> serde_json::Value {
+    if let Some(problems) = value.get_mut("problems").and_then(|p| p.as_array_mut()) {
+        problems.retain(|p| {
+            let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+            crate::health::hidden_by(hidden, s("id"), s("status"), s("fingerprint")).is_none()
+        });
+    }
+    value
 }
 
 fn overview_summary(id: i64, health: &crate::health::HealthReport, replication: Result<crate::replication::Report, String>) -> serde_json::Value {
@@ -320,7 +333,7 @@ fn overview_summary(id: i64, health: &crate::health::HealthReport, replication: 
         .filter(|c| c.status == FAIL || c.status == WARN)
         .map(|c| {
             let page = c.link.as_ref().map_or("health", |l| l.path);
-            serde_json::json!({ "status": c.status, "title": c.title, "summary": c.summary, "href": format!("/servers/{id}/{page}") })
+            serde_json::json!({ "id": c.id, "fingerprint": c.fingerprint, "status": c.status, "title": c.title, "summary": c.summary, "href": format!("/servers/{id}/{page}") })
         })
         .collect();
     let (replication, replication_error) = match replication {
@@ -447,6 +460,9 @@ pub async fn delete_server(
         .bind(id)
         .execute(&state.db)
         .await;
+    if res.is_ok() {
+        let _ = db::show_finding(&state.db, id, None).await;
+    }
 
     let result = res.map(|_| ()).map_err(|e| e.to_string());
     db::log_action(&state.db, &actor, "server.delete", &id.to_string(), Some(id), &result).await;

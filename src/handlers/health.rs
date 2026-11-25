@@ -1,14 +1,31 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{Html, IntoResponse, Redirect, Response},
     Form,
 };
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tera::Context;
 
 use crate::{auth::CurrentUser, db, health, ldap, models::Server, remediate, AppState};
 
-pub async fn health_check(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+/// The last report for each server, as it came from the directory. Hiding or
+/// showing a finding shows it again instead of waiting for a fresh check.
+type Kept = HashMap<(i64, String), (Instant, health::HealthReport)>;
+static LAST: Mutex<Option<Kept>> = Mutex::new(None);
+const LAST_KEPT: Duration = Duration::from_secs(600);
+
+#[derive(Deserialize, Default)]
+pub struct HealthQuery {
+    #[serde(default)]
+    kept: String,
+    #[serde(default)]
+    done: String,
+}
+
+pub async fn health_check(State(state): State<AppState>, Path(id): Path<i64>, Query(query): Query<HealthQuery>) -> Response {
     let server = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
@@ -21,14 +38,107 @@ pub async fn health_check(State(state): State<AppState>, Path(id): Path<i64>) ->
 
     let mut ctx = Context::new();
     ctx.insert("server", &server);
+    if matches!(query.done.as_str(), "hidden" | "shown" | "failed") {
+        ctx.insert("done", &query.done);
+    }
 
     // Diagnostics are read-only, so nothing here is written to the audit log.
-    match health::run(&server).await {
-        Ok(report) => ctx.insert("report", &report),
+    let key = (id, server.ldap_url.clone());
+    let kept = (query.kept == "1")
+        .then(|| LAST.lock().ok()?.as_ref()?.get(&key).filter(|(at, _)| at.elapsed() < LAST_KEPT).map(|(_, r)| r.clone()))
+        .flatten();
+    let report = match kept {
+        Some(r) => Ok(r),
+        None => health::run(&server).await,
+    };
+    match report {
+        Ok(report) => {
+            if let Ok(mut last) = LAST.lock() {
+                last.get_or_insert_with(Default::default).insert(key, (Instant::now(), report.clone()));
+            }
+            let hidden = db::hidden_findings(&state.db, id).await;
+            ctx.insert("report", &report.with_hidden(&hidden));
+        }
         Err(e) => ctx.insert("error", &e),
     }
 
     Html(crate::access::render(&state.tera, "health.html", &ctx)).into_response()
+}
+
+// ── hiding findings ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct HideForm {
+    check: String,
+    #[serde(default)]
+    fingerprint: String,
+    /// "changed": until the finding changes; "always": whatever it finds.
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// What a hide form asks for, checked: the check, and the fingerprint to keep
+/// (empty for "always").
+fn hide_request(form: &HideForm) -> Result<(&'static str, String, String), String> {
+    let check = health::CHECK_IDS.iter().find(|c| **c == form.check).ok_or_else(|| format!("Unknown check '{}'", form.check))?;
+    let fingerprint = match form.mode.as_str() {
+        "always" => String::new(),
+        "changed" if form.fingerprint.len() == 32 && form.fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) => form.fingerprint.clone(),
+        "changed" => return Err("The finding to hide was not given.".into()),
+        _ => return Err("Choose how long to hide it.".into()),
+    };
+    let reason: String = form.reason.trim().chars().take(200).collect();
+    Ok((check, fingerprint, reason))
+}
+
+pub async fn health_hide(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path(id): Path<i64>,
+    Form(form): Form<HideForm>,
+) -> Response {
+    let result = match hide_request(&form) {
+        Ok((check, fingerprint, reason)) => {
+            let result = db::hide_finding(&state.db, id, check, &fingerprint, &reason, &actor).await;
+            let how = if fingerprint.is_empty() { "always" } else { "until it changes" };
+            let target = if reason.is_empty() { format!("{check} ({how})") } else { format!("{check} ({how}): {reason}") };
+            db::log_action(&state.db, &actor, "health.hide", &target, Some(id), &result).await;
+            result
+        }
+        Err(e) => Err(e),
+    };
+    finish(id, result, "hidden")
+}
+
+#[derive(Deserialize)]
+pub struct ShowForm {
+    check: String,
+}
+
+pub async fn health_show(
+    State(state): State<AppState>,
+    CurrentUser(actor): CurrentUser,
+    Path(id): Path<i64>,
+    Form(form): Form<ShowForm>,
+) -> Response {
+    let result = match health::CHECK_IDS.iter().find(|c| **c == form.check) {
+        Some(check) => {
+            let result = db::show_finding(&state.db, id, Some(check)).await;
+            db::log_action(&state.db, &actor, "health.show", check, Some(id), &result).await;
+            result
+        }
+        None => Err(format!("Unknown check '{}'", form.check)),
+    };
+    finish(id, result, "shown")
+}
+
+/// Back to the report just seen, with a word on how it went. The audit log
+/// has the reason when it failed.
+fn finish(id: i64, result: Result<(), String>, done: &str) -> Response {
+    let done = if result.is_ok() { done } else { "failed" };
+    Redirect::to(&format!("/servers/{id}/health?kept=1&done={done}")).into_response()
 }
 
 // ── guided fixes ──────────────────────────────────────────────────────────────
@@ -153,6 +263,8 @@ mod tests {
             remediation: remediation.map(String::from),
             fixes: Vec::new(),
             link: None,
+            fingerprint: String::new(),
+            hidden: None,
         }
     }
 
@@ -182,6 +294,7 @@ mod tests {
             warn_count: 1,
             fail_count: 1,
             skip_count: 1,
+            hidden_count: 0,
             elapsed_ms: 1234,
         };
 
@@ -196,6 +309,56 @@ mod tests {
         assert!(html.contains("example.com"));
         // The bind password must never reach the page.
         assert!(!html.contains("secret"));
+    }
+
+    #[test]
+    fn a_warning_offers_hide_and_a_hidden_one_offers_show() {
+        let mut warn = check(WARN, None);
+        warn.id = "delegation";
+        warn.fingerprint = "ab".repeat(16);
+        let mut gone = check(FAIL, None);
+        gone.id = "anonymous_bind";
+        gone.summary = "the accepted one".into();
+        gone.hidden = Some(crate::health::HiddenNote { until_changed: false, reason: "lab only".into(), by: "admin".into(), on: "2026-11-25".into() });
+        let report = HealthReport {
+            domain: "example.com".into(),
+            base_dn: "DC=example,DC=com".into(),
+            checks: vec![check(PASS, None), warn, gone],
+            pass_count: 1,
+            warn_count: 1,
+            fail_count: 0,
+            skip_count: 0,
+            hidden_count: 1,
+            elapsed_ms: 1,
+        };
+        let mut ctx = Context::new();
+        ctx.insert("server", &server());
+        ctx.insert("report", &report);
+        ctx.insert("done", "hidden");
+        let html = tera().render("health.html", &ctx).expect("renders");
+        let flat = html.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains(&format!(r#"data-check="delegation" data-fingerprint="{}""#, "ab".repeat(16))));
+        assert_eq!(flat.matches("data-bs-target=\"#hideModal\"").count(), 1, "only the shown warning can be hidden");
+        assert!(flat.contains(r#"data-status="hidden" style="display:none""#));
+        assert!(flat.contains(r#"action="/servers/1/health/show""#));
+        assert!(flat.contains(r#"name="check" value="anonymous_bind""#));
+        assert!(flat.contains("Hidden 1"));
+        assert!(flat.contains("whatever this check finds"));
+        assert!(html.contains("lab only"));
+        assert!(html.contains("no longer counts"));
+    }
+
+    #[test]
+    fn a_hide_form_is_checked() {
+        use super::{hide_request, HideForm};
+        let form = |check: &str, fingerprint: &str, mode: &str| HideForm { check: check.into(), fingerprint: fingerprint.into(), mode: mode.into(), reason: "  why  ".into() };
+        let fp = "0123456789abcdef".repeat(2);
+        assert_eq!(hide_request(&form("delegation", &fp, "changed")), Ok(("delegation", fp.clone(), "why".into())));
+        assert_eq!(hide_request(&form("delegation", &fp, "always")), Ok(("delegation", String::new(), "why".into())));
+        assert!(hide_request(&form("no_such_check", &fp, "always")).is_err());
+        assert!(hide_request(&form("delegation", "", "changed")).is_err(), "until it changes needs the finding");
+        assert!(hide_request(&form("delegation", "not hex", "changed")).is_err());
+        assert!(hide_request(&form("delegation", &fp, "")).is_err());
     }
 
     #[test]
@@ -275,6 +438,8 @@ mod fix_tests {
             remediation: Some("Disable rather than delete first.".into()),
             fixes: vec![],
             link: None,
+            fingerprint: String::new(),
+            hidden: None,
         };
         check.fixes.push(Fix {
             kind: "disable_stale_computers",
@@ -293,6 +458,7 @@ mod fix_tests {
             warn_count: 1,
             fail_count: 0,
             skip_count: 0,
+            hidden_count: 0,
             elapsed_ms: 1,
         }
     }

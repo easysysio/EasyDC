@@ -40,6 +40,11 @@ pub struct CheckResult {
     pub fixes: Vec<crate::remediate::Fix>,
     /// A page elsewhere in EasyDC that fixes it, relative to the server.
     pub link: Option<Link>,
+    /// Stands for what the finding says, so a finding hidden "until it
+    /// changes" comes back when it does. Set by [`HealthReport::tally`].
+    pub fingerprint: String,
+    /// Set when someone chose not to see this finding.
+    pub hidden: Option<HiddenNote>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -61,6 +66,8 @@ impl CheckResult {
             remediation: None,
             fixes: Vec::new(),
             link: None,
+            fingerprint: String::new(),
+            hidden: None,
         }
     }
 
@@ -95,7 +102,7 @@ impl CheckResult {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HealthReport {
     pub domain: String,
     pub base_dn: String,
@@ -104,18 +111,105 @@ pub struct HealthReport {
     pub warn_count: usize,
     pub fail_count: usize,
     pub skip_count: usize,
+    /// Warnings and failures someone chose not to see: not in the counts above.
+    pub hidden_count: usize,
     /// Wall-clock time the whole battery took, milliseconds.
     pub elapsed_ms: u128,
 }
 
 impl HealthReport {
     fn tally(mut self) -> Self {
-        self.pass_count = self.checks.iter().filter(|c| c.status == PASS).count();
-        self.warn_count = self.checks.iter().filter(|c| c.status == WARN).count();
-        self.fail_count = self.checks.iter().filter(|c| c.status == FAIL).count();
-        self.skip_count = self.checks.iter().filter(|c| c.status == SKIP).count();
+        for c in &mut self.checks {
+            c.fingerprint = fingerprint(c.status, &c.summary, &c.detail);
+        }
+        let shown = |status: &str| self.checks.iter().filter(|c| c.status == status && c.hidden.is_none()).count();
+        self.pass_count = shown(PASS);
+        self.warn_count = shown(WARN);
+        self.fail_count = shown(FAIL);
+        self.skip_count = shown(SKIP);
+        self.hidden_count = self.checks.iter().filter(|c| c.hidden.is_some()).count();
         self
     }
+
+    /// The report as someone sees it, with what was hidden marked so.
+    pub fn with_hidden(mut self, rows: &[HiddenRow]) -> Self {
+        for c in &mut self.checks {
+            c.hidden = hidden_by(rows, c.id, c.status, &c.fingerprint).map(HiddenRow::note);
+        }
+        self.tally()
+    }
+}
+
+// ── hidden findings ───────────────────────────────────────────────────────────
+
+/// Every check's id, for what may be hidden. A test keeps it in step with
+/// the checks themselves.
+pub const CHECK_IDS: [&str; 14] = [
+    "clock_skew",
+    "functional_levels",
+    "fsmo_roles",
+    "dc_inventory",
+    "dns_srv",
+    "replication",
+    "ldaps",
+    "machine_account_quota",
+    "anonymous_bind",
+    "delegation",
+    "privileged_groups",
+    "password_policy",
+    "stale_computers",
+    "password_hygiene",
+];
+
+/// A finding someone chose not to see, as the database keeps it. An empty
+/// fingerprint hides the check whatever it finds; otherwise only while it
+/// finds the same thing.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct HiddenRow {
+    pub check_id: String,
+    pub fingerprint: String,
+    pub reason: String,
+    pub hidden_by: String,
+    pub hidden_at: i64,
+}
+
+/// What the page says about a hidden finding.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HiddenNote {
+    pub until_changed: bool,
+    pub reason: String,
+    pub by: String,
+    /// The day it was hidden, YYYY-MM-DD (UTC).
+    pub on: String,
+}
+
+impl HiddenRow {
+    fn note(&self) -> HiddenNote {
+        let (y, m, d) = civil_from_days(self.hidden_at.div_euclid(86_400));
+        HiddenNote {
+            until_changed: !self.fingerprint.is_empty(),
+            reason: self.reason.clone(),
+            by: self.hidden_by.clone(),
+            on: format!("{y:04}-{m:02}-{d:02}"),
+        }
+    }
+}
+
+/// The row that hides this finding, if any. Only a warning or a failure can be
+/// hidden: a check that passes again is shown as passed.
+pub fn hidden_by<'a>(rows: &'a [HiddenRow], id: &str, status: &str, fingerprint: &str) -> Option<&'a HiddenRow> {
+    if status != WARN && status != FAIL {
+        return None;
+    }
+    rows.iter().find(|r| r.check_id == id && (r.fingerprint.is_empty() || r.fingerprint == fingerprint))
+}
+
+/// Stands for a finding's status and words: a new account in the list, or a
+/// warning that became a failure, gives another one.
+pub fn fingerprint(status: &str, summary: &str, detail: &[String]) -> String {
+    // JSON keeps the lines apart: no two findings give the same text.
+    let text = serde_json::json!([status, summary, detail]).to_string();
+    openssl::sha::sha256(text.as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
 // ── shared context ────────────────────────────────────────────────────────────
@@ -1253,9 +1347,79 @@ pub async fn run(server: &Server) -> LdapResult<HealthReport> {
         warn_count: 0,
         fail_count: 0,
         skip_count: 0,
+        hidden_count: 0,
         elapsed_ms: started.elapsed().as_millis(),
     }
     .tally())
+}
+
+#[cfg(test)]
+mod hidden_tests {
+    use super::*;
+
+    fn row(check_id: &str, fingerprint: &str) -> HiddenRow {
+        HiddenRow { check_id: check_id.into(), fingerprint: fingerprint.into(), reason: String::new(), hidden_by: "admin".into(), hidden_at: 1_764_028_800 }
+    }
+
+    fn report(checks: Vec<CheckResult>) -> HealthReport {
+        HealthReport { domain: "d".into(), base_dn: "b".into(), checks, pass_count: 0, warn_count: 0, fail_count: 0, skip_count: 0, hidden_count: 0, elapsed_ms: 0 }.tally()
+    }
+
+    fn found(id: &'static str, status: &'static str, detail: &[&str]) -> CheckResult {
+        let mut c = CheckResult::new(id, "Security", "A check");
+        c.status = status;
+        c.summary = "Something".into();
+        c.detail = detail.iter().map(|d| d.to_string()).collect();
+        c
+    }
+
+    #[test]
+    fn every_check_can_be_named() {
+        let source = include_str!("health.rs");
+        let made = source.matches("CheckResult::new(\"").count();
+        assert_eq!(made, CHECK_IDS.len(), "CHECK_IDS lists every check");
+        for id in CHECK_IDS {
+            assert!(source.contains(&format!("CheckResult::new(\"{id}\"")), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_fingerprint_follows_what_was_found() {
+        let a = fingerprint(WARN, "2 accounts", &["alice".into(), "bob".into()]);
+        assert_eq!(a.len(), 32);
+        assert_eq!(a, fingerprint(WARN, "2 accounts", &["alice".into(), "bob".into()]));
+        assert_ne!(a, fingerprint(WARN, "3 accounts", &["alice".into(), "bob".into(), "eve".into()]));
+        assert_ne!(a, fingerprint(FAIL, "2 accounts", &["alice".into(), "bob".into()]));
+        // Lines cannot run together into the same text.
+        assert_ne!(fingerprint(WARN, "x", &["a\nb".into()]), fingerprint(WARN, "x", &["a".into(), "b".into()]));
+        // Stored in the database, so it must not change between versions.
+        assert_eq!(fingerprint(PASS, "", &[]), "80e63813425d6eb0cfd7f751c1a1636e");
+    }
+
+    #[test]
+    fn until_it_changes_and_always() {
+        let first = report(vec![found("delegation", WARN, &["HOST1$"])]);
+        let fp = first.checks[0].fingerprint.clone();
+
+        let same = report(vec![found("delegation", WARN, &["HOST1$"])]).with_hidden(&[row("delegation", &fp)]);
+        assert!(same.checks[0].hidden.as_ref().is_some_and(|h| h.until_changed && h.on == "2025-11-25"));
+        assert_eq!((same.warn_count, same.hidden_count), (0, 1));
+
+        let more = report(vec![found("delegation", WARN, &["HOST1$", "HOST2$"])]).with_hidden(&[row("delegation", &fp)]);
+        assert!(more.checks[0].hidden.is_none(), "a new account brings it back");
+        assert_eq!((more.warn_count, more.hidden_count), (1, 0));
+
+        let always = report(vec![found("delegation", FAIL, &["HOST1$", "HOST2$"])]).with_hidden(&[row("delegation", "")]);
+        assert!(always.checks[0].hidden.as_ref().is_some_and(|h| !h.until_changed));
+        assert_eq!((always.fail_count, always.hidden_count), (0, 1));
+    }
+
+    #[test]
+    fn only_warnings_and_failures_hide() {
+        let r = report(vec![found("delegation", PASS, &[]), found("ldaps", SKIP, &[]), found("dns_srv", WARN, &[])]).with_hidden(&[row("delegation", ""), row("ldaps", ""), row("replication", "")]);
+        assert!(r.checks.iter().all(|c| c.hidden.is_none()));
+        assert_eq!((r.pass_count, r.skip_count, r.warn_count, r.hidden_count), (1, 1, 1, 0));
+    }
 }
 
 #[cfg(test)]

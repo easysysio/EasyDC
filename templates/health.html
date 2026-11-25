@@ -11,6 +11,15 @@
     <a href="/servers/{{ server.id }}/health" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-clockwise me-1" aria-hidden="true"></i>Check again</a>
 </div>
 
+{% set done = done | default(value="") %}
+{% if done == "hidden" %}
+<div class="alert alert-success"><i class="bi bi-eye-slash me-1" aria-hidden="true"></i> Hidden. It no longer counts here or on the Overview; the Hidden filter shows it.</div>
+{% elif done == "shown" %}
+<div class="alert alert-success"><i class="bi bi-eye me-1" aria-hidden="true"></i> Shown again.</div>
+{% elif done == "failed" %}
+<div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i> That did not work. The audit log says why.</div>
+{% endif %}
+
 {% if error %}
 <div class="alert alert-danger d-flex align-items-start">
     <i class="bi bi-exclamation-octagon-fill me-2 mt-1"></i>
@@ -30,19 +39,46 @@
 </div>
 
 <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-    <div class="btn-group btn-group-sm" role="group">
+    <div class="btn-group btn-group-sm" role="group" aria-label="Show">
         <button type="button" class="btn btn-outline-secondary active" data-filter="all">All</button>
         <button type="button" class="btn btn-outline-danger" data-filter="fail">Failed</button>
         <button type="button" class="btn btn-outline-warning" data-filter="warn">Warnings</button>
         <button type="button" class="btn btn-outline-success" data-filter="pass">Passed</button>
         <button type="button" class="btn btn-outline-secondary" data-filter="skip">Skipped</button>
     </div>
+    {% if report.hidden_count > 0 %}
+    <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-filter="hidden" title="Findings someone hid"><i class="bi bi-eye-slash me-1" aria-hidden="true"></i>Hidden {{ report.hidden_count }}</button>
+    {% endif %}
     <span class="text-muted small ms-2 text-break">Base DN <span class="font-monospace">{{ report.base_dn }}</span></span>
 </div>
 
 <div class="card shadow-sm">
     <div class="list-group list-group-flush" id="checkList">
         {% for c in report.checks %}
+        {% if c.hidden %}
+        <div class="list-group-item py-3" data-status="hidden" style="display:none">
+            <div class="d-flex align-items-start">
+                <div class="me-3 mt-1"><i class="bi bi-eye-slash fs-5 text-secondary" aria-hidden="true"></i></div>
+                <div class="flex-grow-1 min-w-0">
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <span class="fw-semibold">{{ c.title }}</span>
+                        <span class="badge bg-light text-secondary border">{{ c.category }}</span>
+                        <span class="badge {% if c.status == "fail" %}text-bg-danger{% else %}text-bg-warning{% endif %}">{% if c.status == "fail" %}Failed{% else %}Warning{% endif %}</span>
+                    </div>
+                    <div class="text-body-secondary">{{ c.summary }}</div>
+                    <div class="small text-muted mt-1">
+                        Hidden by {{ c.hidden.by }} on <span class="text-nowrap">{{ c.hidden.on }}</span>,
+                        {% if c.hidden.until_changed %}until this finding changes{% else %}whatever this check finds{% endif %}.
+                        {% if c.hidden.reason %}<span class="fst-italic">“{{ c.hidden.reason }}”</span>{% endif %}
+                    </div>
+                </div>
+                <form method="post" action="/servers/{{ server.id }}/health/show" data-needs="admin" class="ms-2 flex-shrink-0">
+                    <input type="hidden" name="check" value="{{ c.id }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-eye me-1" aria-hidden="true"></i>Show again</button>
+                </form>
+            </div>
+        </div>
+        {% else %}
         <div class="list-group-item py-3" data-status="{{ c.status }}">
             <div class="d-flex align-items-start">
                 <div class="me-3 mt-1">
@@ -56,10 +92,18 @@
                     <i class="bi bi-dash-circle fs-5 text-secondary"></i>
                     {% endif %}
                 </div>
-                <div class="flex-grow-1">
+                <div class="flex-grow-1 min-w-0">
                     <div class="d-flex align-items-center gap-2 flex-wrap">
                         <span class="fw-semibold">{{ c.title }}</span>
                         <span class="badge bg-light text-secondary border">{{ c.category }}</span>
+                        {% if c.status == "warn" or c.status == "fail" %}
+                        <span class="ms-auto" data-needs="admin">
+                            <button type="button" class="btn btn-sm btn-link text-secondary text-decoration-none p-0" data-bs-toggle="modal" data-bs-target="#hideModal"
+                                data-check="{{ c.id }}" data-fingerprint="{{ c.fingerprint }}" data-title="{{ c.title }}" title="Stop showing this finding">
+                                <i class="bi bi-eye-slash me-1" aria-hidden="true"></i>Hide…
+                            </button>
+                        </span>
+                        {% endif %}
                     </div>
                     <div class="text-body-secondary">{{ c.summary }}</div>
 
@@ -110,14 +154,51 @@
                 </div>
             </div>
         </div>
+        {% endif %}
         {% endfor %}
+    </div>
+</div>
+
+<div class="modal fade js-row-dialog" id="hideModal" tabindex="-1" aria-labelledby="hideModalTitle">
+    <div class="modal-dialog">
+        <form class="modal-content" method="post" action="/servers/{{ server.id }}/health/hide">
+            <div class="modal-header">
+                <h5 class="modal-title" id="hideModalTitle"><i class="bi bi-eye-slash me-1" aria-hidden="true"></i> Hide <span data-fill="title"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="check" data-fill="check">
+                <input type="hidden" name="fingerprint" data-fill="fingerprint">
+                <p class="small text-muted">A hidden finding is left out of the counts here and of the Overview. Nothing in the directory changes, and anyone can still see it under <em>Hidden</em>.</p>
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="mode" value="changed" id="hideChanged" checked>
+                    <label class="form-check-label" for="hideChanged">
+                        Until it changes
+                        <span class="d-block small text-muted">It comes back if the check finds something new, such as another account, or gets worse.</span>
+                    </label>
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="radio" name="mode" value="always" id="hideAlways">
+                    <label class="form-check-label" for="hideAlways">
+                        Always
+                        <span class="d-block small text-muted">Whatever this check finds on this server, until someone shows it again.</span>
+                    </label>
+                </div>
+                <label class="form-label small" for="hideReason">Reason <span class="text-muted">(optional, kept with it and in the audit log)</span></label>
+                <input type="text" class="form-control form-control-sm" name="reason" id="hideReason" maxlength="200" placeholder="e.g. Lab domain, accepted risk">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary btn-sm">Hide</button>
+            </div>
+        </form>
     </div>
 </div>
 
 <p class="text-muted small mt-3">
     <i class="bi bi-info-circle me-1"></i>
     These checks run entirely over LDAP and change nothing by themselves. Where a finding has a
-    fix, it is shown under it and asks for confirmation first. Checks that need shell access on the
+    fix, it is shown under it and asks for confirmation first. A finding you accept can be hidden. Checks that need shell access on the
     DC — <span class="font-monospace">samba-tool dbcheck</span>, SYSVOL replication, service
     status — are not covered here.
 </p>
@@ -132,7 +213,8 @@ document.querySelectorAll('[data-filter]').forEach(function (btn) {
         });
         this.classList.add('active');
         document.querySelectorAll('#checkList [data-status]').forEach(function (row) {
-            row.style.display = (want === 'all' || row.dataset.status === want) ? '' : 'none';
+            const show = want === 'all' ? row.dataset.status !== 'hidden' : row.dataset.status === want;
+            row.style.display = show ? '' : 'none';
         });
     });
 });

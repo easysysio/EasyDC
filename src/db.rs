@@ -158,7 +158,59 @@ pub async fn init_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
+    // Health check findings someone chose not to see. An empty fingerprint
+    // hides the check whatever it finds.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS health_hidden (
+            server_id   INTEGER NOT NULL,
+            check_id    TEXT NOT NULL,
+            fingerprint TEXT NOT NULL DEFAULT '',
+            reason      TEXT NOT NULL DEFAULT '',
+            hidden_by   TEXT NOT NULL,
+            hidden_at   INTEGER NOT NULL,
+            PRIMARY KEY (server_id, check_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
+}
+
+// ── hidden health findings ───────────────────────────────────────────────────
+
+/// What is hidden on this server. A read error shows everything.
+pub async fn hidden_findings(pool: &SqlitePool, server_id: i64) -> Vec<crate::health::HiddenRow> {
+    sqlx::query_as("SELECT check_id, fingerprint, reason, hidden_by, hidden_at FROM health_hidden WHERE server_id = ?")
+        .bind(server_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+}
+
+/// Hide one check's finding, replacing an earlier hide of the same check.
+pub async fn hide_finding(pool: &SqlitePool, server_id: i64, check_id: &str, fingerprint: &str, reason: &str, by: &str) -> Result<(), String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    sqlx::query("INSERT OR REPLACE INTO health_hidden (server_id, check_id, fingerprint, reason, hidden_by, hidden_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(server_id)
+        .bind(check_id)
+        .bind(fingerprint)
+        .bind(reason)
+        .bind(by)
+        .bind(now)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Show one check's finding again. `None` removes every hide on the server.
+pub async fn show_finding(pool: &SqlitePool, server_id: i64, check_id: Option<&str>) -> Result<(), String> {
+    let q = match check_id {
+        Some(c) => sqlx::query("DELETE FROM health_hidden WHERE server_id = ? AND check_id = ?").bind(server_id).bind(c.to_string()),
+        None => sqlx::query("DELETE FROM health_hidden WHERE server_id = ?").bind(server_id),
+    };
+    q.execute(pool).await.map(|_| ()).map_err(|e| e.to_string())
 }
 
 // ── two-factor sign-in ───────────────────────────────────────────────────────
