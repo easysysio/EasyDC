@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-25
+
 ### Added
 - Hide a health check finding you have accepted. Hide it until it changes (say, another account shows up in it), or always. It leaves the counts and the Overview, and the **Hidden** filter brings it back. Admins only, and recorded in the audit log.
 - The Overview tells admins when EasyDC admin accounts sign in without two-factor and it is not required, and links to the Two-factor settings.
