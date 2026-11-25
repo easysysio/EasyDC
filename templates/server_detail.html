@@ -30,7 +30,7 @@
                 <h2 class="h6 mb-0">Needs attention</h2>
                 <a class="small" href="/servers/{{ server.id }}/health">Full health check</a>
             </div>
-            <ul class="line-list" id="attention"><li><div class="line text-muted">Checking the domain…</div></li></ul>
+            <ul class="line-list" id="attention"{% if without_two_factor %} data-without-two-factor="{{ without_two_factor | json_encode }}"{% endif %}><li><div class="line text-muted">Checking the domain…</div></li></ul>
         </div>
     </div>
     <div class="col-xl-5">
@@ -60,6 +60,18 @@
         idle: ['state-idle', 'bi-question-circle'],
     };
     let directoryItems = [], healthItems = [], healthDone = false;
+    // EasyDC's own sign-in, the same on every server.
+    const signInItems = (function () {
+        const names = JSON.parse(attention.dataset.withoutTwoFactor || '[]');
+        if (!names.length) return [];
+        const shown = names.length > 3 ? names.slice(0, 3).join(', ') + ' and ' + (names.length - 3) + ' more' : names.join(', ');
+        return [{
+            kind: 'warn',
+            title: names.length === 1 ? '1 EasyDC admin signs in without two-factor' : names.length + ' EasyDC admins sign in without two-factor',
+            sub: shown + '. Turn it on for them, or require it for admins.',
+            href: '/settings?tab=two-factor',
+        }];
+    })();
 
     function get(url) {
         return fetch(url, { headers: { Accept: 'application/json' } }).then(async function (r) {
@@ -111,7 +123,7 @@
         return n.toLocaleString() + ' ' + (n === 1 ? one : many);
     }
     function showAttention() {
-        const all = healthItems.concat(directoryItems).sort((a, b) => (a.kind === 'fail' ? 0 : 1) - (b.kind === 'fail' ? 0 : 1));
+        const all = healthItems.concat(directoryItems, signInItems).sort((a, b) => (a.kind === 'fail' ? 0 : 1) - (b.kind === 'fail' ? 0 : 1));
         if (all.length) {
             attention.replaceChildren(...all.map(a => line(a.kind, a.title, a.sub, a.href)));
         } else if (healthDone) {

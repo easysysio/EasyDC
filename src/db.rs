@@ -462,6 +462,24 @@ pub async fn must_set_up_two_factor(pool: &SqlitePool, username: &str) -> bool {
     .map_or(true, |row| row.is_some())
 }
 
+/// Local admins who sign in with a password alone, while two-factor is not
+/// required. Domain accounts sign in at the DC, so EasyDC cannot add a code
+/// to theirs. A read error lists no one.
+pub async fn admins_without_two_factor(pool: &SqlitePool) -> Vec<String> {
+    if two_factor_required(pool).await {
+        return Vec::new();
+    }
+    sqlx::query_scalar(
+        "SELECT u.username FROM users u
+         WHERE u.kind = 'local' AND u.is_admin = 1
+           AND NOT EXISTS (SELECT 1 FROM user_totp t WHERE t.username = u.username AND t.enabled = 1)
+         ORDER BY u.username",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
 pub async fn tls_pair(pool: &SqlitePool) -> Option<crate::tls::Pair> {
     let row: (String, String, bool) =
         sqlx::query_as("SELECT cert_pem, key_pem, uploaded FROM tls_certificate WHERE id = 1")
@@ -1104,6 +1122,20 @@ mod tests {
 
         set_two_factor_required(&pool, false).await.unwrap();
         assert!(!must_set_up_two_factor(&pool, "plain").await);
+    }
+
+    #[tokio::test]
+    async fn the_overview_names_local_admins_without_it() {
+        let pool = pool().await;
+        create_account(&pool, "plain", "hash", true, &Default::default()).await.unwrap();
+        create_account(&pool, "bob", "hash", true, &Default::default()).await.unwrap();
+        create_account(&pool, "viewer", "hash", false, &Default::default()).await.unwrap();
+        with_two_factor(&pool, "secured", true).await;
+        create_domain_account(&pool, "ann@lab.test", "ann", 1, true, &Default::default()).await.unwrap();
+
+        assert_eq!(admins_without_two_factor(&pool).await, vec!["bob", "plain"]);
+        set_two_factor_required(&pool, true).await.unwrap();
+        assert!(admins_without_two_factor(&pool).await.is_empty(), "required: they set it up at sign-in");
     }
 
     #[tokio::test]

@@ -157,6 +157,10 @@ pub async fn server_detail(
         Some(server) => {
             let mut ctx = Context::new();
             ctx.insert("server", &server);
+            // Only an admin can turn it on for others, so only an admin is told.
+            if crate::access::current().admin {
+                ctx.insert("without_two_factor", &db::admins_without_two_factor(&state.db).await);
+            }
             Html(crate::access::render(&state.tera, "server_detail.html", &ctx)).into_response()
         }
     }

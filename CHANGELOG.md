@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Hide a health check finding you have accepted. Hide it until it changes (say, another account shows up in it), or always. It leaves the counts and the Overview, and the **Hidden** filter brings it back. Admins only, and recorded in the audit log.
+- The Overview tells admins when EasyDC admin accounts sign in without two-factor and it is not required, and links to the Two-factor settings.
 
 ### Changed
 - The guide to raising the functional level says the schema upgrade needs `patch`, what to do when Samba answers "we are not master", and marks the raise **Not yet** while a DC is still below the chosen level.

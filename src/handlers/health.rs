@@ -378,6 +378,11 @@ mod tests {
         ctx.insert("server", &server());
         let html = tera().render("server_detail.html", &ctx).expect("renders");
         assert!(html.contains("/servers/1/health"));
+        assert!(!html.contains("data-without-two-factor="), "said only when someone is without it");
+
+        ctx.insert("without_two_factor", &vec!["admin", "o'neil"]);
+        let html = tera().render("server_detail.html", &ctx).expect("renders");
+        assert!(html.contains(r#"data-without-two-factor="[&quot;admin&quot;,&quot;o&#x27;neil&quot;]""#), "{}", &html[html.find("id=\"attention\"").unwrap()..][..120]);
     }
 }
 
